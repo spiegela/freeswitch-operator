@@ -27,8 +27,9 @@ spec:
           env:
             - {name: SIPBENCH_EDGE, value: "kamailio-sip:5060"}
             - {name: SIPBENCH_MOCK, value: "http://mockbackend:8080"}
-            - {name: SIPBENCH_ESL, value: ""}
+            - {name: SIPBENCH_ESL, value: ""}             # set but empty: no event socket
             - {name: SIPBENCH_TARGET, value: "0.0.0.0:5090"}
             - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma"}
+            - {name: SIPBENCH_RUN, value: ""}             # a regexp picking scenarios by name; hack/kind.sh bench sets it
           ports:
             - {name: target-udp, containerPort: 5090, protocol: UDP}

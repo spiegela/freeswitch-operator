@@ -49,7 +49,13 @@ docker compose down
 On a cluster, behind Kamailio and a `FreeswitchCluster`: `make kind-up kind-deploy kind-bench` from the repository
 root (see "The edge on kind" in the top-level README). The same configuration and scenarios run there:
 [`freeswitch/kustomization.yaml`](freeswitch/kustomization.yaml) turns `freeswitch/conf` into one ConfigMap per
-directory, and [`k8s/`](k8s/) holds the mock backend, the runner's transfer Service and the runner Job.
+directory, and [`k8s/`](k8s/) holds the mock backend, the runner's transfer Service and the runner Job. Add a file
+under `freeswitch/conf` to that kustomization too; `go test ./...` fails until you do. `hack/kind.sh bench <regexp>`
+runs only the scenarios whose names match.
+
+Each of `-edge`, `-mock`, `-esl`, `-esl-password`, `-target`, `-caps` and `-run` takes its default from
+`SIPBENCH_<FLAG>` (`SIPBENCH_ESL_PASSWORD` for `-esl-password`). A variable set to the empty string counts as set,
+so `SIPBENCH_ESL=""` turns the event socket off rather than falling back to `freeswitch:8021`.
 
 Set `SIPBENCH_SIP_DEBUG=true` with `-log-level debug` to log every SIP message the runner sends and receives.
 
