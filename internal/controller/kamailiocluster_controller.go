@@ -494,6 +494,12 @@ func (r *KamailioClusterReconciler) syncDispatcher(ctx context.Context, kc *sipv
 		status.DispatcherUpdatedAt = &at
 	}
 
+	// Kamailio reads the mounted list when it starts, and the kubelet may not have caught that file up yet: a pod
+	// that has become ready since the last reconcile gets the reload and its check too, or it could keep a stale
+	// list while the status says every pod holds the current one.
+	if newlyActive(status.Members, pods) {
+		status.DispatcherReloadedHash = ""
+	}
 	if notifier == nil || status.DispatcherReloadedHash == status.DispatcherHash {
 		return 0, nil
 	}
@@ -515,8 +521,24 @@ func (r *KamailioClusterReconciler) syncDispatcher(ctx context.Context, kc *sipv
 	return 0, nil
 }
 
+// newlyActive reports whether a pod is active now that wasn't in the members the status last recorded.
+func newlyActive(before []sipv1alpha1.Member, pods []corev1.Pod) bool {
+	was := map[string]bool{}
+	for _, m := range before {
+		if m.State == sipv1alpha1.MemberActive {
+			was[m.Pod] = true
+		}
+	}
+	for i := range pods {
+		if memberState(&pods[i]) == sipv1alpha1.MemberActive && !was[pods[i].Name] {
+			return true
+		}
+	}
+	return false
+}
+
 // podNotifier makes each JSON-RPC call on every ready Kamailio pod, at its own address, with the token. A pod
-// that isn't ready yet needs no news: it reads the current list when it starts.
+// that isn't ready yet is left out; syncDispatcher reloads it once it is.
 func (r *KamailioClusterReconciler) podNotifier(kc *sipv1alpha1.KamailioCluster, cfg kamailioSettings, token string, pods []corev1.Pod) DispatcherNotifier {
 	if r.NewNotifier == nil {
 		return nil
