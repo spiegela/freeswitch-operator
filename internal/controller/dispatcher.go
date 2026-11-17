@@ -179,7 +179,12 @@ func (n *jsonrpcNotifier) SetInactive(ctx context.Context, setID int32, uri stri
 
 func (n *jsonrpcNotifier) Reload(ctx context.Context, want map[int32][]string) error {
 	if err := n.call(ctx, "dispatcher.reload", nil, nil); err != nil {
-		return err
+		// Kamailio refuses a reload within ds_reload_delta (5 s) of the last one, as when two reconciles come close
+		// together. That reload read the file too: what it loaded decides, as for any other.
+		var rpcErr *rpcError
+		if !errors.As(err, &rpcErr) || !strings.Contains(rpcErr.Message, "Ongoing reload") {
+			return err
+		}
 	}
 	have, err := n.destinations(ctx)
 	if err != nil {
