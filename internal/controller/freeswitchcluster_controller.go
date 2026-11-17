@@ -23,7 +23,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -134,7 +136,7 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 	pods := podList.Items
-	sort.Slice(pods, func(i, j int) bool { return pods[i].Name < pods[j].Name })
+	slices.SortFunc(pods, func(a, b corev1.Pod) int { return strings.Compare(a.Name, b.Name) })
 
 	if err := r.syncExternalAddresses(ctx, cfg, pods); err != nil {
 		return ctrl.Result{}, err
@@ -413,11 +415,11 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 	log := logf.FromContext(ctx)
 	d := cfg.dispatcher
 
-	var slices discoveryv1.EndpointSliceList
-	if err := r.List(ctx, &slices, client.InNamespace(fsc.Namespace), client.MatchingLabels{discoveryv1.LabelServiceName: serviceName(fsc)}); err != nil {
+	var endpointSlices discoveryv1.EndpointSliceList
+	if err := r.List(ctx, &endpointSlices, client.InNamespace(fsc.Namespace), client.MatchingLabels{discoveryv1.LabelServiceName: serviceName(fsc)}); err != nil {
 		return 0, err
 	}
-	dests := readyDestinations(slices.Items, cfg.sipPort, string(cfg.dispatcherProto))
+	dests := readyDestinations(endpointSlices.Items, cfg.sipPort, string(cfg.dispatcherProto))
 	content := renderDispatcherList(cfg.dispatcherSetID, dests)
 	hash := contentHash(content)
 
@@ -443,9 +445,7 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 			if cm.Labels == nil {
 				cm.Labels = map[string]string{}
 			}
-			for k, v := range commonLabels(fsc) {
-				cm.Labels[k] = v
-			}
+			maps.Copy(cm.Labels, commonLabels(fsc))
 			if cm.Annotations == nil {
 				cm.Annotations = map[string]string{}
 			}

@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,7 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -109,11 +110,15 @@ func env(name, def string) string {
 func run(args []string) (int, error) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	edge := fs.String("edge", env("SIPBENCH_EDGE", "freeswitch:5060"), "edge SIP address (host:port) the far end calls")
-	mockURL := fs.String("mock", env("SIPBENCH_MOCK", "http://mockbackend:8080"), "mock backend control API; empty if the backend is not the mock")
-	eslAddr := fs.String("esl", env("SIPBENCH_ESL", "freeswitch:8021"), "FreeSWITCH event socket; empty disables setup/teardown")
+	mockURL := fs.String("mock", env("SIPBENCH_MOCK", "http://mockbackend:8080"),
+		"mock backend control API; empty if the backend is not the mock")
+	eslAddr := fs.String("esl", env("SIPBENCH_ESL", "freeswitch:8021"),
+		"FreeSWITCH event socket; empty disables setup/teardown")
 	eslPass := fs.String("esl-password", env("SIPBENCH_ESL_PASSWORD", "ClueCon"), "event socket password")
-	target := fs.String("target", env("SIPBENCH_TARGET", "0.0.0.0:5090"), "where to answer transfers (host:port); empty disables")
-	caps := fs.String("caps", env("SIPBENCH_CAPS", "mock,esl,codec:pcmu,codec:pcma"), "capabilities this run provides, comma separated")
+	target := fs.String("target", env("SIPBENCH_TARGET", "0.0.0.0:5090"),
+		"where to answer transfers (host:port); empty disables")
+	caps := fs.String("caps", env("SIPBENCH_CAPS", "mock,esl,codec:pcmu,codec:pcma"),
+		"capabilities this run provides, comma separated")
 	only := fs.String("run", env("SIPBENCH_RUN", ""), "only run scenarios whose name matches this regexp")
 	jsonOut := fs.String("json", "", "write the JSON report here ('-' for stdout)")
 	junitOut := fs.String("junit", "", "write a JUnit XML report here")
@@ -150,13 +155,13 @@ func run(args []string) (int, error) {
 
 	capSet := map[string]bool{}
 	var capList []string
-	for _, c := range strings.Split(*caps, ",") {
+	for c := range strings.SplitSeq(*caps, ",") {
 		if c = strings.TrimSpace(c); c != "" {
 			capSet[c] = true
 			capList = append(capList, c)
 		}
 	}
-	sort.Strings(capList)
+	slices.Sort(capList)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -211,8 +216,7 @@ func writeTo(path string, write func(io.Writer) error) error {
 		return err
 	}
 	if err := write(f); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	return f.Close()
 }

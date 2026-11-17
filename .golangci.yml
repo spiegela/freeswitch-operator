@@ -42,6 +42,9 @@ linters:
     modernize:
       disable:
         - omitzero
+        # new(expr) for a pointer to a value is newer than ptr.To, which Kubernetes code (and a typed constant such
+        # as ptr.To[int32](0o755)) still needs; one way of doing it reads better than two.
+        - newexpr
   exclusions:
     generated: lax
     rules:
@@ -52,6 +55,10 @@ linters:
           - dupl
           - lll
         path: internal/*
+      # A test reads better with its literals in place than with constants named after them.
+      - linters:
+          - goconst
+        path: _test\.go
     paths:
       - third_party$
       - builtin$

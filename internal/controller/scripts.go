@@ -18,6 +18,9 @@ const (
 	drainScriptName   = "drain.sh"
 	readyScriptName   = "ready.sh"
 	startupScriptName = "startup.sh"
+
+	// shell runs the scripts; they are POSIX sh, and every FreeSWITCH image has it.
+	shell = "/bin/sh"
 )
 
 // drainScript runs as the preStop hook. It makes the pod unready at once (so the dispatcher stops sending new

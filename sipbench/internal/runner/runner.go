@@ -13,7 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +31,16 @@ import (
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/script"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/uas"
 )
+
+// Result statuses, as they appear in reports.
+const (
+	statusPass = "pass"
+	statusFail = "fail"
+	statusSkip = "skip"
+)
+
+// transportUDP is the SIP transport the bench uses.
+const transportUDP = "udp"
 
 // Standard bench tones. Each end plays a frequency only it uses, so hearing it proves the path from that end.
 const (
@@ -110,7 +120,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		return err
 	}
 	dg := diago.NewDiago(ua,
-		diago.WithTransport(diago.Transport{Transport: "udp", BindHost: host, BindPort: port}),
+		diago.WithTransport(diago.Transport{Transport: transportUDP, BindHost: host, BindPort: port}),
 		diago.WithMediaConfig(diago.MediaConfig{Codecs: []media.Codec{media.CodecAudioUlaw, media.CodecAudioAlaw, media.CodecTelephoneEvent8000}}),
 		diago.WithLogger(r.log.With("end", "target")),
 	)
@@ -158,7 +168,7 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 	defer func() { res.Duration = time.Since(start) }()
 
 	if missing := s.Missing(r.cfg.Caps); len(missing) > 0 {
-		res.Status = "skip"
+		res.Status = statusSkip
 		res.Reason = "needs " + strings.Join(missing, ", ")
 		return res
 	}
@@ -176,12 +186,12 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 	// Prepare the ends.
 	if r.cfg.MockURL != "" {
 		if err := r.mockReset(ctx); err != nil {
-			res.Status, res.Reason = "fail", "resetting mock backend: "+err.Error()
+			res.Status, res.Reason = statusFail, "resetting mock backend: "+err.Error()
 			return res
 		}
 		if s.Backend != nil && len(s.Backend.Routes) > 0 {
 			if err := r.mockRoutes(ctx, s.Backend.Routes); err != nil {
-				res.Status, res.Reason = "fail", "configuring mock backend: "+err.Error()
+				res.Status, res.Reason = statusFail, "configuring mock backend: "+err.Error()
 				return res
 			}
 		}
@@ -196,7 +206,7 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 	}
 	if len(s.Setup) > 0 {
 		if err := r.eslRun(s.Setup); err != nil {
-			res.Status, res.Reason = "fail", "setup: "+err.Error()
+			res.Status, res.Reason = statusFail, "setup: "+err.Error()
 			return res
 		}
 	}
@@ -204,7 +214,7 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 		defer func() {
 			if err := r.eslRun(s.Teardown); err != nil {
 				fail("teardown: %v", err)
-				res.Status = "fail"
+				res.Status = statusFail
 			}
 		}()
 	}
@@ -258,15 +268,17 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 	}
 	res.Calls = results
 	if len(res.Failures) > 0 {
-		res.Status = "fail"
+		res.Status = statusFail
 	} else {
-		res.Status = "pass"
+		res.Status = statusPass
 	}
 	return res
 }
 
 // call places one call and returns what the runner saw.
-func (r *Runner) call(ctx context.Context, s *scenario.Scenario, c scenario.Call) CallResult {
+func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splitting it scatters the steps
+	ctx context.Context, s *scenario.Scenario, c scenario.Call,
+) CallResult {
 	bench := fmt.Sprintf("%s-%s-%s-%d", r.runID, s.Name, c.ID, r.seq.Add(1))
 	cr := CallResult{ID: c.ID, BenchCall: bench, TonesHeard: []float64{}}
 	log := r.log.With("scenario", s.Name, "call", c.ID)
@@ -306,7 +318,7 @@ func (r *Runner) call(ctx context.Context, s *scenario.Scenario, c scenario.Call
 		bind = "0.0.0.0"
 	}
 	dg := diago.NewDiago(ua,
-		diago.WithTransport(diago.Transport{Transport: "udp", BindHost: bind, BindPort: 0}),
+		diago.WithTransport(diago.Transport{Transport: transportUDP, BindHost: bind, BindPort: 0}),
 		diago.WithMediaConfig(diago.MediaConfig{Codecs: codecs}),
 		diago.WithLogger(log),
 	)
@@ -320,19 +332,19 @@ func (r *Runner) call(ctx context.Context, s *scenario.Scenario, c scenario.Call
 	}
 
 	recipient := sip.Uri{Scheme: "sip", User: c.To, Host: host, Port: port}
-	d, err := dg.NewDialog(recipient, diago.NewDialogOptions{Transport: "udp"})
+	d, err := dg.NewDialog(recipient, diago.NewDialogOptions{Transport: transportUDP})
 	if err != nil {
 		cr.Error = "new dialog: " + err.Error()
 		return cr
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 
 	opts := diago.InviteClientOptions{Headers: []sip.Header{sip.NewHeader(uas.BenchCallHeader, bench)}}
 	names := make([]string, 0, len(c.Headers))
 	for k := range c.Headers {
 		names = append(names, k)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	for _, k := range names {
 		opts.Headers = append(opts.Headers, sip.NewHeader(k, c.Headers[k]))
 	}
@@ -464,7 +476,7 @@ func (r *Runner) options(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer ua.Close()
+	defer func() { _ = ua.Close() }()
 	client, err := sipgo.NewClient(ua)
 	if err != nil {
 		return 0, err
@@ -487,7 +499,7 @@ func (r *Runner) eslRun(cmds []string) error {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	for _, cmd := range cmds {
 		out, err := c.API(cmd, 5*time.Second)
 		if err != nil {
@@ -529,7 +541,7 @@ func (r *Runner) mockDo(ctx context.Context, method, path string, body []byte, o
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
 		return fmt.Errorf("%s %s: %s: %s", method, path, res.Status, strings.TrimSpace(string(b)))

@@ -61,10 +61,7 @@ func TestDetectorToneWithNoise(t *testing.T) {
 	}
 	// Feed in odd-sized chunks to exercise framing.
 	for len(s) > 0 {
-		n := 97
-		if n > len(s) {
-			n = len(s)
-		}
+		n := min(97, len(s))
 		d.Feed(s[:n])
 		s = s[n:]
 	}
