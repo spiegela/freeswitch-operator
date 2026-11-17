@@ -97,8 +97,10 @@ func validate(args []string) error {
 	return nil
 }
 
+// env is a flag's default: the variable's value when it is set, even to the empty string (which disables
+// -mock, -esl and -target), and def otherwise.
 func env(name, def string) string {
-	if v := os.Getenv(name); v != "" {
+	if v, ok := os.LookupEnv(name); ok {
 		return v
 	}
 	return def
@@ -112,7 +114,7 @@ func run(args []string) (int, error) {
 	eslPass := fs.String("esl-password", env("SIPBENCH_ESL_PASSWORD", "ClueCon"), "event socket password")
 	target := fs.String("target", env("SIPBENCH_TARGET", "0.0.0.0:5090"), "where to answer transfers (host:port); empty disables")
 	caps := fs.String("caps", env("SIPBENCH_CAPS", "mock,esl,codec:pcmu,codec:pcma"), "capabilities this run provides, comma separated")
-	only := fs.String("run", "", "only run scenarios whose name matches this regexp")
+	only := fs.String("run", env("SIPBENCH_RUN", ""), "only run scenarios whose name matches this regexp")
 	jsonOut := fs.String("json", "", "write the JSON report here ('-' for stdout)")
 	junitOut := fs.String("junit", "", "write a JUnit XML report here")
 	level := fs.String("log-level", "warn", "debug, info, warn or error")

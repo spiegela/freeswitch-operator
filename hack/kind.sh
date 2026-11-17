@@ -18,9 +18,6 @@ KIND="${KIND:-kind}"
 KUBECTL=(kubectl --context "kind-${CLUSTER}")
 KUSTOMIZE="${ROOT}/bin/kustomize"
 
-FS_IMAGE=drachtio/drachtio-freeswitch-mrf:0.9.6@sha256:cb81acc1112990ca33693374f1de7443d44cf9c95e6ae6c02ba1edcee4b68bba
-KAMAILIO_IMAGE=ghcr.io/kamailio/kamailio-ci:6.0-alpine@sha256:b3f60a1d3f3dd0602cb750859c2ac1458ae4159d0678ab31b22f6c598f8eca9f
-
 say() { printf '\n== %s\n' "$*"; }
 
 up() {
@@ -31,11 +28,27 @@ up() {
   fi
 }
 
-# kind load can't take a digest reference, so pull by digest and load under the tag the manifests' digest matches.
-load_pinned() {
-  local ref="$1" tag="${1%@*}"
-  docker image inspect "$tag" >/dev/null 2>&1 || docker pull "$ref"
-  "$KIND" load docker-image --name "$CLUSTER" "$tag"
+# The third-party images the manifests pin by digest, as "<kind>\t<image>" lines.
+pinned_images() {
+  "$KUSTOMIZE" build "$ROOT/deploy/kind" \
+    | awk '/^kind: / {kind = $2} /^---/ {kind = ""} $1 ~ /^-?image:$/ && $NF ~ /@sha256:/ {print kind "\t" $NF}' \
+    | sort -u
+}
+
+# Pull each pinned image by digest inside the nodes that run it, so pods start without waiting on the registry.
+# (kind load goes through docker save, which keeps the tag but not the multi-arch digest the manifests name, so
+# the kubelet would pull again anyway.) FreeswitchCluster images go to the sip-edge nodes, the rest to sip-proxy.
+pull_pinned() {
+  local kind image role node
+  while IFS=$'\t' read -r kind image; do
+    role=sip-proxy
+    [ "$kind" = FreeswitchCluster ] && role=sip-edge
+    for node in $("${KUBECTL[@]}" get nodes -l "node-role.example.com/${role}=true" -o name); do
+      echo "pulling $image on ${node#node/}"
+      docker exec "${node#node/}" crictl pull "$image" >/dev/null &
+    done
+  done < <(pinned_images)
+  wait
 }
 
 deploy() {
@@ -45,8 +58,8 @@ deploy() {
   docker build -q -t sipbench:dev "$ROOT/sipbench"
   say "loading images into kind"
   "$KIND" load docker-image --name "$CLUSTER" freeswitch-operator:dev sipbench:dev
-  load_pinned "$FS_IMAGE"
-  load_pinned "$KAMAILIO_IMAGE"
+  say "pulling pinned images on the nodes"
+  pull_pinned
 
   say "installing the operator"
   "$KUSTOMIZE" build "$ROOT/deploy/kind/operator" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -
@@ -83,10 +96,18 @@ status() {
 
 bench() {
   local job filter="${1:-}"
-  "${KUBECTL[@]}" -n "$NS" delete job -l app.kubernetes.io/part-of=sipbench --ignore-not-found --wait=true >/dev/null
-  # An optional regexp picks scenarios by name (sipbench run -run).
-  job=$(sed "s|\"scenarios\"\]|${filter:+\"-run\", \"$filter\", }\"scenarios\"]|" "$ROOT/sipbench/k8s/runner-job.yaml" \
-    | "${KUBECTL[@]}" -n "$NS" create -f - -o name)
+  # Foreground: wait for the old runner pods too, or one still terminating would share the sipbench Service (and
+  # its transfers) with the new one.
+  "${KUBECTL[@]}" -n "$NS" delete job -l app.kubernetes.io/part-of=sipbench --ignore-not-found \
+    --cascade=foreground --wait=true >/dev/null
+  # An optional regexp picks scenarios by name; passed as SIPBENCH_RUN so kubectl does the quoting. (set env
+  # prints nothing when it changes nothing, hence the plain cat without a filter.)
+  local manifest="$ROOT/sipbench/k8s/runner-job.yaml"
+  job=$(if [ -n "$filter" ]; then
+      "${KUBECTL[@]}" set env --local -o yaml -f "$manifest" "SIPBENCH_RUN=$filter"
+    else
+      cat "$manifest"
+    fi | "${KUBECTL[@]}" -n "$NS" create -f - -o name)
   say "running $job"
   "${KUBECTL[@]}" -n "$NS" wait "$job" --for=jsonpath='{.status.active}'=1 --timeout=120s >/dev/null 2>&1 || true
   "${KUBECTL[@]}" -n "$NS" logs -f "$job" | grep -v -i 'ref went negative' || true
