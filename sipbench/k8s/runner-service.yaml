@@ -1,0 +1,15 @@
+# The runner answers transfers FreeSWITCH places (TRANSFER_HOST) as sipbench:5090. Headless, so the name resolves
+# to the running Job's pod. Run one runner at a time.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sipbench
+  labels:
+    app.kubernetes.io/part-of: sipbench
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: sipbench-runner
+  publishNotReadyAddresses: true
+  ports:
+    - {name: target-udp, port: 5090, targetPort: 5090, protocol: UDP}

@@ -1,0 +1,34 @@
+# The bench's FreeSWITCH configuration as ConfigMaps, one per directory, for a FreeswitchCluster to assemble under
+# spec.config.mountPath (see deploy/kind/freeswitchcluster.yaml). These are the same files the compose bench mounts.
+# Names carry no content hash: the operator hashes the contents itself and rolls the fleet when they change.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+  - name: freeswitch-conf          # path: .
+    files:
+      - conf/freeswitch.xml
+      - conf/vars.xml
+  - name: freeswitch-autoload      # path: autoload_configs
+    files:
+      - conf/autoload_configs/acl.conf.xml
+      - conf/autoload_configs/console.conf.xml
+      - conf/autoload_configs/event_socket.conf.xml
+      - conf/autoload_configs/logfile.conf.xml
+      - conf/autoload_configs/modules.conf.xml
+      - conf/autoload_configs/sofia.conf.xml
+      - conf/autoload_configs/switch.conf.xml
+  - name: freeswitch-dialplan      # path: dialplan
+    files:
+      - conf/dialplan/backend.xml
+      - conf/dialplan/transfers.xml
+      - conf/dialplan/trunks.xml
+  - name: freeswitch-profiles      # path: sip_profiles
+    files:
+      - conf/sip_profiles/backend.xml
+      - conf/sip_profiles/trunks.xml
+  - name: freeswitch-bin           # path: bin
+    files:
+      - conf/bin/env.sh
+      - conf/bin/external-address.sh

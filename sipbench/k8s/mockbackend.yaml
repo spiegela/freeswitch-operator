@@ -1,0 +1,47 @@
+# The mock backend: what FreeSWITCH bridges calls to (BACKEND_HOST), with behaviour per called number from
+# backends/mock.yaml, baked into the image. The runner reads its call records over HTTP.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mockbackend
+  labels:
+    app.kubernetes.io/name: mockbackend
+    app.kubernetes.io/part-of: sipbench
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mockbackend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mockbackend
+        app.kubernetes.io/part-of: sipbench
+    spec:
+      containers:
+        - name: mockbackend
+          image: sipbench:dev
+          imagePullPolicy: IfNotPresent
+          command: ["mockbackend"]
+          args: ["-config", "/bench/backends/mock.yaml", "-sip", "0.0.0.0:5060", "-http", "0.0.0.0:8080"]
+          ports:
+            - {name: sip-udp, containerPort: 5060, protocol: UDP}
+            - {name: http, containerPort: 8080, protocol: TCP}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+---
+# Headless, so SIP to it reaches the pod's own address and replies come from the same one.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mockbackend
+  labels:
+    app.kubernetes.io/part-of: sipbench
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: mockbackend
+  ports:
+    - {name: sip-udp, port: 5060, targetPort: 5060, protocol: UDP}
+    - {name: http, port: 8080, targetPort: 8080, protocol: TCP}

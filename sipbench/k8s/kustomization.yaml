@@ -1,0 +1,8 @@
+# sipbench on a cluster: the mock backend FreeSWITCH bridges to, the Service the runner answers transfers on, and
+# the bench's FreeSWITCH configuration. The runner itself is a Job created per run (runner-job.yaml).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../freeswitch
+  - mockbackend.yaml
+  - runner-service.yaml

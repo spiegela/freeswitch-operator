@@ -1,0 +1,34 @@
+# One bench run against the edge on a cluster: calls go to Kamailio, which dispatches them to the FreeswitchCluster.
+# Created per run (kubectl create, for the generated name); hack/kind.sh bench does it and prints the result.
+#
+# Through Kamailio the runner can't know which FreeSWITCH node a call lands on, so there is no event socket ("esl"
+# capability): scenarios that change FreeSWITCH's settings (admission-limit) skip. OPTIONS is answered by Kamailio.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: sipbench-
+  labels:
+    app.kubernetes.io/part-of: sipbench
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sipbench-runner
+        app.kubernetes.io/part-of: sipbench
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: sipbench
+          image: sipbench:dev
+          imagePullPolicy: IfNotPresent
+          args: ["run", "-json", "/tmp/report.json", "scenarios"]
+          env:
+            - {name: SIPBENCH_EDGE, value: "kamailio-sip:5060"}
+            - {name: SIPBENCH_MOCK, value: "http://mockbackend:8080"}
+            - {name: SIPBENCH_ESL, value: ""}
+            - {name: SIPBENCH_TARGET, value: "0.0.0.0:5090"}
+            - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma"}
+          ports:
+            - {name: target-udp, containerPort: 5090, protocol: UDP}

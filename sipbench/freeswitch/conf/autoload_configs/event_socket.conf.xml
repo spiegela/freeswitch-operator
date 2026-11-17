@@ -1,9 +1,9 @@
 <configuration name="event_socket.conf" description="Socket Client">
   <!-- The bench uses the event socket for admission tests (fsctl max_sessions). Never expose it beyond the
-       bench network; on a cluster bind it to 127.0.0.1 and use a secret password. -->
+       bench network; on a cluster bind it to 127.0.0.1 (ESL_LISTEN_IP, see vars.xml) and use a secret password. -->
   <settings>
     <param name="nat-map" value="false"/>
-    <param name="listen-ip" value="0.0.0.0"/>
+    <param name="listen-ip" value="$${esl_listen_ip}"/>
     <param name="listen-port" value="8021"/>
     <param name="password" value="ClueCon"/>
     <param name="apply-inbound-acl" value="bench"/>
