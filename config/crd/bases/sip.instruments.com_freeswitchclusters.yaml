@@ -368,6 +368,34 @@ spec:
                   type: object
                   x-kubernetes-map-type: atomic
                 type: array
+              liveness:
+                description: liveness turns on hang detection. Unset means no liveness
+                  probe; {} gives the lax defaults.
+                properties:
+                  failureThreshold:
+                    default: 10
+                    description: failureThreshold is how many checks in a row must
+                      go unanswered before the container restarts.
+                    format: int32
+                    minimum: 3
+                    type: integer
+                  periodSeconds:
+                    default: 30
+                    description: periodSeconds between checks.
+                    format: int32
+                    minimum: 10
+                    type: integer
+                  timeoutSeconds:
+                    default: 15
+                    description: timeoutSeconds is how long FreeSWITCH has to answer
+                      each check.
+                    format: int32
+                    minimum: 5
+                    type: integer
+                type: object
+                x-kubernetes-validations:
+                - message: timeoutSeconds must not exceed periodSeconds
+                  rule: self.timeoutSeconds <= self.periodSeconds
               nodeSelector:
                 additionalProperties:
                   type: string

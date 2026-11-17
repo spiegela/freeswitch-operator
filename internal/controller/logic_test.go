@@ -222,7 +222,12 @@ func TestBuildStatefulSet(t *testing.T) {
 		t.Fatalf("startup window %ds, want %ds", got, startupGraceSeconds)
 	}
 	if c.LivenessProbe != nil {
-		t.Fatal("no liveness probe: a false positive drops every call on the node")
+		t.Fatal("no liveness probe unless asked for: a false positive drops every call on the node")
+	}
+	for _, e := range c.Env {
+		if e.Name == "FS_LIVENESS_TIMEOUT_SECONDS" {
+			t.Fatal("liveness env without liveness")
+		}
 	}
 	env := map[string]string{}
 	for _, e := range c.Env {
@@ -239,6 +244,26 @@ func TestBuildStatefulSet(t *testing.T) {
 		if _, ok := mounts[path]; !ok {
 			t.Errorf("missing mount %s", path)
 		}
+	}
+}
+
+func TestLivenessWhenAskedFor(t *testing.T) {
+	fsc := testCluster()
+	fsc.Spec.Liveness = &sipv1alpha1.LivenessSpec{TimeoutSeconds: 20}
+	c := buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec.Containers[0]
+	p := c.LivenessProbe
+	if p == nil || !strings.HasSuffix(p.Exec.Command[1], liveScriptName) {
+		t.Fatal("liveness must run the live script")
+	}
+	if p.PeriodSeconds != 30 || p.TimeoutSeconds != 20 || p.FailureThreshold != 10 || p.SuccessThreshold != 1 {
+		t.Fatalf("probe %+v", p)
+	}
+	found := false
+	for _, e := range c.Env {
+		found = found || (e.Name == "FS_LIVENESS_TIMEOUT_SECONDS" && e.Value == "20")
+	}
+	if !found {
+		t.Fatalf("live script needs the probe timeout: %v", c.Env)
 	}
 }
 

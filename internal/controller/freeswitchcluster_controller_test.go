@@ -586,6 +586,22 @@ var _ = Describe("FreeswitchCluster controller", func() {
 			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "path %q: %v", bad, err)
 		}
 	})
+
+	It("fills in lax liveness defaults and keeps the timeout within the period", func() {
+		ns := newNamespace(ctx)
+		fsc := newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) { f.Spec.Liveness = &sipv1alpha1.LivenessSpec{} })
+		Expect(k8sClient.Create(ctx, fsc)).To(Succeed())
+		var got sipv1alpha1.FreeswitchCluster
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: fsc.Name}, &got)).To(Succeed())
+		Expect(*got.Spec.Liveness).To(Equal(sipv1alpha1.LivenessSpec{PeriodSeconds: 30, TimeoutSeconds: 15, FailureThreshold: 10}))
+
+		err := k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
+			f.Name = "slow"
+			f.Spec.Liveness = &sipv1alpha1.LivenessSpec{PeriodSeconds: 10, TimeoutSeconds: 20}
+		}))
+		Expect(apierrors.IsInvalid(err)).To(BeTrue(), "timeout over period: %v", err)
+		Expect(err.Error()).To(ContainSubstring("timeoutSeconds must not exceed periodSeconds"))
+	})
 })
 
 func podKey(p *corev1.Pod) types.NamespacedName {

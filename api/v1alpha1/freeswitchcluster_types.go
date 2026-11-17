@@ -154,6 +154,30 @@ type DrainSpec struct {
 	MaxDrainSeconds int64 `json:"maxDrainSeconds,omitempty"`
 }
 
+// LivenessSpec turns on hang detection: the kubelet restarts a FreeSWITCH that stops answering fs_cli for
+// periodSeconds * failureThreshold seconds in a row. A restart drops every call on the node, and fs_cli can be
+// slow under load, so the defaults wait about five minutes before acting.
+// +kubebuilder:validation:XValidation:rule="self.timeoutSeconds <= self.periodSeconds",message="timeoutSeconds must not exceed periodSeconds"
+type LivenessSpec struct {
+	// periodSeconds between checks.
+	// +kubebuilder:validation:Minimum=10
+	// +kubebuilder:default=30
+	// +optional
+	PeriodSeconds int32 `json:"periodSeconds,omitempty"`
+
+	// timeoutSeconds is how long FreeSWITCH has to answer each check.
+	// +kubebuilder:validation:Minimum=5
+	// +kubebuilder:default=15
+	// +optional
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
+
+	// failureThreshold is how many checks in a row must go unanswered before the container restarts.
+	// +kubebuilder:validation:Minimum=3
+	// +kubebuilder:default=10
+	// +optional
+	FailureThreshold int32 `json:"failureThreshold,omitempty"`
+}
+
 // DispatcherSpec describes the Kamailio dispatcher set that sends calls to this fleet.
 type DispatcherSpec struct {
 	// setID is the dispatcher set for this fleet. Sets 1-99 are for fleets; the operator assigns sets it creates
@@ -256,6 +280,10 @@ type FreeswitchClusterSpec struct {
 	// drain settings.
 	// +optional
 	Drain DrainSpec `json:"drain,omitempty"`
+
+	// liveness turns on hang detection. Unset means no liveness probe; {} gives the lax defaults.
+	// +optional
+	Liveness *LivenessSpec `json:"liveness,omitempty"`
 
 	// dispatcher, when set, makes the operator maintain a Kamailio dispatcher list for this fleet.
 	// +optional
