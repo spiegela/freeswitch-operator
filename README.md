@@ -409,7 +409,7 @@ which version runs where.
 | --- | --- | --- |
 | M0 | Repository, plan, operator scaffold, sipbench mock backend and runner running against FreeSWITCH in Docker | done |
 | M1 | v0 operator on kind: fleet, dispatcher list, drains and rolling updates; sipbench runs against it ([how](#the-edge-on-kind)) | done |
-| M2 | `KamailioCluster`: managed Kamailio, authenticated JSON-RPC, restart list; sipbench fleet scenarios (drain mid-call, rolling update with live calls, run as scenarios rather than by hand), with call records kept per run so concurrent runners don't clear each other's; opt-in liveness (hang detection) with a lax default | planned |
+| M2 | `KamailioCluster`: managed Kamailio, authenticated JSON-RPC, restart list; sipbench fleet scenarios (drain mid-call, rolling update with live calls, run as scenarios rather than by hand), with call records kept per run so concurrent runners don't clear each other's; opt-in liveness (hang detection) with a lax default | done |
 | M2b | Bench tooling for the remaining conformance cases: a raw-message sender (RFC 4475 torture tests), netem impairment (loss, jitter, reordering), and runner features (re-INVITE, hand-set headers, DTMF before answer, full INVITE records) | planned |
 | M3 | `SIPAddressPool` with an AWS Elastic IP provider, shared by both fleets; edge node group on EKS | planned |
 | M4 | v1 failover with fencing and call recovery | planned |
@@ -446,14 +446,21 @@ make kind-down
 ```
 
 Through Kamailio the bench passes everything but `codec-g722` (the image has no G.722) and `admission-limit` (it
-needs the event socket of one particular node). M1 was also checked by hand on this cluster:
+needs the event socket of one particular node). On kind the runner also acts on the fleet (`SIPBENCH_FLEET`), so
+the fleet drills that M1 checked by hand run as scenarios:
 
-- **Rolling update with a live call:** the call on the first pod to be replaced kept two-way audio while that pod
-  drained, the operator held the other two until it finished, then replaced them one at a time.
-- **Node drain with a live call:** `kubectl drain` on the call's node made its pod unready and took it out of the
-  dispatcher list at once; a new call placed meanwhile went to another node; the drain finished when the call ended.
-- **Config change:** editing a referenced ConfigMap made a new snapshot and rolled the fleet one node at a time
-  (about 35 s). Pods not yet replaced never saw the edit, and the old snapshot was deleted once no pod used it.
+- **`drain-mid-call`:** cordon the call's node and evict its pod, as `kubectl drain` does. The pod leaves dispatch at
+  once, a call placed meanwhile lands on another node, and the drained call keeps audio both ways until it ends.
+- **`rolling-update-live-call`:** change the pod template with a call up. The operator replaces one pod at a time
+  and, on reaching the call's pod, waits for it to drain; the call keeps audio both ways throughout.
+- **`bad-config-stops-roll`:** move the SIP profile off the SIP port in a referenced ConfigMap. The first replacement
+  never becomes ready and the roll stays there for 90 s while the rest of the fleet takes calls; putting the config
+  back lets it finish.
+
+These take a few minutes and leave the fleet as they found it (nodes uncordoned, config restored), apart from the
+`SIPBENCH_ROLL` variable `rollFleet` sets. Checked by hand for M2: JSON-RPC without the token gets 401; deleting an
+edge pod showed it inactive on both Kamailios within a second; a change to the rendered Kamailio config rolled the
+proxies one pod at a time; a draining Kamailio answers new INVITEs with `503 Draining`.
 
 ### The report card
 

@@ -1,9 +1,10 @@
 {
-  "startedAt": "2026-11-17T21:36:17.832520795Z",
+  "startedAt": "2026-11-17T22:41:42.283190584Z",
   "edge": "kamailio-sip:5060",
   "capabilities": [
     "codec:pcma",
     "codec:pcmu",
+    "fleet",
     "mock"
   ],
   "results": [
@@ -12,40 +13,47 @@
       "file": "scenarios/01-basic-two-way.yaml",
       "area": "basic",
       "status": "pass",
-      "durationNs": 3158497543,
+      "durationNs": 3156429334,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-basic-two-way-a-1",
+          "benchCall": "6441c19d.1-basic-two-way-a-1",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
+          "audioGapsMs": {
+            "1000": 22
+          },
           "digits": "",
           "endedBy": "local",
           "mediaFrames": 125,
           "backend": [
             {
-              "id": "c386c4e3-5d71-1240-ecb9-000000000000__c652b8f9-867d-4461-9344-b18b26cef57e__yKcS4rZ6S3p0e",
-              "benchCall": "13n5-basic-two-way-a-1",
+              "id": "e6adce3e-5d7a-1240-eda6-000000000000__303ba120-c3e8-4230-a0b4-390955627d75__tX5U2e0avDSSe",
+              "benchCall": "6441c19d.1-basic-two-way-a-1",
               "route": "agent",
               "from": "sipbench",
               "to": "agent",
               "requestUri": "sip:agent@mockbackend.telephony.svc.cluster.local:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-basic-two-way-a-1"
+                "X-Sipbench-Call": "6441c19d.1-basic-two-way-a-1"
               },
-              "startedAt": "2026-11-17T21:36:17.84241992Z",
-              "answeredAt": "2026-11-17T21:36:17.843131128Z",
-              "endedAt": "2026-11-17T21:36:20.405439588Z",
+              "startedAt": "2026-11-17T22:41:42.28921875Z",
+              "answeredAt": "2026-11-17T22:41:42.289937084Z",
+              "endedAt": "2026-11-17T22:41:44.85561321Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.18.0.5:5080",
               "codec": "PCMU",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 25
+              },
               "digits": "",
               "mediaFrames": 124
             }
@@ -58,40 +66,47 @@
       "file": "scenarios/02-backend-hangup.yaml",
       "area": "basic",
       "status": "pass",
-      "durationNs": 2659683627,
+      "durationNs": 2668581293,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-backend-hangup-a-2",
+          "benchCall": "6441c19d.2-backend-hangup-a-2",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
+          "audioGapsMs": {
+            "1000": 25
+          },
           "digits": "",
           "endedBy": "remote",
-          "mediaFrames": 99,
+          "mediaFrames": 98,
           "backend": [
             {
-              "id": "c569cbb2-5d71-1240-fd8d-000000000000__399dddbd-28ce-4fe2-894b-228e190bf1a8__ZN3m4veSy397F",
-              "benchCall": "13n5-backend-hangup-a-2",
+              "id": "e8926fbb-5d7a-1240-fcbb-000000000000__c12864f2-340b-4cab-a8b3-0254cbdeb4cc__9evpgUe8vQFaF",
+              "benchCall": "6441c19d.2-backend-hangup-a-2",
               "route": "hangup",
               "from": "sipbench",
               "to": "hangup",
               "requestUri": "sip:hangup@mockbackend.telephony.svc.cluster.local:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-backend-hangup-a-2"
+                "X-Sipbench-Call": "6441c19d.2-backend-hangup-a-2"
               },
-              "startedAt": "2026-11-17T21:36:21.009398005Z",
-              "answeredAt": "2026-11-17T21:36:21.010456255Z",
-              "endedAt": "2026-11-17T21:36:23.033261298Z",
+              "startedAt": "2026-11-17T22:41:45.469366252Z",
+              "answeredAt": "2026-11-17T22:41:45.472317918Z",
+              "endedAt": "2026-11-17T22:41:47.494649128Z",
               "answered": true,
               "endedBy": "local",
+              "source": "172.18.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 23
+              },
               "digits": "",
               "mediaFrames": 98
             }
@@ -104,31 +119,32 @@
       "file": "scenarios/03-cancel.yaml",
       "area": "basic",
       "status": "pass",
-      "durationNs": 2527825751,
+      "durationNs": 2509390126,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-cancel-a-3",
+          "benchCall": "6441c19d.3-cancel-a-3",
           "status": 487,
           "tonesHeard": [],
           "digits": "",
           "mediaFrames": 0,
           "backend": [
             {
-              "id": "c6fe4ea8-5d71-1240-ecb9-000000000000__c0d97216-c2a8-4790-951d-fd01a9e64b7b__Zv5H6KgaQcDKa",
-              "benchCall": "13n5-cancel-a-3",
+              "id": "ea2782de-5d7a-1240-eda6-000000000000__cad70689-4583-4332-8ba9-2044a2ce9939__U6ym49geSpFca",
+              "benchCall": "6441c19d.3-cancel-a-3",
               "route": "noanswer",
               "from": "sipbench",
               "to": "noanswer",
               "requestUri": "sip:noanswer@mockbackend.telephony.svc.cluster.local:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-cancel-a-3"
+                "X-Sipbench-Call": "6441c19d.3-cancel-a-3"
               },
-              "startedAt": "2026-11-17T21:36:23.658322506Z",
-              "endedAt": "2026-11-17T21:36:25.693284924Z",
+              "startedAt": "2026-11-17T22:41:48.119732795Z",
+              "endedAt": "2026-11-17T22:41:50.162354754Z",
               "answered": false,
               "endedBy": "remote",
+              "source": "172.18.0.5:5080",
               "tonesHeard": [],
               "digits": "",
               "mediaFrames": 0
@@ -142,11 +158,11 @@
       "file": "scenarios/10-busy-fallback.yaml",
       "area": "failures",
       "status": "pass",
-      "durationNs": 3619786544,
+      "durationNs": 3613922668,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-busy-fallback-a-4",
+          "benchCall": "6441c19d.4-busy-fallback-a-4",
           "status": 200,
           "responseHeaders": {
             "x-fallback-reason": "USER_BUSY"
@@ -155,25 +171,29 @@
           "tonesHeard": [
             1400
           ],
+          "audioGapsMs": {
+            "1400": 26
+          },
           "digits": "",
           "endedBy": "remote",
           "mediaFrames": 150,
           "backend": [
             {
-              "id": "c8806e14-5d71-1240-fd8d-000000000000__e5419f40-d57d-4663-b518-71d2141bfe93__0yvD6QZvUc0tB",
-              "benchCall": "13n5-busy-fallback-a-4",
+              "id": "eba57ba0-5d7a-1240-eda6-000000000000__4a911df1-af56-44fc-85b7-2a7c42971cdc__vFrD641HpZ5yN",
+              "benchCall": "6441c19d.4-busy-fallback-a-4",
               "route": "busy",
               "from": "sipbench",
               "to": "busy",
               "requestUri": "sip:busy@mockbackend.telephony.svc.cluster.local:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-busy-fallback-a-4"
+                "X-Sipbench-Call": "6441c19d.4-busy-fallback-a-4"
               },
-              "startedAt": "2026-11-17T21:36:26.188855757Z",
-              "endedAt": "2026-11-17T21:36:26.189043841Z",
+              "startedAt": "2026-11-17T22:41:50.622472838Z",
+              "endedAt": "2026-11-17T22:41:50.622680338Z",
               "answered": false,
               "rejected": 486,
+              "source": "172.18.0.5:5080",
               "tonesHeard": [],
               "digits": "",
               "mediaFrames": 0
@@ -187,11 +207,11 @@
       "file": "scenarios/11-decline-fallback.yaml",
       "area": "failures",
       "status": "pass",
-      "durationNs": 3648936335,
+      "durationNs": 3636871752,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-decline-fallback-a-5",
+          "benchCall": "6441c19d.5-decline-fallback-a-5",
           "status": 200,
           "responseHeaders": {
             "x-fallback-reason": "CALL_REJECTED"
@@ -200,25 +220,29 @@
           "tonesHeard": [
             1400
           ],
+          "audioGapsMs": {
+            "1400": 26
+          },
           "digits": "",
           "endedBy": "remote",
           "mediaFrames": 150,
           "backend": [
             {
-              "id": "caaadca9-5d71-1240-16aa-000000000000__3ace17c3-0fe8-4389-b80c-5eae88e8c4b4__eQm1Zge3SQSjm",
-              "benchCall": "13n5-decline-fallback-a-5",
+              "id": "edcddb4a-5d7a-1240-fcbb-000000000000__a92c2a4e-1423-4eeb-ab32-681cc2775c2e__arNFjpZBt05va",
+              "benchCall": "6441c19d.5-decline-fallback-a-5",
               "route": "decline",
               "from": "sipbench",
               "to": "decline",
               "requestUri": "sip:decline@mockbackend.telephony.svc.cluster.local:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-decline-fallback-a-5"
+                "X-Sipbench-Call": "6441c19d.5-decline-fallback-a-5"
               },
-              "startedAt": "2026-11-17T21:36:29.826293384Z",
-              "endedAt": "2026-11-17T21:36:29.826690634Z",
+              "startedAt": "2026-11-17T22:41:54.242881548Z",
+              "endedAt": "2026-11-17T22:41:54.244523506Z",
               "answered": false,
               "rejected": 603,
+              "source": "172.18.0.3:5080",
               "tonesHeard": [],
               "digits": "",
               "mediaFrames": 0
@@ -232,11 +256,11 @@
       "file": "scenarios/12-no-answer-fallback.yaml",
       "area": "failures",
       "status": "pass",
-      "durationNs": 9195065837,
+      "durationNs": 8758700046,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-no-answer-fallback-a-6",
+          "benchCall": "6441c19d.6-no-answer-fallback-a-6",
           "status": 200,
           "responseHeaders": {
             "x-fallback-reason": "NO_ANSWER"
@@ -245,25 +269,29 @@
           "tonesHeard": [
             1400
           ],
+          "audioGapsMs": {
+            "1400": 26
+          },
           "digits": "",
           "endedBy": "remote",
           "mediaFrames": 150,
           "backend": [
             {
-              "id": "ccd54d91-5d71-1240-ecb9-000000000000__c3d033e1-ee67-4378-b430-ae9f4448c4f6__05ya8e1DmN35N",
-              "benchCall": "13n5-no-answer-fallback-a-6",
+              "id": "eff81100-5d7a-1240-eda6-000000000000__de7d387f-8337-4225-83f1-93e87c5919c2__XrH67ZjNK8UHH",
+              "benchCall": "6441c19d.6-no-answer-fallback-a-6",
               "route": "noanswer",
               "from": "sipbench",
               "to": "noanswer",
               "requestUri": "sip:noanswer@mockbackend.telephony.svc.cluster.local:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-no-answer-fallback-a-6"
+                "X-Sipbench-Call": "6441c19d.6-no-answer-fallback-a-6"
               },
-              "startedAt": "2026-11-17T21:36:33.456046261Z",
-              "endedAt": "2026-11-17T21:36:39.033348555Z",
+              "startedAt": "2026-11-17T22:41:57.874630466Z",
+              "endedAt": "2026-11-17T22:42:03.021249969Z",
               "answered": false,
               "endedBy": "remote",
+              "source": "172.18.0.5:5080",
               "tonesHeard": [],
               "digits": "",
               "mediaFrames": 0
@@ -277,11 +305,11 @@
       "file": "scenarios/13-unreachable-fallback.yaml",
       "area": "failures",
       "status": "pass",
-      "durationNs": 9003910713,
+      "durationNs": 8988470753,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-unreachable-fallback-a-7",
+          "benchCall": "6441c19d.7-unreachable-fallback-a-7",
           "status": 200,
           "responseHeaders": {
             "x-fallback-reason": "NO_ANSWER"
@@ -290,6 +318,9 @@
           "tonesHeard": [
             1400
           ],
+          "audioGapsMs": {
+            "1400": 24
+          },
           "digits": "",
           "endedBy": "remote",
           "mediaFrames": 150
@@ -301,23 +332,26 @@
       "file": "scenarios/20-header-passthrough.yaml",
       "area": "headers",
       "status": "pass",
-      "durationNs": 1649747292,
+      "durationNs": 1655210959,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-header-passthrough-a-8",
+          "benchCall": "6441c19d.8-header-passthrough-a-8",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
+          "audioGapsMs": {
+            "1000": 21
+          },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 49,
+          "mediaFrames": 50,
           "backend": [
             {
-              "id": "d7adc56e-5d71-1240-ecb9-000000000000__6c6f5506-f41d-4a2f-a125-c7784d3f4cd1__1er399HHHySrH",
-              "benchCall": "13n5-header-passthrough-a-8",
+              "id": "fa8c43eb-5d7a-1240-7c8f-000000000000__ab0c5a54-4c9e-4d1f-8159-0e69c7419e13__me8pZcgH48ytK",
+              "benchCall": "6441c19d.8-header-passthrough-a-8",
               "route": "agent",
               "from": "sipbench",
               "to": "agent",
@@ -326,14 +360,15 @@
                 "X-Campaign": "spring-renewals",
                 "X-Conversation-Id": "7d0c1f9e-5b8a-4c2e-9f3a-0e6b1d2c3a4f",
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-header-passthrough-a-8",
+                "X-Sipbench-Call": "6441c19d.8-header-passthrough-a-8",
                 "X-Tenant": "example-tenant"
               },
-              "startedAt": "2026-11-17T21:36:51.652307922Z",
-              "answeredAt": "2026-11-17T21:36:51.652976464Z",
-              "endedAt": "2026-11-17T21:36:52.694357047Z",
+              "startedAt": "2026-11-17T22:42:15.623967294Z",
+              "answeredAt": "2026-11-17T22:42:15.624988252Z",
+              "endedAt": "2026-11-17T22:42:16.686549127Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.18.0.6:5080",
               "codec": "PCMU",
               "tonesHeard": [],
               "digits": "",
@@ -348,24 +383,28 @@
       "file": "scenarios/30-blind-transfer.yaml",
       "area": "transfers",
       "status": "pass",
-      "durationNs": 7655198421,
+      "durationNs": 7653564212,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-blind-transfer-a-9",
+          "benchCall": "6441c19d.9-blind-transfer-a-9",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000,
             1800
           ],
+          "audioGapsMs": {
+            "1000": 60,
+            "1800": 60
+          },
           "digits": "",
           "endedBy": "local",
           "mediaFrames": 342,
           "backend": [
             {
-              "id": "d8a99f4f-5d71-1240-fd8d-000000000000__1a46e730-34d7-47ce-860c-03b4fb4cc15f__17N67jg0rNpDQ",
-              "benchCall": "13n5-blind-transfer-a-9",
+              "id": "fb890151-5d7a-1240-eda6-000000000000__944d5c4e-06ec-4646-b5db-e84bf3b50484__y1aZ9t3rgHj4c",
+              "benchCall": "6441c19d.9-blind-transfer-a-9",
               "route": "transfer",
               "from": "sipbench",
               "to": "transfer",
@@ -373,21 +412,25 @@
               "headers": {
                 "X-Conversation-Id": "2b9e4c71-0d3f-4a8e-b5c6-9f1e7a2d4c80",
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-blind-transfer-a-9"
+                "X-Sipbench-Call": "6441c19d.9-blind-transfer-a-9"
               },
-              "startedAt": "2026-11-17T21:36:53.302611923Z",
-              "answeredAt": "2026-11-17T21:36:53.303269298Z",
-              "endedAt": "2026-11-17T21:36:54.344511923Z",
+              "startedAt": "2026-11-17T22:42:17.279849419Z",
+              "answeredAt": "2026-11-17T22:42:17.280625794Z",
+              "endedAt": "2026-11-17T22:42:18.322881503Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.18.0.5:5080",
               "codec": "PCMU",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 27
+              },
               "digits": "",
-              "mediaFrames": 49,
+              "mediaFrames": 48,
               "refer": {
-                "to": "sip:target@172.18.0.6:5080",
+                "to": "sip:target@172.18.0.5:5080",
                 "accepted": true,
                 "notify": [
                   200
@@ -397,8 +440,8 @@
           ],
           "target": [
             {
-              "id": "d9490b0a-5d71-1240-fd8d-000000000000__5d8ed4b3-7a90-412e-9a82-ad444729b2c5__jSDjjUg24gUDe",
-              "benchCall": "13n5-blind-transfer-a-9",
+              "id": "fc28bb38-5d7a-1240-eda6-000000000000__f8b1886c-e3a8-4d85-a295-0ec5981b21c9__9HaNQpU81Be7D",
+              "benchCall": "6441c19d.9-blind-transfer-a-9",
               "route": "target",
               "from": "sipbench",
               "to": "target",
@@ -406,17 +449,21 @@
               "headers": {
                 "X-Conversation-Id": "2b9e4c71-0d3f-4a8e-b5c6-9f1e7a2d4c80",
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-blind-transfer-a-9"
+                "X-Sipbench-Call": "6441c19d.9-blind-transfer-a-9"
               },
-              "startedAt": "2026-11-17T21:36:54.347537215Z",
-              "answeredAt": "2026-11-17T21:36:54.348206882Z",
-              "endedAt": "2026-11-17T21:37:00.349408384Z",
+              "startedAt": "2026-11-17T22:42:18.328588753Z",
+              "answeredAt": "2026-11-17T22:42:18.330644045Z",
+              "endedAt": "2026-11-17T22:42:24.331768214Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.18.0.5:5060",
               "codec": "PCMU",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 30
+              },
               "digits": "",
               "mediaFrames": 298
             }
@@ -429,34 +476,35 @@
       "file": "scenarios/40-dtmf-both-ways.yaml",
       "area": "dtmf",
       "status": "pass",
-      "durationNs": 5177102753,
+      "durationNs": 5176826836,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-dtmf-both-ways-a-10",
+          "benchCall": "6441c19d.10-dtmf-both-ways-a-10",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": null,
           "digits": "4321",
           "endedBy": "local",
-          "mediaFrames": 216,
+          "mediaFrames": 214,
           "backend": [
             {
-              "id": "dd3a890e-5d71-1240-16aa-000000000000__f583a82b-c7fd-41ed-9bb3-420c017fe5c9__g96j36Fam95QB",
-              "benchCall": "13n5-dtmf-both-ways-a-10",
+              "id": "0018f4b2-5d7b-1240-fcbb-000000000000__0714feb8-a06d-438c-9509-1a85d98992b1__B1e8KHgFQ9UFp",
+              "benchCall": "6441c19d.10-dtmf-both-ways-a-10",
               "route": "dtmf",
               "from": "sipbench",
               "to": "dtmf",
               "requestUri": "sip:dtmf@mockbackend.telephony.svc.cluster.local:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-dtmf-both-ways-a-10"
+                "X-Sipbench-Call": "6441c19d.10-dtmf-both-ways-a-10"
               },
-              "startedAt": "2026-11-17T21:37:00.963981385Z",
-              "answeredAt": "2026-11-17T21:37:00.965271135Z",
-              "endedAt": "2026-11-17T21:37:05.527752637Z",
+              "startedAt": "2026-11-17T22:42:24.934348173Z",
+              "answeredAt": "2026-11-17T22:42:24.935595215Z",
+              "endedAt": "2026-11-17T22:42:29.516627634Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.18.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [],
               "digits": "1234#",
@@ -471,40 +519,47 @@
       "file": "scenarios/50-codec-pcmu.yaml",
       "area": "codecs",
       "status": "pass",
-      "durationNs": 2156462501,
+      "durationNs": 2156867626,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-codec-pcmu-a-11",
+          "benchCall": "6441c19d.11-codec-pcmu-a-11",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
+          "audioGapsMs": {
+            "1000": 28
+          },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 75,
+          "mediaFrames": 74,
           "backend": [
             {
-              "id": "e0504487-5d71-1240-fd8d-000000000000__ea735a91-2e70-409e-a09b-d1ce3c2ea5e3__2gFZ9D13Nyc0j",
-              "benchCall": "13n5-codec-pcmu-a-11",
+              "id": "032ee584-5d7b-1240-7c8f-000000000000__8bdb73be-e353-439a-9180-4296fa0091c9__NQ1F170m1HNDF",
+              "benchCall": "6441c19d.11-codec-pcmu-a-11",
               "route": "agent",
               "from": "sipbench",
               "to": "agent",
               "requestUri": "sip:agent@mockbackend.telephony.svc.cluster.local:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-codec-pcmu-a-11"
+                "X-Sipbench-Call": "6441c19d.11-codec-pcmu-a-11"
               },
-              "startedAt": "2026-11-17T21:37:06.138796679Z",
-              "answeredAt": "2026-11-17T21:37:06.139697887Z",
-              "endedAt": "2026-11-17T21:37:07.702154138Z",
+              "startedAt": "2026-11-17T22:42:30.11094255Z",
+              "answeredAt": "2026-11-17T22:42:30.112088342Z",
+              "endedAt": "2026-11-17T22:42:31.673264593Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.18.0.6:5080",
               "codec": "PCMU",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 27
+              },
               "digits": "",
               "mediaFrames": 74
             }
@@ -517,40 +572,47 @@
       "file": "scenarios/51-codec-pcma.yaml",
       "area": "codecs",
       "status": "pass",
-      "durationNs": 2155921458,
+      "durationNs": 2154414334,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-codec-pcma-a-12",
+          "benchCall": "6441c19d.12-codec-pcma-a-12",
           "status": 200,
           "codec": "PCMA",
           "tonesHeard": [
             1000
           ],
+          "audioGapsMs": {
+            "1000": 23
+          },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 74,
+          "mediaFrames": 75,
           "backend": [
             {
-              "id": "e1996f2d-5d71-1240-16aa-000000000000__c0ff62ee-ae77-479b-8580-068dbfded6c8__Hj0B510DHjvaQ",
-              "benchCall": "13n5-codec-pcma-a-12",
+              "id": "0477bc33-5d7b-1240-eda6-000000000000__ffdad8d0-7472-4da3-96f9-10f434973781__Za4QBpmvDt8pr",
+              "benchCall": "6441c19d.12-codec-pcma-a-12",
               "route": "agent",
               "from": "sipbench",
               "to": "agent",
               "requestUri": "sip:agent@mockbackend.telephony.svc.cluster.local:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-codec-pcma-a-12"
+                "X-Sipbench-Call": "6441c19d.12-codec-pcma-a-12"
               },
-              "startedAt": "2026-11-17T21:37:08.296042263Z",
-              "answeredAt": "2026-11-17T21:37:08.296982472Z",
-              "endedAt": "2026-11-17T21:37:09.839972125Z",
+              "startedAt": "2026-11-17T22:42:32.265812551Z",
+              "answeredAt": "2026-11-17T22:42:32.266537885Z",
+              "endedAt": "2026-11-17T22:42:33.828355386Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.18.0.5:5080",
               "codec": "PCMA",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 23
+              },
               "digits": "",
               "mediaFrames": 74
             }
@@ -564,7 +626,7 @@
       "area": "codecs",
       "status": "skip",
       "reason": "needs codec:g722",
-      "durationNs": 1583
+      "durationNs": 1416
     },
     {
       "name": "admission-limit",
@@ -572,63 +634,292 @@
       "area": "admission",
       "status": "skip",
       "reason": "needs esl",
-      "durationNs": 875
+      "durationNs": 250
     },
     {
       "name": "options",
       "file": "scenarios/70-options.yaml",
       "area": "health",
       "status": "pass",
-      "durationNs": 503397500
+      "durationNs": 502714750
     },
     {
       "name": "echo",
       "file": "scenarios/80-echo.yaml",
       "area": "basic",
       "status": "pass",
-      "durationNs": 3151137752,
+      "durationNs": 3154404585,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13n5-echo-a-13",
+          "benchCall": "6441c19d.14-echo-a-13",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             600
           ],
+          "audioGapsMs": {
+            "600": 60
+          },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 119,
+          "mediaFrames": 120,
           "backend": [
             {
-              "id": "e32e86e7-5d71-1240-ecb9-000000000000__4ca263ff-2931-4444-a26f-8e8a12dbde26__2QHvB52me7FBD",
-              "benchCall": "13n5-echo-a-13",
+              "id": "060d73eb-5d7b-1240-fcbb-000000000000__8b309921-10f8-4ff1-bf78-37cf08a7a474__ca80Nc1jmjj2H",
+              "benchCall": "6441c19d.14-echo-a-13",
               "route": "echo",
               "from": "sipbench",
               "to": "echo",
               "requestUri": "sip:echo@mockbackend.telephony.svc.cluster.local:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13n5-echo-a-13"
+                "X-Sipbench-Call": "6441c19d.14-echo-a-13"
               },
-              "startedAt": "2026-11-17T21:37:10.950560125Z",
-              "answeredAt": "2026-11-17T21:37:10.951261292Z",
-              "endedAt": "2026-11-17T21:37:13.513007085Z",
+              "startedAt": "2026-11-17T22:42:34.924880511Z",
+              "answeredAt": "2026-11-17T22:42:34.925983553Z",
+              "endedAt": "2026-11-17T22:42:37.468106554Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.18.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 24
+              },
               "digits": "",
               "mediaFrames": 124
             }
           ]
         }
       ]
+    },
+    {
+      "name": "drain-mid-call",
+      "file": "scenarios/90-drain-mid-call.yaml",
+      "area": "fleet",
+      "status": "pass",
+      "durationNs": 30322021056,
+      "calls": [
+        {
+          "id": "a",
+          "benchCall": "6441c19d.15-drain-mid-call-a-14",
+          "status": 200,
+          "codec": "PCMU",
+          "tonesHeard": [
+            1000
+          ],
+          "audioGapsMs": {
+            "1000": 59
+          },
+          "digits": "",
+          "endedBy": "local",
+          "mediaFrames": 923,
+          "backend": [
+            {
+              "id": "07ee4926-5d7b-1240-7c8f-000000000000__c5fa952d-0a9d-46ef-8806-bb67e7b1868d__p0t822HrytB0a",
+              "benchCall": "6441c19d.15-drain-mid-call-a-14",
+              "route": "throughout",
+              "from": "sipbench",
+              "to": "throughout",
+              "requestUri": "sip:throughout@mockbackend.telephony.svc.cluster.local:5060",
+              "headers": {
+                "X-Fs-Support": "update_display,send_info",
+                "X-Sipbench-Call": "6441c19d.15-drain-mid-call-a-14"
+              },
+              "startedAt": "2026-11-17T22:42:38.075751721Z",
+              "answeredAt": "2026-11-17T22:42:38.076344013Z",
+              "endedAt": "2026-11-17T22:42:56.65847084Z",
+              "answered": true,
+              "endedBy": "remote",
+              "source": "172.18.0.6:5080",
+              "codec": "PCMU",
+              "tonesHeard": [
+                600
+              ],
+              "audioGapsMs": {
+                "600": 40
+              },
+              "digits": "",
+              "mediaFrames": 925
+            }
+          ]
+        },
+        {
+          "id": "b",
+          "benchCall": "6441c19d.15-drain-mid-call-b-15",
+          "status": 200,
+          "codec": "PCMU",
+          "tonesHeard": [
+            1000
+          ],
+          "audioGapsMs": {
+            "1000": 23
+          },
+          "digits": "",
+          "endedBy": "local",
+          "mediaFrames": 75,
+          "backend": [
+            {
+              "id": "0b3fca7c-5d7b-1240-eda6-000000000000__eaffb099-389b-41b2-943e-aa1e41ddccb0__0KXgDH5Za3y9K",
+              "benchCall": "6441c19d.15-drain-mid-call-b-15",
+              "route": "agent",
+              "from": "sipbench",
+              "to": "agent",
+              "requestUri": "sip:agent@mockbackend.telephony.svc.cluster.local:5060",
+              "headers": {
+                "X-Fs-Support": "update_display,send_info",
+                "X-Sipbench-Call": "6441c19d.15-drain-mid-call-b-15"
+              },
+              "startedAt": "2026-11-17T22:42:43.643114168Z",
+              "answeredAt": "2026-11-17T22:42:43.643807459Z",
+              "endedAt": "2026-11-17T22:42:45.206298043Z",
+              "answered": true,
+              "endedBy": "remote",
+              "source": "172.18.0.5:5080",
+              "codec": "PCMU",
+              "tonesHeard": [
+                600
+              ],
+              "audioGapsMs": {
+                "600": 23
+              },
+              "digits": "",
+              "mediaFrames": 74
+            }
+          ]
+        }
+      ],
+      "timeline": [
+        "+3.1s drainNodeOf: call a is on edge-2; cordoned freeswitch-operator-worker4 and evicted edge-2",
+        "+3.6s draining (waitMember): pod edge-2 (call a) is Draining",
+        "+18.6s hangup: hung up call a",
+        "+18.7s uncordon: uncordoned freeswitch-operator-worker4",
+        "+29.8s waitFleetCurrent: fleet current: 3 wanted, 3 ready, 3 updated; edge-0 Active new, edge-1 Active new, edge-2 Active new"
+      ]
+    },
+    {
+      "name": "rolling-update-live-call",
+      "file": "scenarios/91-rolling-update-live-call.yaml",
+      "area": "fleet",
+      "status": "pass",
+      "durationNs": 56509439567,
+      "calls": [
+        {
+          "id": "a",
+          "benchCall": "6441c19d.16-rolling-update-live-call-a-16",
+          "status": 200,
+          "codec": "PCMU",
+          "tonesHeard": [
+            1000
+          ],
+          "audioGapsMs": {
+            "1000": 40
+          },
+          "digits": "",
+          "endedBy": "local",
+          "mediaFrames": 1963,
+          "backend": [
+            {
+              "id": "1a01ed8f-5d7b-1240-fcbb-000000000000__43156a12-160f-41f3-80b1-5695008e0a2c__DK1SQ7HpHU8mD",
+              "benchCall": "6441c19d.16-rolling-update-live-call-a-16",
+              "route": "throughout",
+              "from": "sipbench",
+              "to": "throughout",
+              "requestUri": "sip:throughout@mockbackend.telephony.svc.cluster.local:5060",
+              "headers": {
+                "X-Fs-Support": "update_display,send_info",
+                "X-Sipbench-Call": "6441c19d.16-rolling-update-live-call-a-16"
+              },
+              "startedAt": "2026-11-17T22:43:08.404320929Z",
+              "answeredAt": "2026-11-17T22:43:08.405317721Z",
+              "endedAt": "2026-11-17T22:43:47.749287336Z",
+              "answered": true,
+              "endedBy": "remote",
+              "source": "172.18.0.3:5080",
+              "codec": "PCMU",
+              "tonesHeard": [
+                600
+              ],
+              "audioGapsMs": {
+                "600": 41
+              },
+              "digits": "",
+              "mediaFrames": 1962
+            }
+          ]
+        }
+      ],
+      "timeline": [
+        "+3.1s rollFleet: set SIPBENCH_ROLL=6441c19d.16 on telephony/edge",
+        "+29.3s waitMember: pod edge-0 (call a) is Draining",
+        "+39.3s hangup: hung up call a",
+        "+56.0s waitFleetCurrent: fleet current: 3 wanted, 3 ready, 3 updated; edge-0 Active new, edge-1 Active new, edge-2 Active new"
+      ]
+    },
+    {
+      "name": "bad-config-stops-roll",
+      "file": "scenarios/92-bad-config-stops-roll.yaml",
+      "area": "fleet",
+      "status": "pass",
+      "durationNs": 106859587174,
+      "calls": [
+        {
+          "id": "a",
+          "benchCall": "6441c19d.17-bad-config-stops-roll-a-17",
+          "status": 200,
+          "codec": "PCMU",
+          "tonesHeard": [
+            1000
+          ],
+          "audioGapsMs": {
+            "1000": 24
+          },
+          "digits": "",
+          "endedBy": "local",
+          "mediaFrames": 74,
+          "backend": [
+            {
+              "id": "5683e4ba-5d7b-1240-b185-000000000000__4635d260-292e-4df4-99ec-6b1bb0b3a1b5__5Hyr1av6HgBpm",
+              "benchCall": "6441c19d.17-bad-config-stops-roll-a-17",
+              "route": "agent",
+              "from": "sipbench",
+              "to": "agent",
+              "requestUri": "sip:agent@mockbackend.telephony.svc.cluster.local:5060",
+              "headers": {
+                "X-Fs-Support": "update_display,send_info",
+                "X-Sipbench-Call": "6441c19d.17-bad-config-stops-roll-a-17"
+              },
+              "startedAt": "2026-11-17T22:44:49.919830296Z",
+              "answeredAt": "2026-11-17T22:44:49.920907337Z",
+              "endedAt": "2026-11-17T22:44:51.462786546Z",
+              "answered": true,
+              "endedBy": "remote",
+              "source": "172.18.0.5:5080",
+              "codec": "PCMU",
+              "tonesHeard": [
+                600
+              ],
+              "audioGapsMs": {
+                "600": 24
+              },
+              "digits": "",
+              "mediaFrames": 74
+            }
+          ]
+        }
+      ],
+      "timeline": [
+        "+0.0s broken (breakConfig): ConfigMap freeswitch-profiles key trunks.xml: \"\u003cparam name=\\\"sip-port\\\" value=\\\"5060\\\"/\u003e\" -\u003e \"\u003cparam name=\\\"sip-port\\\" value=\\\"5061\\\"/\u003e\"",
+        "+95.2s expectRollStuck: roll stuck at edge-2 for 90000ms; the rest kept taking calls",
+        "+95.2s restoreConfig: restored freeswitch-profiles/trunks.xml",
+        "+106.4s waitFleetCurrent: fleet current: 3 wanted, 3 ready, 3 updated; edge-0 Active new, edge-1 Active new, edge-2 Active new"
+      ]
     }
   ],
-  "pass": 14,
+  "pass": 17,
   "fail": 0,
   "skip": 2
 }
