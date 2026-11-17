@@ -35,6 +35,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -65,6 +66,8 @@ type FreeswitchClusterReconciler struct {
 	NewNotifier NotifierFactory
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+
+	configHashes configHasher
 }
 
 // +kubebuilder:rbac:groups=sip.instruments.com,resources=freeswitchclusters,verbs=get;list;watch;create;update;patch;delete
@@ -103,23 +106,23 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := r.ensurePDB(ctx, &fsc); err != nil {
 		return ctrl.Result{}, err
 	}
-	// A missing or conflicting ConfigMap is the user's to fix: report it and keep the running fleet as it is.
+	// A missing or conflicting ConfigMap is the user's to fix: report it, and keep the running fleet as it is,
+	// with its template unchanged and any roll in progress paused.
 	conf, confErr := r.loadConfig(ctx, &fsc)
-	var sts *appsv1.StatefulSet
+	sts := &appsv1.StatefulSet{}
 	if confErr != nil {
 		var ce *configError
 		if !errors.As(confErr, &ce) {
 			return ctrl.Result{}, confErr
 		}
 		log.Info("configuration not usable; leaving the StatefulSet as it is", "reason", ce.msg)
-		sts = &appsv1.StatefulSet{}
-		if err := r.Get(ctx, types.NamespacedName{Namespace: fsc.Namespace, Name: statefulSetName(&fsc)}, sts); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, err
-			}
-			sts = &appsv1.StatefulSet{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: fsc.Namespace, Name: statefulSetName(&fsc)}, sts); client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
 		}
 	} else {
+		if err := r.ensureConfigSnapshots(ctx, &fsc, conf); err != nil {
+			return ctrl.Result{}, err
+		}
 		var err error
 		if sts, err = r.ensureStatefulSet(ctx, &fsc, conf); err != nil {
 			return ctrl.Result{}, err
@@ -137,8 +140,20 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
+	if confErr == nil {
+		if err := r.pruneConfigSnapshots(ctx, &fsc, conf, sts, pods); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	var requeue time.Duration
 	decision := nextPodToReplace(pods, sts.Status.UpdateRevision, cfg.replicas)
+	if confErr != nil && decision.Outdated > 0 {
+		// The template being rolled to may mount what is now missing; don't trade a working node for one that
+		// can't start.
+		decision.Replace = nil
+		decision.Waiting = "paused until the configuration is fixed"
+	}
 	if decision.Replace != nil {
 		p := decision.Replace
 		log.Info("replacing pod for rolling update", "pod", p.Name, "revision", podRevision(p), "updateRevision", sts.Status.UpdateRevision)
@@ -269,7 +284,76 @@ func (r *FreeswitchClusterReconciler) loadConfig(ctx context.Context, fsc *sipv1
 		}
 		cms[ref.Name] = &cm
 	}
-	return layoutConfig(fsc, cms)
+	return layoutConfig(fsc, cms, r.configHashes.hash)
+}
+
+// ensureConfigSnapshots creates the immutable copies the template is about to mount. A snapshot's name is its
+// contents' hash, so one that already exists already holds the right files.
+func (r *FreeswitchClusterReconciler) ensureConfigSnapshots(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) error {
+	for _, snap := range conf.snapshots {
+		var existing corev1.ConfigMap
+		err := r.Get(ctx, types.NamespacedName{Namespace: fsc.Namespace, Name: snap.name}, &existing)
+		if err == nil {
+			if existing.DeletionTimestamp != nil {
+				return fmt.Errorf("config snapshot %s is being deleted; will recreate it", snap.name)
+			}
+			continue
+		}
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		labels := commonLabels(fsc)
+		labels[configSnapshotLabel] = "true"
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        snap.name,
+				Namespace:   fsc.Namespace,
+				Labels:      labels,
+				Annotations: map[string]string{configSourceAnnotation: snap.source},
+			},
+			Immutable:  ptr.To(true),
+			Data:       snap.data,
+			BinaryData: snap.binaryData,
+		}
+		if err := controllerutil.SetControllerReference(fsc, cm, r.Scheme); err != nil {
+			return err
+		}
+		if err := r.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// pruneConfigSnapshots deletes the snapshots that neither the current template nor any pod mounts. It waits until
+// the StatefulSet controller has seen the current template, so no pod can still be created from an older one.
+func (r *FreeswitchClusterReconciler) pruneConfigSnapshots(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, conf configLayout, sts *appsv1.StatefulSet, pods []corev1.Pod) error {
+	if sts.CreationTimestamp.IsZero() || sts.Status.ObservedGeneration < sts.Generation {
+		return nil
+	}
+	keep := map[string]bool{}
+	for _, snap := range conf.snapshots {
+		keep[snap.name] = true
+	}
+	for i := range pods {
+		podConfigSnapshots(&pods[i], keep)
+	}
+	var list corev1.ConfigMapList
+	if err := r.List(ctx, &list, client.InNamespace(fsc.Namespace), client.MatchingLabels{sipv1alpha1.ClusterLabel: fsc.Name, configSnapshotLabel: "true"}); err != nil {
+		return err
+	}
+	for i := range list.Items {
+		cm := &list.Items[i]
+		if keep[cm.Name] || cm.DeletionTimestamp != nil || !metav1.IsControlledBy(cm, fsc) {
+			continue
+		}
+		uid := cm.UID
+		if err := r.Delete(ctx, cm, client.Preconditions{UID: &uid}); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		logf.FromContext(ctx).Info("deleted unused config snapshot", "configMap", cm.Name)
+	}
+	return nil
 }
 
 func templateHash(t *corev1.PodTemplateSpec) (string, error) {

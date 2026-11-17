@@ -23,7 +23,7 @@ func testLayout(t *testing.T, fsc *sipv1alpha1.FreeswitchCluster) configLayout {
 	for _, ref := range fsc.Spec.Config.ConfigMapRefs {
 		cms[ref.Name] = cm(ref.Name, map[string]string{"file.xml": "<x/>"})
 	}
-	conf, err := layoutConfig(fsc, cms)
+	conf, err := layoutConfig(fsc, cms, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,57 +48,158 @@ func treeCluster() (*sipv1alpha1.FreeswitchCluster, map[string]*corev1.ConfigMap
 	return fsc, cms
 }
 
+// items lists source:key->path, with each snapshot named by the ConfigMap it copies.
+func items(conf configLayout) []string {
+	source := map[string]string{}
+	for _, s := range conf.snapshots {
+		source[s.name] = s.source
+	}
+	var got []string
+	for _, src := range conf.sources {
+		for _, it := range src.ConfigMap.Items {
+			got = append(got, source[src.ConfigMap.Name]+":"+it.Key+"->"+it.Path)
+		}
+	}
+	return got
+}
+
 func TestLayoutConfigTree(t *testing.T) {
 	fsc, cms := treeCluster()
-	conf, err := layoutConfig(fsc, cms)
+	conf, err := layoutConfig(fsc, cms, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if conf.mountPath != "/usr/local/freeswitch/conf" {
 		t.Fatalf("mountPath %q", conf.mountPath)
 	}
-	var got []string
-	for _, src := range conf.sources {
-		for _, it := range src.ConfigMap.Items {
-			got = append(got, src.ConfigMap.Name+":"+it.Key+"->"+it.Path)
-		}
-	}
-	want := []string{
-		"fs-root:freeswitch.xml->freeswitch.xml",
-		"fs-root:vars.xml->vars.xml",
+	want := []string{ // references in name order
 		"fs-autoload:acl.conf.xml->autoload_configs/acl.conf.xml",
 		"fs-autoload:sofia.conf.xml->autoload_configs/sofia.conf.xml",
 		"fs-extra:prompt.wav->fs-extra/prompt.wav",
+		"fs-root:freeswitch.xml->freeswitch.xml",
+		"fs-root:vars.xml->vars.xml",
 	}
-	if !reflect.DeepEqual(got, want) {
+	if got := items(conf); !reflect.DeepEqual(got, want) {
 		t.Fatalf("items:\n got %v\nwant %v", got, want)
 	}
 	if conf.hash == "" {
 		t.Fatal("no hash")
 	}
+	for _, s := range conf.snapshots {
+		if s.name != configSnapshotName(fsc, configMapHash(cms[s.source])) {
+			t.Fatalf("snapshot %s of %s is not named by its contents", s.name, s.source)
+		}
+		if !reflect.DeepEqual(s.data, cms[s.source].Data) || !reflect.DeepEqual(s.binaryData, cms[s.source].BinaryData) {
+			t.Fatalf("snapshot %s does not copy %s", s.name, s.source)
+		}
+	}
+}
+
+func TestLayoutConfigSnapshots(t *testing.T) {
+	fsc, cms := treeCluster()
+	a, _ := layoutConfig(fsc, cms, nil)
+
+	// The pods never mount the user's ConfigMaps, only the operator's copies.
+	for _, src := range a.sources {
+		if _, user := cms[src.ConfigMap.Name]; user {
+			t.Fatalf("template mounts the user's ConfigMap %s", src.ConfigMap.Name)
+		}
+	}
+
+	// An edit makes a new snapshot for that ConfigMap only.
+	cms["fs-autoload"].Data["sofia.conf.xml"] = "changed"
+	b, _ := layoutConfig(fsc, cms, nil)
+	if a.sources[0].ConfigMap.Name == b.sources[0].ConfigMap.Name {
+		t.Fatal("an edited ConfigMap needs a new snapshot")
+	}
+	if a.sources[2].ConfigMap.Name != b.sources[2].ConfigMap.Name {
+		t.Fatal("an unchanged ConfigMap keeps its snapshot")
+	}
+
+	// Two references with the same contents share one snapshot.
+	cms["fs-extra"] = cm("fs-extra", map[string]string{"vars.xml": "v", "freeswitch.xml": "f"})
+	c, err := layoutConfig(fsc, cms, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.sources) != 3 || len(c.snapshots) != 2 {
+		t.Fatalf("got %d sources and %d snapshots, want 3 and 2", len(c.sources), len(c.snapshots))
+	}
+
+	// A ConfigMap with no keys mounts nothing (a projection without items would mean every key at the root).
+	cms["fs-extra"] = cm("fs-extra", nil)
+	d, err := layoutConfig(fsc, cms, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.sources) != 2 || len(d.snapshots) != 2 {
+		t.Fatalf("empty ConfigMap: got %d sources and %d snapshots, want 2 and 2", len(d.sources), len(d.snapshots))
+	}
+	for _, src := range d.sources {
+		if len(src.ConfigMap.Items) == 0 {
+			t.Fatal("a projection without items")
+		}
+	}
 }
 
 func TestLayoutConfigHash(t *testing.T) {
 	fsc, cms := treeCluster()
-	a, _ := layoutConfig(fsc, cms)
-	again, _ := layoutConfig(fsc, cms)
+	a, _ := layoutConfig(fsc, cms, nil)
+	again, _ := layoutConfig(fsc, cms, nil)
 	if a.hash != again.hash {
 		t.Fatal("hash must be stable")
 	}
+
+	// Reordering the references changes nothing a pod sees, so it must not change the template.
+	refs := fsc.Spec.Config.ConfigMapRefs
+	refs[0], refs[2] = refs[2], refs[0]
+	reordered, _ := layoutConfig(fsc, cms, nil)
+	if a.hash != reordered.hash || !reflect.DeepEqual(a.sources, reordered.sources) {
+		t.Fatal("reordering configMapRefs must not change the layout")
+	}
+	ha, _ := templateHash(&buildStatefulSet(fsc, a).Spec.Template)
+	hr, _ := templateHash(&buildStatefulSet(fsc, reordered).Spec.Template)
+	if ha != hr {
+		t.Fatal("reordering configMapRefs must not change the template")
+	}
+
 	cms["fs-autoload"].Data["sofia.conf.xml"] = "changed"
-	b, _ := layoutConfig(fsc, cms)
+	b, _ := layoutConfig(fsc, cms, nil)
 	if a.hash == b.hash {
 		t.Fatal("a content change must change the hash")
 	}
 	cms["fs-extra"].BinaryData["prompt.wav"] = []byte{9}
-	c, _ := layoutConfig(fsc, cms)
+	c, _ := layoutConfig(fsc, cms, nil)
 	if b.hash == c.hash {
 		t.Fatal("a binary change must change the hash")
 	}
-	fsc.Spec.Config.ConfigMapRefs[2].Path = "sounds"
-	d, _ := layoutConfig(fsc, cms)
+	for i := range fsc.Spec.Config.ConfigMapRefs {
+		if fsc.Spec.Config.ConfigMapRefs[i].Name == "fs-extra" {
+			fsc.Spec.Config.ConfigMapRefs[i].Path = "sounds"
+		}
+	}
+	d, _ := layoutConfig(fsc, cms, nil)
 	if c.hash == d.hash {
 		t.Fatal("moving a ConfigMap must change the hash")
+	}
+}
+
+func TestConfigHasherCachesByVersion(t *testing.T) {
+	var hasher configHasher
+	c := cm("fs-root", map[string]string{"vars.xml": "v"})
+	c.Namespace, c.UID, c.ResourceVersion = "ns", "uid-1", "10"
+	first := hasher.hash(c)
+	if first != configMapHash(c) {
+		t.Fatal("hasher must agree with configMapHash")
+	}
+	// Same version: the remembered hash, even though (impossibly) the data differs.
+	c.Data["vars.xml"] = "edited"
+	if hasher.hash(c) != first {
+		t.Fatal("an unchanged resourceVersion must reuse the hash")
+	}
+	c.ResourceVersion = "11"
+	if hasher.hash(c) == first {
+		t.Fatal("a new resourceVersion must be hashed again")
 	}
 }
 
@@ -107,34 +208,53 @@ func TestLayoutConfigErrors(t *testing.T) {
 
 	fsc, cms := treeCluster()
 	delete(cms, "fs-autoload")
-	if _, err := layoutConfig(fsc, cms); !errors.As(err, &ce) || !strings.Contains(err.Error(), "fs-autoload not found") {
+	if _, err := layoutConfig(fsc, cms, nil); !errors.As(err, &ce) || !strings.Contains(err.Error(), "fs-autoload not found") {
 		t.Fatalf("missing: %v", err)
 	}
 
 	fsc, cms = treeCluster()
 	cms["fs-extra"] = cm("fs-extra", map[string]string{"vars.xml": "dup"})
 	fsc.Spec.Config.ConfigMapRefs[2].Path = "."
-	if _, err := layoutConfig(fsc, cms); !errors.As(err, &ce) || !strings.Contains(err.Error(), "both write vars.xml") {
+	if _, err := layoutConfig(fsc, cms, nil); !errors.As(err, &ce) || !strings.Contains(err.Error(), "both write vars.xml") {
 		t.Fatalf("duplicate: %v", err)
 	}
 
-	for _, mp := range []string{"/etc/freeswitch-operator", "/etc/freeswitch-operator/scripts", "/etc", "/"} {
+	// A file in one ConfigMap where another needs a directory, in either order.
+	for _, file := range []string{"aaa", "zzz"} {
+		fsc, cms = treeCluster()
+		fsc.Spec.Config.ConfigMapRefs = []sipv1alpha1.ConfigMapRef{{Name: file, Path: "."}, {Name: "mmm", Path: "bin"}}
+		cms = map[string]*corev1.ConfigMap{
+			file:  cm(file, map[string]string{"bin": "#!/bin/sh"}),
+			"mmm": cm("mmm", map[string]string{"env.sh": "#!/bin/sh"}),
+		}
+		if _, err := layoutConfig(fsc, cms, nil); !errors.As(err, &ce) || !strings.Contains(err.Error(), "writes the file bin where") {
+			t.Fatalf("file/directory collision (%s): %v", file, err)
+		}
+	}
+
+	for _, mp := range []string{
+		"/etc/freeswitch-operator", "/etc/freeswitch-operator/scripts", "/etc", "/", // hide the operator's volumes
+		"/etc/freeswitch-operator/scripts/conf", "/etc/freeswitch-operator/podinfo/x", // inside them
+		"/tmp", // hides the drain marker
+	} {
 		fsc, cms = treeCluster()
 		fsc.Spec.Config.MountPath = mp
-		if _, err := layoutConfig(fsc, cms); !errors.As(err, &ce) {
+		if _, err := layoutConfig(fsc, cms, nil); !errors.As(err, &ce) {
 			t.Fatalf("mountPath %s must be refused: %v", mp, err)
 		}
 	}
-	fsc, cms = treeCluster()
-	fsc.Spec.Config.MountPath = "/etc/freeswitch-operator/config"
-	if _, err := layoutConfig(fsc, cms); err != nil {
-		t.Fatalf("the default mountPath must be allowed: %v", err)
+	for _, mp := range []string{"/etc/freeswitch-operator/config", "/tmp/conf", "/usr/local/freeswitch/conf"} {
+		fsc, cms = treeCluster()
+		fsc.Spec.Config.MountPath = mp
+		if _, err := layoutConfig(fsc, cms, nil); err != nil {
+			t.Fatalf("mountPath %s must be allowed: %v", mp, err)
+		}
 	}
 }
 
 func TestBuildStatefulSetConfigVolume(t *testing.T) {
 	fsc, cms := treeCluster()
-	conf, err := layoutConfig(fsc, cms)
+	conf, err := layoutConfig(fsc, cms, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
