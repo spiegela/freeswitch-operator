@@ -2,7 +2,8 @@
 # The edge on kind: Kamailio in front of a FreeswitchCluster run by this operator, with sipbench behind and in front.
 #
 #   hack/kind.sh up        create the cluster (deploy/kind/kind-config.yaml)
-#   hack/kind.sh deploy    build and load the images, install the operator, apply deploy/kind, wait for the fleet
+#   hack/kind.sh deploy    build and load the images, install the operator, apply deploy/kind, wait for the fleet and
+#                          for every Kamailio to load it
 #   hack/kind.sh bench [re] run sipbench through Kamailio; an optional regexp picks scenarios by name
 #   hack/kind.sh status    the fleet, its members and the dispatcher list Kamailio reads
 #   hack/kind.sh down      delete the cluster
@@ -75,15 +76,47 @@ deploy() {
   "${KUBECTL[@]}" -n "$NS" rollout status deployment/kamailio --timeout=120s
   say "waiting for the fleet to be Ready and current"
   wait_fleet 600
+  say "waiting for every Kamailio to load the dispatcher list"
+  wait_kamailio $(($("${KUBECTL[@]}" -n "$NS" get freeswitchcluster edge \
+    -o jsonpath='{.spec.dispatcher.reloadDelaySeconds}') + 120))
   status
+}
+
+# The operator asks Kamailio to reload only reloadDelaySeconds after it last wrote the list (so the kubelet has
+# synced the mounted file), so a fleet that has just become Ready may not be in Kamailio yet. Wait until every
+# Kamailio pod has loaded exactly the destinations in the ConfigMap, or the bench meets 503s.
+wait_kamailio() {
+  local deadline=$((SECONDS + $1)) want have pod behind
+  while :; do
+    want=$("${KUBECTL[@]}" -n "$NS" get configmap edge-dispatcher -o jsonpath='{.data.dispatcher\.list}' \
+      | awk '!/^#/ && NF { print $2 }' | sort)
+    behind=
+    for pod in $("${KUBECTL[@]}" -n "$NS" get pods -l app.kubernetes.io/name=kamailio -o name); do
+      have=$("${KUBECTL[@]}" -n "$NS" exec "$pod" -- wget -T 5 -qO- \
+        --post-data='{"jsonrpc":"2.0","method":"dispatcher.list","id":1}' http://127.0.0.1:5070/RPC 2>/dev/null \
+        | sed -n 's/.*"URI":[[:space:]]*"\([^"]*\)".*/\1/p' | sort || true)
+      [ -n "$want" ] && [ "$have" = "$want" ] || behind="$behind ${pod#pod/}"
+    done
+    [ -z "$behind" ] && return 0
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "Kamailio has not loaded the dispatcher list after ${1}s:${behind}" >&2
+      return 1
+    fi
+    sleep 5
+  done
 }
 
 # Wait until the new operator pod holds the leader lease; until then the old one's status is all there is.
 wait_leader() {
-  local deadline=$((SECONDS + $1)) pod holder
-  # The newest pod: the one rollout status just waited for (the old one may still be terminating).
-  pod=$("${KUBECTL[@]}" -n freeswitch-operator-system get pods -l control-plane=controller-manager \
-    --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}')
+  local deadline=$((SECONDS + $1)) hash pod holder
+  # The pod of the Deployment's newest ReplicaSet: the one rollout status just waited for (the old one may still
+  # be terminating). Not the newest pod by creationTimestamp: that has one-second resolution, and on a fresh
+  # cluster the first pod and its restarted replacement are created in the same second.
+  hash=$("${KUBECTL[@]}" -n freeswitch-operator-system get replicasets -l control-plane=controller-manager \
+    -o jsonpath='{range .items[*]}{.metadata.annotations.deployment\.kubernetes\.io/revision}{" "}{.metadata.labels.pod-template-hash}{"\n"}{end}' \
+    | sort -n | tail -n 1 | cut -d' ' -f2)
+  pod=$("${KUBECTL[@]}" -n freeswitch-operator-system get pods -l "control-plane=controller-manager,pod-template-hash=$hash" \
+    -o jsonpath='{.items[0].metadata.name}')
   while :; do
     holder=$("${KUBECTL[@]}" -n freeswitch-operator-system get lease d927555f.instruments.com \
       -o jsonpath='{.spec.holderIdentity}' 2>/dev/null || true)
@@ -128,7 +161,7 @@ status() {
   local pod
   for pod in $("${KUBECTL[@]}" -n "$NS" get pods -l app.kubernetes.io/name=kamailio -o name); do
     echo "$pod"
-    "${KUBECTL[@]}" -n "$NS" exec "$pod" -- timeout 5 wget -qO- \
+    "${KUBECTL[@]}" -n "$NS" exec "$pod" -- wget -T 5 -qO- \
       --post-data='{"jsonrpc":"2.0","method":"dispatcher.list","id":1}' http://127.0.0.1:5070/RPC \
       | grep -E '"URI"|"FLAGS"' | paste - - | sed 's/[[:space:]]\{2,\}/ /g' || echo "  (no answer)"
   done
