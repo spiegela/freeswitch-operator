@@ -82,6 +82,12 @@ request_route {
 		sl_send_reply("483", "Too Many Hops");
 		exit;
 	}
+	# RFC 3261 8.2.2.1: a Request-URI scheme we don't support (anything but sip, sips and tel) gets 416. Matched on
+	# the request line itself: a URI Kamailio can't parse has no $ru, and sanity would answer 400 Bad Request URI.
+	if (!($(mb{line.at,0}) =~ "^[A-Za-z]+ +(sips?|tel):")) {
+		sl_send_reply("416", "Unsupported URI Scheme");
+		exit;
+	}
 	# 18407 adds the Proxy-Require check (512) to the module's default checks: a request requiring an extension
 	# we don't support gets 420 (sanity's proxy_require list is empty).
 	if (!sanity_check("18407", "7")) {
