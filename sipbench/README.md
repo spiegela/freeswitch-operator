@@ -226,6 +226,12 @@ the binary directly against `freeswitch/conf`. The alternatives were worse: the 
 amd64-only, and SignalWire's official packages need an account token to download. The image has no G.722 module,
 hence the G.722 skip.
 
+## Conformance record
+
+[`conformance/`](conformance/) records, case by case, what the edge should do according to published test plans
+and standards (an i3 Forum interop plan, ETSI TS 102 027-2, RFC 4475) plus our own cases and impairment
+profiles, and which scenario checks each one. A new scenario needs an entry there; `go test ./...` checks that.
+
 ## Known gaps
 
 - **G.722** is untested: it needs a FreeSWITCH build with `mod_g722`, plus a G.722 codec in the runner (diago has
@@ -255,5 +261,6 @@ internal/esl        minimal FreeSWITCH event socket client
 freeswitch/conf     the edge configuration (freeswitch/kustomization.yaml: the same as ConfigMaps)
 backends/mock.yaml  the mock's starting routes
 scenarios/          the scenarios
+conformance/        the conformance record: cases per source and the scenarios that check them
 k8s/                the bench on a cluster: mock backend, transfer Service, runner Job
 ```

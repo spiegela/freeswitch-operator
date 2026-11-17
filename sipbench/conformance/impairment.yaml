@@ -1,0 +1,659 @@
+# Network impairment: what the edge should do when signalling or media is lost, delayed, reordered, duplicated or
+# cut, on each link of the call path.
+#
+# Links (the `link` key of `impairment`):
+#   carrier-edge    far end (the runner) <-> the edge: SIP to Kamailio, RTP straight to the FreeSWITCH node
+#                   (Kamailio relays no media)
+#   proxy-node      Kamailio <-> one FreeSWITCH node (SIP only: dispatch, in-dialog requests, OPTIONS probes)
+#   edge-backend    FreeSWITCH <-> the backend (mockbackend): SIP and RTP
+#   node-apiserver  a FreeSWITCH node <-> the Kubernetes control plane (fencing cases only)
+# Other keys: direction (to-edge | from-edge | both; on proxy-node to-node | from-node | both), traffic (sip | rtp |
+# all), loss/jitter/delay/reorder/duplicate as netem takes them (jitter is the spread around delay), burst (mean
+# loss run, for Gilbert-Elliott loss), drop (named messages dropped, not random loss), match (the impairment
+# applies to the named messages only), at/for (start and length of a mid-call impairment), runs (calls placed
+# under the condition).
+#
+# Timers the expectations lean on: RFC 3261 T1 500 ms, T2 4 s, timers A/E start at T1 and double (E capped at T2),
+# B/F and the 2xx-without-ACK limit are 64*T1 = 32 s. Kamailio tm: fr_timer 5 s (no reply at all), fr_inv_timer
+# 60 s (provisional but no final); dispatcher probes every 10 s, a node goes inactive after 2 failed probes and back
+# after 2 answered ones, and failure_route marks a node inactive at once when its branch times out unanswered.
+#
+# MOS figures are E-model estimates (ITU-T G.107, default R0 93.2, G.711 with no packet loss concealment at the
+# receiver: Ie 0, Bpl 4.3 per G.113 Appendix I), computed by the runner from measured loss, burstiness and delay.
+
+source:
+  id: impairment
+  title: Network impairment profiles and cases for the edge
+  reference: >
+    https://github.com/jjaroztegi/rtpbench (docs/cases.md, docs/calibration.md; Apache-2.0); i3 Forum Technical
+    Interoperability Test Plan Release 2 (2009) sections 7.1 and 7.3; RFC 3261 (sections 13.3.1.4, 17.1, 17.2);
+    RFC 3550 (section 6.4.1, A.8); RFC 4733; RFC 4028; ITU-T Y.1541, G.114, G.107, G.113, G.1020
+  citation: >
+    Case ideas and netem profiles from rtpbench, paraphrased and reworked for a proxy-plus-B2BUA edge; refs name
+    the rtpbench case or profile. The i3 Forum plan names the IP-level and voice-quality measurements (7.1.2-7.1.4,
+    7.3.5) but leaves every target to bilateral agreement (its 8.4), so it gives no thresholds; its own cases live
+    in i3forum.yaml and are not repeated here. Thresholds are ours, set from the cited figures: Y.1541 classes 0
+    and 1 (one-way delay 100 ms and 400 ms, delay variation 50 ms, loss 1e-3), G.114 (150 ms one-way preferred,
+    400 ms upper planning limit), the G.107 E-model, and G.1020's rule that packets a jitter buffer discards count
+    as lost. Numbers only; no text from any source.
+
+cases:
+  # --- Signalling: carrier <-> edge -----------------------------------------------------------------------------
+
+  - id: imp-sig-invite-lost
+    ref: "RFC 3261 17.1.1.2 (timer A)"
+    title: The carrier's first INVITE is lost on the way in
+    area: impairment
+    component: proxy
+    impairment: {link: carrier-edge, direction: to-edge, traffic: sip, drop: first INVITE}
+    expect: >
+      The carrier's retransmission 500 ms later starts the call as if nothing happened: one transaction at
+      Kamailio, one leg at the backend, a 200 to the caller, and setup time no more than 600 ms over the clean
+      baseline.
+    status: planned
+    milestone: M2
+
+  - id: imp-sig-provisional-lost
+    ref: "rtpbench:invite-retransmit; RFC 3261 17.2.1"
+    title: The edge's 100 and 180 are lost on the way out
+    area: impairment
+    component: proxy
+    impairment: {link: carrier-edge, direction: from-edge, traffic: sip, drop: first 100 and first 180}
+    expect: >
+      The caller resends the INVITE; Kamailio absorbs every copy into the existing transaction and answers each
+      with the latest provisional, so the backend sees exactly one leg and the call is answered with one To-tag.
+    status: planned
+    milestone: M2
+
+  - id: imp-sig-200-lost
+    ref: "rtpbench:invite-retransmit; RFC 3261 13.3.1.4"
+    title: The 200 to the INVITE is lost on the way out
+    area: impairment
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: from-edge, traffic: sip, drop: first 200 to INVITE}
+    expect: >
+      FreeSWITCH resends the 200 (at T1, then doubling) through Kamailio until the caller's ACK arrives; the
+      caller gets the 200 within 1.5 s of the first copy, every copy carries the same To-tag, the call is up with
+      two-way audio, and the edge does not hang up for want of an ACK.
+    status: planned
+    milestone: M2
+
+  - id: imp-sig-ack-lost-once
+    ref: "rtpbench:invite-retransmit; RFC 3261 13.3.1.4"
+    title: The caller's ACK is lost once
+    area: impairment
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: to-edge, traffic: sip, drop: first ACK}
+    expect: >
+      The edge resends its 200, the caller ACKs the copy, the edge stops resending within T1 of that ACK, and the
+      call goes on with two-way audio: no BYE from the edge, one leg at the backend.
+    status: planned
+    milestone: M2
+
+  - id: imp-sig-ack-never
+    ref: "RFC 3261 13.3.1.4 (64*T1)"
+    title: No ACK ever reaches the edge
+    area: timers
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: to-edge, traffic: sip, drop: every ACK}
+    expect: >
+      The edge resends the 200 up to T2 apart, gives up between 32 and 34 s after the first 200, and ends the
+      call: a BYE toward the caller and the backend leg released (the mock records endedBy remote) in the same
+      second. No FreeSWITCH channel is left afterwards.
+    status: planned
+    milestone: M2
+
+  - id: imp-sig-bye-lost-in
+    ref: "rtpbench:bye-lost; RFC 3261 17.1.2.2 (timer E)"
+    title: The caller's BYE is lost once on the way in
+    area: impairment
+    component: edge
+    impairment: {link: carrier-edge, direction: to-edge, traffic: sip, drop: first BYE}
+    expect: >
+      The caller's retransmission 500 ms later ends the call: 200 to the BYE within 1 s of the first copy, the
+      backend leg released within 1.5 s, and the backend sees one BYE, not two.
+    status: planned
+    milestone: M2
+
+  - id: imp-sig-bye-lost-out
+    ref: "rtpbench:bye-lost; RFC 3261 17.1.2.2 (timer E)"
+    title: The edge's BYE toward the caller is lost once
+    area: impairment
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: from-edge, traffic: sip, drop: first BYE}
+    expect: >
+      When the backend hangs up, the edge's BYE to the caller is resent at T1; the caller receives it within 1 s
+      of the backend's BYE and the edge stops resending once the 200 arrives (no copies after it).
+    status: planned
+    milestone: M2
+
+  - id: imp-sig-bye-never
+    ref: "RFC 3261 17.1.2.2 (timer F); RFC 3550 6.3.5"
+    title: The caller's BYE never arrives, and its media stops
+    area: timers
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: to-edge, traffic: sip, drop: every BYE}
+    expect: >
+      The caller gives up on its BYE after 32 s; the edge, receiving no RTP, ends the call on its RTP timeout:
+      the backend leg is released and a BYE goes toward the caller no later than the timeout plus 2 s, with a
+      media-timeout hangup cause on record.
+    status: planned
+    milestone: M2
+    gap: The edge sets no RTP timeout today (no rtp-timeout-sec or media_timeout), so this call would stay up.
+
+  - id: imp-sig-loss-random
+    ref: "rtpbench:mobile; RFC 3261 17"
+    title: Random SIP loss on the carrier side
+    area: impairment
+    component: edge
+    impairment: {link: carrier-edge, direction: both, traffic: sip, loss: 5%, runs: 50}
+    expect: >
+      All 50 calls are answered and end cleanly; setup time p95 is within 1.6 s of the clean baseline (two lost
+      copies); every call reaches the backend as exactly one leg, and none is left up 5 s after its BYE. At 20%
+      loss each way at least 49 of 50 calls succeed, with the same no-duplicate and no-leftover rules.
+    status: planned
+    milestone: M2
+
+  - id: imp-sig-delay-over-t1
+    ref: "rtpbench:delay; RFC 3261 17.1.1.2"
+    title: Signalling round trip longer than T1
+    area: impairment
+    component: proxy
+    impairment: {link: carrier-edge, direction: both, traffic: sip, delay: 400ms, runs: 10}
+    expect: >
+      Round trips of 800 ms make the caller resend INVITEs and the edge resend 200s before anything is lost;
+      every copy is absorbed: one leg per call at the backend, no 482 or second dialog, and setup time within
+      2.5 round trips plus 200 ms of the backend's answer.
+    status: planned
+    milestone: M2
+
+  - id: imp-sig-bye-before-ack
+    ref: "RFC 3261 13.3.1.4, 15"
+    title: The caller's BYE overtakes its ACK
+    area: impairment
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: to-edge, traffic: sip, delay: 1s, match: ACK}
+    expect: >
+      With the ACK held back 1 s and a BYE sent 200 ms after the 200, the edge accepts the BYE (200), releases
+      both legs within 1 s, and ignores the late ACK; no 481 to the BYE and no channel left.
+    status: planned
+    milestone: M2
+
+  - id: imp-sig-cancel-crosses-200
+    ref: "RFC 3261 9.1, 15"
+    title: CANCEL crosses the 200 on a delayed path
+    area: impairment
+    component: edge
+    impairment: {link: carrier-edge, direction: both, traffic: sip, delay: 150ms}
+    expect: >
+      The caller cancels within 100 ms of the backend answering: the CANCEL gets 200, the INVITE ends with the
+      200 (not 487), the caller ACKs and sends BYE, and the backend leg is released within 2 s; neither leg is
+      left up.
+    status: planned
+    milestone: M2
+
+  # --- Signalling: Kamailio <-> FreeSWITCH node (dispatch and failover) ------------------------------------------
+
+  - id: imp-node-invite-lost
+    ref: "RFC 3261 17.1.1.2; kamailio tm"
+    title: Kamailio's INVITE to the chosen node is lost once
+    area: impairment
+    component: proxy
+    impairment: {link: proxy-node, direction: to-node, traffic: sip, drop: first INVITE}
+    expect: >
+      Kamailio resends to the same node 500 ms later, well inside fr_timer, so there is no failover: the call is
+      answered by that node, setup time no more than 600 ms over baseline, one leg at the backend, and the node
+      stays active in the dispatcher.
+    status: planned
+    milestone: M2
+
+  - id: imp-node-unreachable
+    ref: "kamailio dispatcher failure_route; RFC 3261 17.1.1.2"
+    title: The chosen node is unreachable; Kamailio fails over
+    area: resilience
+    component: proxy
+    impairment: {link: proxy-node, direction: both, traffic: sip, loss: 100%}
+    expect: >
+      Kamailio answers the caller 100 at once (so the caller stops resending), resends to the dead node for 5 s,
+      then marks it inactive and dispatches to the next: the call is answered with setup time no more than 5.5 s
+      over baseline, never a 408 or 503 to the caller, and one leg at the backend. Calls placed afterwards skip
+      the node with no added delay; it returns to rotation within 25 s of the link coming back.
+    status: planned
+    milestone: M2
+
+  - id: imp-node-slow
+    ref: "kamailio tm fr_timer; RFC 3261 17.2.1"
+    title: The chosen node is slow but answers inside fr_timer
+    area: resilience
+    component: proxy
+    impairment: {link: proxy-node, direction: both, traffic: sip, delay: 1500ms}
+    expect: >
+      With a 3 s round trip the node's 100 arrives before fr_timer: no failover, the call is answered by that node,
+      Kamailio's own resends are absorbed by it (one leg at the backend), and its probes still succeed, so it stays
+      active.
+    status: planned
+    milestone: M2
+
+  - id: imp-node-slow-past-fr-timer
+    ref: "kamailio tm fr_timer; RFC 3261 13.2.2.4"
+    title: The chosen node answers after fr_timer has failed it over
+    area: resilience
+    component: proxy
+    impairment: {link: proxy-node, direction: both, traffic: sip, delay: 3s}
+    expect: >
+      With a 6 s round trip Kamailio fails over at 5 s and the next node answers. The slow node's late responses
+      must not leave a second call: the caller ends up in one dialog (any second 2xx is ACKed and released with a
+      BYE within 2 s), and 10 s after answer exactly one backend leg is still up.
+    status: planned
+    milestone: M2
+
+  - id: imp-node-dark-after-100
+    ref: "kamailio tm fr_inv_timer; RFC 3261 17.1.1.2 (timer B)"
+    title: The node sends 100, then nothing
+    area: timers
+    component: proxy
+    impairment: {link: proxy-node, direction: from-node, traffic: sip, loss: 100%, at: after first 100}
+    expect: >
+      Kamailio has a provisional, so it does not fail over (the node may already have bridged the call); the
+      caller gets a final response no later than fr_inv_timer plus 1 s (61 s), and once the link returns no
+      backend leg from that attempt is left up.
+    status: planned
+    milestone: M2
+
+  - id: imp-node-sig-loss
+    ref: "rtpbench:loss; kamailio tm"
+    title: Random SIP loss between Kamailio and the nodes
+    area: impairment
+    component: proxy
+    impairment: {link: proxy-node, direction: both, traffic: sip, loss: 5%, runs: 50}
+    expect: >
+      All 50 calls are answered and released, one backend leg each; setup time p95 within 1.6 s of baseline; no
+      spurious failover (every call lands on the node first chosen unless its first INVITE and all resends inside
+      5 s were lost).
+    status: planned
+    milestone: M2
+
+  - id: imp-node-probe-loss
+    ref: "kamailio dispatcher ds_probing_threshold"
+    title: Probe loss does not flap a healthy node
+    area: keepalive
+    component: proxy
+    impairment: {link: proxy-node, direction: both, traffic: sip, loss: 10%, for: 10m}
+    expect: >
+      Over 10 minutes at 10% SIP loss each way the node never leaves rotation (each probe is resent inside
+      fr_timer and two consecutive failures are needed); at 100% loss it goes inactive within 25 s and returns
+      within 25 s of the link coming back.
+    status: planned
+    milestone: M2
+
+  - id: imp-node-cut-mid-call
+    ref: "RFC 3261 16.6, 17.1.2.2"
+    title: Kamailio loses a node mid-call; the call's media does not
+    area: resilience
+    component: edge
+    impairment: {link: proxy-node, direction: both, traffic: sip, loss: 100%, at: 5s, for: 30s}
+    expect: >
+      RTP runs carrier to node, not through Kamailio, so the call keeps two-way audio through the cut with no
+      measured loss. The node leaves rotation within 25 s and new calls go to the others. A caller BYE sent
+      during the cut gets 408 from Kamailio after 5 s; the node then reaps the leg on its RTP timeout and releases
+      the backend.
+    status: planned
+    milestone: M2
+    gap: Needs an RTP timeout on the edge (see imp-sig-bye-never).
+
+  # --- Media: carrier <-> edge -----------------------------------------------------------------------------------
+
+  - id: imp-media-baseline
+    ref: "rtpbench:clean; RFC 3550 6.4.1"
+    title: What the edge itself adds on a clean network
+    area: media
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: both, traffic: rtp, loss: 0%}
+    expect: >
+      With no impairment, each direction through the edge shows 0 loss, RFC 3550 jitter of at most 5 ms, the
+      edge's own added delay at most 20 ms (one packet), and an E-model MOS of 4.3 or more. Every impaired case
+      compares against these figures.
+    status: planned
+    milestone: M2
+
+  - id: imp-media-y1541-class0
+    ref: "i3f 7.1.2-7.1.4, 7.3.5; Y.1541 class 0"
+    title: Audio on a network at the class 0 limits
+    area: impairment
+    component: edge
+    impairment: {link: carrier-edge, direction: both, traffic: rtp, delay: 100ms, jitter: 50ms, loss: 0.1%}
+    expect: >
+      Each side hears the other's tone; measured loss per direction is within 0.1 point of the injected rate;
+      MOS estimate 4.0 or more; the edge adds no more jitter than baseline.
+    status: planned
+    milestone: M2
+
+  - id: imp-media-lte
+    ref: "rtpbench:lte; i3f 7.3.5"
+    title: Audio on a typical mobile caller's path
+    area: impairment
+    component: edge
+    impairment: {link: carrier-edge, direction: both, traffic: rtp, delay: 40ms, jitter: 3ms, loss: 1%, burst: 2}
+    expect: >
+      Tones heard both ways with at least 95% of 20 ms frames detected; measured loss 0.5-1.5% with mean loss
+      runs near 2 packets; MOS estimate 3.5 or more; SSRC unchanged throughout.
+    status: planned
+    milestone: M2
+
+  - id: imp-media-lte-bad
+    ref: "rtpbench:lte-bad; i3f 7.3.5"
+    title: Audio on a poor mobile path with bursty loss
+    area: impairment
+    component: edge
+    impairment: {link: carrier-edge, direction: both, traffic: rtp, delay: 36ms, jitter: 30ms, loss: 6%, burst: 2}
+    expect: >
+      Tones still recognised both ways (detected for at least 85% of their frames), no audio gap longer than
+      200 ms, the call stays up, and the reported loss and MOS estimate match the injected profile (MOS is
+      expected to be poor; the case checks the edge survives and measures, not that it sounds good).
+    status: planned
+    milestone: M2
+
+  - id: imp-media-loss-random
+    ref: "rtpbench:loss; G.1020"
+    title: Random media loss at 3% and 5%
+    area: impairment
+    component: edge
+    impairment: {link: carrier-edge, direction: both, traffic: rtp, loss: 5%}
+    expect: >
+      At 3% and then 5% independent loss, each tone is detected for at least (100 - 2 x loss)% of its frames;
+      measured loss per direction is within 1 point of injected; the edge relays what arrives without stretching
+      or restarting the stream (SSRC unchanged, RTP timestamps advance with the clock across gaps).
+    status: planned
+    milestone: M2
+
+  - id: imp-media-jitter
+    ref: "rtpbench:jitter; RFC 3550 A.8"
+    title: Jitter passes through, not amplified
+    area: impairment
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: to-edge, traffic: rtp, delay: 40ms, jitter: 30ms}
+    expect: >
+      With jitter injected on the way in only, the backend still hears the tone, and the RFC 3550 jitter the
+      backend measures is no more than the jitter measured at the edge's input plus 5 ms; the reverse direction
+      stays at baseline jitter.
+    status: planned
+    milestone: M2
+
+  - id: imp-media-delay
+    ref: "rtpbench:delay; G.114"
+    title: Long one-way delay
+    area: impairment
+    component: edge
+    impairment: {link: carrier-edge, direction: both, traffic: rtp, delay: 400ms}
+    expect: >
+      At 150 ms and at 400 ms one way, audio flows both ways and the echo round trip measures 2 x delay plus the
+      baseline within 40 ms; the call is not ended for lateness; MOS estimate falls only by the E-model delay
+      term (4.0 or more at 150 ms).
+    status: planned
+    milestone: M2
+
+  - id: imp-media-reorder
+    ref: "rtpbench:lte-bad (reordering); RFC 3550 A.1"
+    title: Reordered media
+    area: impairment
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: to-edge, traffic: rtp, delay: 20ms, reorder: 5%}
+    expect: >
+      The backend still hears the caller's tone with at least 90% of frames detected; the stream the edge sends
+      on keeps one SSRC, sequence numbers that rise by one per packet, and timestamps that never go backwards.
+    status: planned
+    milestone: M2
+
+  - id: imp-media-duplicate
+    ref: "RFC 3550 A.1"
+    title: Duplicated media
+    area: impairment
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: to-edge, traffic: rtp, duplicate: 5%}
+    expect: >
+      Duplicates do not lengthen audio: a 2 s tone measures 2 s within 5% at the backend, and the edge's output
+      carries no duplicate sequence numbers.
+    status: planned
+    milestone: M2
+
+  - id: imp-media-asymmetric
+    ref: "rtpbench:loss (per direction)"
+    title: Loss in one direction only
+    area: impairment
+    component: edge
+    impairment: {link: carrier-edge, direction: to-edge, traffic: rtp, loss: 10%}
+    expect: >
+      Directions stay independent: the backend measures about 10% loss (within 2 points) and still hears the
+      caller's tone; the caller measures baseline loss (0) on the backend's tone. The edge does not end or
+      re-negotiate the call.
+    status: planned
+    milestone: M2
+
+  # --- DTMF under impairment ------------------------------------------------------------------------------------
+
+  - id: imp-dtmf-loss
+    ref: "rtpbench:dtmf-rfc4733; RFC 4733 2.5.1.4"
+    title: RFC 4733 digits survive media loss, once each
+    area: dtmf
+    component: edge
+    impairment: {link: carrier-edge, direction: both, traffic: rtp, loss: 5%, runs: 20}
+    expect: >
+      In 20 runs of the dtmf-both-ways exchange the backend records exactly 1234# and the caller exactly 4321
+      every time: no digit missing, none doubled, order kept.
+    status: planned
+    milestone: M2
+
+  - id: imp-dtmf-end-lost
+    ref: "RFC 4733 2.5.1.4, 2.5.2.2"
+    title: All end packets of one digit lost
+    area: dtmf
+    component: edge
+    impairment: {link: carrier-edge, direction: to-edge, traffic: rtp, drop: every end packet of the second digit}
+    expect: >
+      The digit is still delivered once (ended by the next event or by the receiver's timeout), the following
+      digit is a separate digit, and the backend records 1234#.
+    status: planned
+    milestone: M2
+
+  - id: imp-dtmf-duplicate-reorder
+    ref: "RFC 4733 2.5.2"
+    title: Duplicated and reordered event packets
+    area: dtmf
+    component: edge
+    impairment: {link: carrier-edge, direction: to-edge, traffic: rtp, jitter: 30ms, reorder: 5%, duplicate: 5%}
+    expect: >
+      Event packets that arrive twice or out of order still give each digit once, in order (backend records
+      1234#), with each digit's reported duration within 20 ms of what was sent.
+    status: planned
+    milestone: M2
+
+  # --- One-way audio and blackholes ----------------------------------------------------------------------------
+
+  - id: imp-oneway-inbound-dead
+    ref: "rtpbench:hold (no RTP while held); RFC 3550 6.3.5"
+    title: The caller's media never arrives
+    area: impairment
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: to-edge, traffic: rtp, loss: 100%}
+    expect: >
+      SIP completes and the caller hears the backend, but the backend hears nothing (600 Hz not heard). The edge
+      ends the call on its RTP timeout: BYE to both sides within the timeout plus 2 s, with a media-timeout
+      cause on record.
+    status: planned
+    milestone: M2
+    gap: Needs an RTP timeout on the edge (see imp-sig-bye-never).
+
+  - id: imp-oneway-outbound-dead
+    ref: "rtpbench:hold"
+    title: The edge's media never reaches the caller
+    area: impairment
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: from-edge, traffic: rtp, loss: 100%}
+    expect: >
+      The caller hears nothing, the backend hears the caller. The edge still receives media, so it must not
+      time the call out: the call lasts until the caller's BYE, and both legs end then.
+    status: planned
+    milestone: M2
+
+  - id: imp-blackhole-short
+    ref: "rtpbench:ssrc-change, pause checks; RFC 3550 5.1"
+    title: Everything to the caller is cut for 2 s mid-call
+    area: impairment
+    component: edge
+    impairment: {link: carrier-edge, direction: both, traffic: all, loss: 100%, at: 5s, for: 2s}
+    expect: >
+      The call survives: no BYE either way, audio back both ways within 500 ms of the link returning, same SSRC
+      and a timestamp jump that matches the 2 s gap. The gap is reported as a 2 s outage, not as random loss.
+    status: planned
+    milestone: M2
+
+  - id: imp-blackhole-long
+    ref: "RFC 3261 17.1.2.2 (timer F); RFC 3550 6.3.5"
+    title: The carrier link goes dark for good mid-call
+    area: impairment
+    component: edge
+    impairment: {link: carrier-edge, direction: both, traffic: all, loss: 100%, at: 5s, for: 60s}
+    expect: >
+      The edge notices the missing RTP and ends the call on its RTP timeout: the backend leg is released within
+      the timeout plus 2 s, the BYE toward the caller is resent until timer F (32 s) and then dropped, and no
+      FreeSWITCH channel is left. After the link returns, a BYE from the caller for that call gets 481.
+    status: planned
+    milestone: M2
+    gap: Needs an RTP timeout on the edge (see imp-sig-bye-never).
+
+  # --- Edge <-> backend ------------------------------------------------------------------------------------------
+
+  - id: imp-backend-media-loss
+    ref: "rtpbench:mobile"
+    title: Impaired media between the edge and the backend
+    area: impairment
+    component: freeswitch
+    impairment: {link: edge-backend, direction: both, traffic: rtp, delay: 60ms, jitter: 20ms, loss: 3%}
+    expect: >
+      The caller still hears the backend's tone and the backend the caller's, each with at least 94% of frames
+      detected; digits from the caller reach the backend exactly once; the carrier-side leg shows only the loss
+      that came from the backend side (the edge invents none).
+    status: planned
+    milestone: M2
+
+  - id: imp-backend-sig-loss
+    ref: "rtpbench:bye-lost; RFC 3261 13.2.2.4, 17.1.2.2"
+    title: Lost 200 and BYE between the edge and the backend
+    area: impairment
+    component: freeswitch
+    impairment: {link: edge-backend, direction: both, traffic: sip, drop: first 200 to INVITE and first BYE}
+    expect: >
+      The backend's resent 200 is ACKed each time and bridged once (the caller sees one 200); the backend's BYE,
+      lost once, is resent and ends the caller's leg with a single BYE within 1 s.
+    status: planned
+    milestone: M2
+
+  # --- Real network (M3) -----------------------------------------------------------------------------------------
+
+  - id: imp-real-public-address-media
+    ref: "rtpbench:carrier (relay addressing)"
+    title: No one-way audio behind the public address pool
+    area: impairment
+    component: edge
+    impairment: {link: carrier-edge, direction: both, traffic: rtp, loss: 0%}
+    expect: >
+      From a host outside the VPC, the SDP of every answer carries the node's pool address, and RTP flows both
+      ways within 1 s of answer on every call over a full node roll (no call with audio in one direction only).
+    status: planned
+    milestone: M3
+
+  - id: imp-real-load-lte
+    ref: "rtpbench:lte; i3f 7.3.5; Y.1541 class 1"
+    title: Media quality at load on the real edge
+    area: impairment
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: both, traffic: rtp, delay: 40ms, jitter: 3ms, loss: 1%, burst: 2}
+    expect: >
+      With 200 concurrent calls per node on EKS under the lte profile, at least 99.9% are answered, MOS estimate
+      p5 is 3.5 or more, and the jitter each node adds stays within 5 ms of the idle baseline (RTP relaying must
+      not slip under CPU load).
+    status: planned
+    milestone: M3
+
+  - id: imp-real-fragmented-invite
+    ref: "rtpbench:large-invite; RFC 3261 18.1.1"
+    title: Large INVITEs on a lossy path with a real MTU
+    area: impairment
+    component: proxy
+    impairment: {link: carrier-edge, direction: to-edge, traffic: sip, loss: 1%}
+    expect: >
+      An INVITE above 1300 bytes either arrives over TCP, or over UDP as IP fragments where losing any fragment
+      loses the request and timer A recovers it: at least 99% of such calls are answered and none is set up
+      twice.
+    status: planned
+    milestone: M3
+
+  - id: imp-real-proxy-node-cross-zone
+    ref: "Y.1541 class 0"
+    title: Kamailio and a node in different availability zones
+    area: impairment
+    component: proxy
+    impairment: {link: proxy-node, direction: both, traffic: sip, delay: 2ms, loss: 0.1%}
+    expect: >
+      With Kamailio and the node in different zones, dispatch adds no more than 10 ms to setup time p95 over the
+      same-zone figure, and probes never flap over a day.
+    status: planned
+    milestone: M3
+
+  # --- Failover with fencing and call recovery (M4) --------------------------------------------------------------
+
+  - id: imp-node-lost-mid-call-recovery
+    ref: "RFC 3261 14; RFC 3550 8"
+    title: A node goes dark mid-call and the call is recovered
+    area: resilience
+    component: operator
+    impairment: {link: carrier-edge, direction: both, traffic: all, loss: 100%, at: 10s, for: 120s}
+    expect: >
+      When every path to the node carrying a call is cut, another node takes the call over (by taking the
+      address, or by re-INVITE from the edge) and audio is back both ways within the recovery target (to be set
+      in M4, under 5 s); the backend leg is kept or re-established with the same X- headers; the caller sees no
+      BYE.
+    status: planned
+    milestone: M4
+
+  - id: imp-node-partition-fencing
+    ref: "kubernetes node lease; RFC 3261 16"
+    title: A node cut off from the control plane is fenced before its calls move
+    area: resilience
+    component: operator
+    impairment: {link: node-apiserver, direction: both, traffic: all, loss: 100%, for: 120s}
+    expect: >
+      A node that still serves carriers but lost the control plane is fenced (stops taking new calls and gives
+      up its address) before any other node claims that address; at no point do two nodes answer for the same
+      address or call. Control-plane traffic of the other nodes is untouched.
+    status: planned
+    milestone: M4
+
+  # --- Per-peer behaviour (M5) -----------------------------------------------------------------------------------
+
+  - id: imp-peer-hold-vs-rtp-timeout
+    ref: "rtpbench:hold, hold-zero; RFC 3264 8.4"
+    title: A held call is not killed by the RTP timeout
+    area: timers
+    component: freeswitch
+    impairment: {link: carrier-edge, direction: to-edge, traffic: rtp, loss: 100%, at: on hold}
+    expect: >
+      A peer that puts the call on hold (sendonly, inactive or c=0.0.0.0) and stops sending RTP keeps the call
+      past the RTP timeout up to its per-peer hold timeout; the same silence without a hold is still timed out.
+    status: planned
+    milestone: M5
+    gap: The runner cannot send re-INVITEs yet; needs the M5 peer mocks.
+
+  - id: imp-peer-session-refresh-lost
+    ref: "rtpbench:timer; RFC 4028 10"
+    title: Session-timer refreshes under loss
+    area: timers
+    component: edge
+    impairment: {link: carrier-edge, direction: to-edge, traffic: sip, drop: first refresh re-INVITE}
+    expect: >
+      For a peer that uses session timers, a refresh lost once is resent and answered with media undisturbed;
+      when refreshes stop reaching the edge entirely, the edge ends the session (BYE both legs) no later than the
+      session interval minus the RFC 4028 margin. The edge has timers off today, so this is per-peer config.
+    status: planned
+    milestone: M5
+    gap: The runner cannot send re-INVITEs yet; needs the M5 peer mocks.
