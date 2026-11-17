@@ -164,7 +164,8 @@ func buildPDB(fsc *sipv1alpha1.FreeswitchCluster) *policyv1.PodDisruptionBudget 
 	}
 }
 
-func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster) *appsv1.StatefulSet {
+// buildStatefulSet renders the fleet's StatefulSet, with conf (from layoutConfig) as its configuration directory.
+func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *appsv1.StatefulSet {
 	cfg := resolve(fsc)
 	labels := commonLabels(fsc)
 
@@ -204,13 +205,14 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster) *appsv1.StatefulSet {
 		{Name: "operator-scripts", MountPath: scriptsDir, ReadOnly: true},
 		{Name: "podinfo", MountPath: podInfoDir, ReadOnly: true},
 	}
-	for i, ref := range fsc.Spec.Config.ConfigMapRefs {
-		vol := fmt.Sprintf("config-%d", i)
+	var templateAnnotations map[string]string
+	if len(conf.sources) > 0 {
 		volumes = append(volumes, corev1.Volume{
-			Name:         vol,
-			VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: ref}},
+			Name:         "config",
+			VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: conf.sources}},
 		})
-		mounts = append(mounts, corev1.VolumeMount{Name: vol, MountPath: configDir + "/" + ref.Name, ReadOnly: true})
+		mounts = append(mounts, corev1.VolumeMount{Name: "config", MountPath: conf.mountPath, ReadOnly: true})
+		templateAnnotations = map[string]string{configHashAnnotation: conf.hash}
 	}
 
 	container := corev1.Container{
@@ -273,7 +275,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster) *appsv1.StatefulSet {
 			// The operator replaces pods itself, one at a time, only when the rest of the fleet is ready.
 			UpdateStrategy: appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: templateAnnotations},
 				Spec:       podSpec,
 			},
 		},
