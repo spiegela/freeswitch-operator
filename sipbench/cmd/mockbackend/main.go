@@ -35,7 +35,8 @@ func run() error {
 	sipAddr := flag.String("sip", "0.0.0.0:5060", "SIP UDP listen address")
 	httpAddr := flag.String("http", "0.0.0.0:8080", "control API listen address")
 	cfgPath := flag.String("config", "", "routes file (YAML); empty starts with no routes")
-	externalHost := flag.String("external-host", "", "host to advertise in Contact/SDP when it differs from the bind address")
+	externalHost := flag.String("external-host", "",
+		"host to advertise in Contact/SDP when it differs from the bind address")
 	level := flag.String("log-level", envOr("MOCK_LOG_LEVEL", "info"), "debug, info, warn or error")
 	flag.Parse()
 
@@ -71,14 +72,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer ua.Close()
+	defer func() { _ = ua.Close() }()
 	tr := diago.Transport{Transport: "udp", BindHost: host, BindPort: port}
 	if *externalHost != "" {
 		tr.ExternalHost = *externalHost
 	}
 	dg := diago.NewDiago(ua,
 		diago.WithTransport(tr),
-		diago.WithMediaConfig(diago.MediaConfig{Codecs: []media.Codec{media.CodecAudioUlaw, media.CodecAudioAlaw, media.CodecTelephoneEvent8000}}),
+		diago.WithMediaConfig(diago.MediaConfig{Codecs: []media.Codec{
+			media.CodecAudioUlaw, media.CodecAudioAlaw, media.CodecTelephoneEvent8000,
+		}}),
 		diago.WithLogger(log),
 	)
 	if err := dg.ServeBackground(ctx, srv.HandleCall); err != nil {

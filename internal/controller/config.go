@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -98,7 +98,7 @@ func configMapKeys(cm *corev1.ConfigMap) []string {
 	for k := range cm.BinaryData {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
 }
 
@@ -108,9 +108,9 @@ func configMapHash(cm *corev1.ConfigMap) string {
 	h := sha256.New()
 	for _, k := range configMapKeys(cm) {
 		if v, ok := cm.Data[k]; ok {
-			fmt.Fprintf(h, "k\x00%s\x00%d\x00%s", k, len(v), v)
+			_, _ = fmt.Fprintf(h, "k\x00%s\x00%d\x00%s", k, len(v), v)
 		} else {
-			fmt.Fprintf(h, "b\x00%s\x00%d\x00", k, len(cm.BinaryData[k]))
+			_, _ = fmt.Fprintf(h, "b\x00%s\x00%d\x00", k, len(cm.BinaryData[k]))
 			h.Write(cm.BinaryData[k])
 		}
 	}
@@ -170,7 +170,7 @@ func layoutConfig(fsc *sipv1alpha1.FreeswitchCluster, cms map[string]*corev1.Con
 	if len(refs) == 0 {
 		return out, nil
 	}
-	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+	slices.SortFunc(refs, func(a, b sipv1alpha1.ConfigMapRef) int { return strings.Compare(a.Name, b.Name) })
 	if hashOf == nil {
 		hashOf = configMapHash
 	}
@@ -192,7 +192,7 @@ func layoutConfig(fsc *sipv1alpha1.FreeswitchCluster, cms map[string]*corev1.Con
 			return out, &configError{fmt.Sprintf("ConfigMap %s has no keys; remove it from configMapRefs if that is intended", ref.Name)}
 		}
 		contentHash := hashOf(cm)
-		fmt.Fprintf(h, "ref\x00%s\x00%s\x00", dir, contentHash)
+		_, _ = fmt.Fprintf(h, "ref\x00%s\x00%s\x00", dir, contentHash)
 
 		items := make([]corev1.KeyToPath, 0, len(keys))
 		for _, k := range keys {

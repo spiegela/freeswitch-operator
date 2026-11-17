@@ -214,7 +214,7 @@ func TestLayoutConfigErrors(t *testing.T) {
 
 	// A file in one ConfigMap where another needs a directory, in either order.
 	for _, file := range []string{"aaa", "zzz"} {
-		fsc, cms = treeCluster()
+		fsc, _ = treeCluster()
 		fsc.Spec.Config.ConfigMapRefs = []sipv1alpha1.ConfigMapRef{{Name: file, Path: "."}, {Name: "mmm", Path: "bin"}}
 		cms = map[string]*corev1.ConfigMap{
 			file:  cm(file, map[string]string{"bin": "#!/bin/sh"}),

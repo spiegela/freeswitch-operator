@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -196,9 +197,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		s.mu.Lock()
 		next := s.cfg.clone()
-		for k, v := range routes {
-			next.Routes[k] = v
-		}
+		maps.Copy(next.Routes, routes)
 		if err := next.Validate(); err != nil {
 			s.mu.Unlock()
 			http.Error(w, err.Error(), http.StatusBadRequest)

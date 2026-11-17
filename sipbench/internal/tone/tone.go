@@ -5,8 +5,9 @@
 package tone
 
 import (
+	"maps"
 	"math"
-	"sort"
+	"slices"
 	"sync"
 )
 
@@ -126,7 +127,7 @@ func (d *Detector) Heard(minFrames int) []float64 {
 			out = append(out, f)
 		}
 	}
-	sort.Float64s(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -135,8 +136,6 @@ func (d *Detector) Frames() map[float64]int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := make(map[float64]int, len(d.frames))
-	for f, n := range d.frames {
-		out[f] = n
-	}
+	maps.Copy(out, d.frames)
 	return out
 }

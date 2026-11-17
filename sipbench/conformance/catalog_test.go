@@ -5,7 +5,7 @@ package conformance
 import (
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -77,7 +77,7 @@ func scenarioNames(t *testing.T) map[string]bool {
 	return names
 }
 
-func TestRecord(t *testing.T) {
+func TestRecord(t *testing.T) { //nolint:gocyclo // one linear pass over each check; splitting it scatters the checks
 	scenarios := scenarioNames(t)
 	files, err := filepath.Glob("*.yaml")
 	if err != nil || len(files) == 0 {
@@ -153,7 +153,7 @@ func TestRecord(t *testing.T) {
 			unrecorded = append(unrecorded, s)
 		}
 	}
-	sort.Strings(unrecorded)
+	slices.Sort(unrecorded)
 	if len(unrecorded) > 0 {
 		t.Errorf("scenarios no case names (add or extend an entry): %v", unrecorded)
 	}

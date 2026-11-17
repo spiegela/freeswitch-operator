@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -175,7 +176,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 	cfg := resolve(fsc)
 	labels := commonLabels(fsc)
 
-	env := []corev1.EnvVar{
+	env := slices.Concat([]corev1.EnvVar{
 		{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
 		{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
 		{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}},
@@ -185,8 +186,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		{Name: "FS_EXTERNAL_ADDRESS_FILE", Value: externalAddrFile},
 		{Name: "FS_MAX_DRAIN_SECONDS", Value: strconv.FormatInt(cfg.maxDrainSeconds, 10)},
 		{Name: "FS_REQUIRE_EXTERNAL_ADDRESS", Value: strconv.FormatBool(cfg.requireAddress)},
-	}
-	env = append(env, fsc.Spec.Env...)
+	}, fsc.Spec.Env)
 
 	volumes := []corev1.Volume{
 		{
@@ -240,14 +240,14 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		// Startup: FreeSWITCH up with a SIP profile on the SIP port, within startupGraceSeconds. A config that
 		// leaves no profile running keeps the new pod restarting and never ready, so a roll stops at that node.
 		StartupProbe: &corev1.Probe{
-			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/bin/sh", scriptsDir + "/" + startupScriptName}}},
+			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + startupScriptName}}},
 			PeriodSeconds:    startupProbePeriod,
 			TimeoutSeconds:   3,
 			FailureThreshold: startupGraceSeconds / startupProbePeriod,
 			SuccessThreshold: 1,
 		},
 		ReadinessProbe: &corev1.Probe{
-			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/bin/sh", scriptsDir + "/" + readyScriptName}}},
+			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + readyScriptName}}},
 			PeriodSeconds:    5,
 			TimeoutSeconds:   3,
 			FailureThreshold: 1,
@@ -257,7 +257,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		// be slow under load, so a false positive at peak would do more harm than the hang it guards against.
 		// A crash needs no probe: the process exits and the container restarts.
 		Lifecycle: &corev1.Lifecycle{
-			PreStop: &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{"/bin/sh", scriptsDir + "/" + drainScriptName}}},
+			PreStop: &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + drainScriptName}}},
 		},
 	}
 

@@ -28,24 +28,24 @@ func Dial(addr, password string, timeout time.Duration) (*Client, error) {
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	h, _, err := c.read()
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("reading greeting: %w", err)
 	}
 	if h.Get("Content-Type") != "auth/request" {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("unexpected greeting %q", h.Get("Content-Type"))
 	}
 	if _, err := fmt.Fprintf(conn, "auth %s\n\n", password); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	h, _, err = c.read()
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("reading auth reply: %w", err)
 	}
 	if reply := h.Get("Reply-Text"); !strings.HasPrefix(reply, "+OK") {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("auth failed: %s", reply)
 	}
 	_ = conn.SetDeadline(time.Time{})
@@ -55,7 +55,7 @@ func Dial(addr, password string, timeout time.Duration) (*Client, error) {
 // API runs an API command and returns its output.
 func (c *Client) API(cmd string, timeout time.Duration) (string, error) {
 	_ = c.conn.SetDeadline(time.Now().Add(timeout))
-	defer c.conn.SetDeadline(time.Time{})
+	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 	if _, err := fmt.Fprintf(c.conn, "api %s\n\n", cmd); err != nil {
 		return "", err
 	}

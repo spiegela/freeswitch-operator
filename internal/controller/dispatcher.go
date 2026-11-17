@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -30,10 +30,10 @@ type destination struct {
 
 // readyDestinations turns EndpointSlices into dispatcher destinations: one per ready endpoint address. Terminating
 // endpoints are never ready, so a draining node leaves the list as soon as its preStop hook starts.
-func readyDestinations(slices []discoveryv1.EndpointSlice, port int32, transport string) []destination {
+func readyDestinations(endpointSlices []discoveryv1.EndpointSlice, port int32, transport string) []destination {
 	seen := map[string]bool{}
 	var out []destination
-	for _, s := range slices {
+	for _, s := range endpointSlices {
 		for _, ep := range s.Endpoints {
 			if ep.Conditions.Ready == nil || !*ep.Conditions.Ready {
 				continue
@@ -58,7 +58,7 @@ func readyDestinations(slices []discoveryv1.EndpointSlice, port int32, transport
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].URI < out[j].URI })
+	slices.SortFunc(out, func(a, b destination) int { return strings.Compare(a.URI, b.URI) })
 	return out
 }
 
@@ -97,7 +97,7 @@ func renderDispatcherList(setID int32, dests []destination) string {
 // parseDispatcherURIs reads the destination URIs of the given set from a rendered list.
 func parseDispatcherURIs(list string, setID int32) []string {
 	var out []string
-	for _, line := range strings.Split(list, "\n") {
+	for line := range strings.SplitSeq(list, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

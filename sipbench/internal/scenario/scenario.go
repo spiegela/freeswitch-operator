@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -156,7 +156,7 @@ func LoadDir(dir string) ([]*Scenario, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(matches)
+	slices.Sort(matches)
 	var out []*Scenario
 	for _, m := range matches {
 		s, err := Load(m)
