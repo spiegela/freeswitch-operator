@@ -70,26 +70,38 @@ spec:
                 properties:
                   configMapRefs:
                     description: |-
-                      configMapRefs are mounted read-only at /etc/freeswitch-operator/config/<name>. A change to the
-                      referenced names rolls the fleet; a change to their contents is picked up by the image's own config
-                      loading (reloadxml) or the next roll.
+                      configMapRefs are laid out under mountPath, each in its own directory, so a tree such as
+                      autoload_configs/, sip_profiles/ and dialplan/ can be built from several ConfigMaps. A change to the
+                      referenced ConfigMaps or their contents rolls the fleet, one drained node at a time.
                     items:
-                      description: |-
-                        LocalObjectReference contains enough information to let you locate the
-                        referenced object inside the same namespace.
+                      description: ConfigMapRef places one ConfigMap's keys, as files,
+                        in a directory under spec.config.mountPath.
                       properties:
                         name:
-                          default: ""
-                          description: |-
-                            Name of the referent.
-                            This field is effectively required, but due to backwards compatibility is
-                            allowed to be empty. Instances of this type with an empty value here are
-                            almost certainly wrong.
-                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          description: name of a ConfigMap in the cluster's namespace.
+                          minLength: 1
                           type: string
+                        path:
+                          description: |-
+                            path is the directory under mountPath that receives the ConfigMap's keys: "." for mountPath itself,
+                            or a relative path such as "autoload_configs". Defaults to the ConfigMap's name.
+                          pattern: ^(\.|[A-Za-z0-9_-][A-Za-z0-9_.-]*(/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*)$
+                          type: string
+                      required:
+                      - name
                       type: object
-                      x-kubernetes-map-type: atomic
                     type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  mountPath:
+                    default: /etc/freeswitch-operator/config
+                    description: |-
+                      mountPath is the read-only directory the configuration is assembled in. Point FreeSWITCH at it with
+                      `-conf`. It must not contain the operator's own directories (/etc/freeswitch-operator/scripts and
+                      /etc/freeswitch-operator/podinfo).
+                    pattern: ^/[^:]*$
+                    type: string
                 type: object
               dispatcher:
                 description: dispatcher, when set, makes the operator maintain a Kamailio

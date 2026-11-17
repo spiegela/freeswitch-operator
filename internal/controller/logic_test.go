@@ -166,7 +166,7 @@ func testCluster() *sipv1alpha1.FreeswitchCluster {
 		ObjectMeta: metav1.ObjectMeta{Name: "edge", Namespace: "telephony"},
 		Spec: sipv1alpha1.FreeswitchClusterSpec{
 			Image:  "example/freeswitch:1",
-			Config: sipv1alpha1.ConfigSpec{ConfigMapRefs: []corev1.LocalObjectReference{{Name: "edge-config"}}},
+			Config: sipv1alpha1.ConfigSpec{ConfigMapRefs: []sipv1alpha1.ConfigMapRef{{Name: "edge-config"}}},
 		},
 	}
 }
@@ -190,7 +190,7 @@ func TestResolveDefaults(t *testing.T) {
 func TestBuildStatefulSet(t *testing.T) {
 	fsc := testCluster()
 	fsc.Spec.Drain.MaxDrainSeconds = 600
-	sts := buildStatefulSet(fsc)
+	sts := buildStatefulSet(fsc, testLayout(t, fsc))
 	spec := sts.Spec.Template.Spec
 
 	if !spec.HostNetwork || spec.DNSPolicy != corev1.DNSClusterFirstWithHostNet {
@@ -227,7 +227,7 @@ func TestBuildStatefulSet(t *testing.T) {
 	for _, m := range c.VolumeMounts {
 		mounts[m.MountPath] = m.Name
 	}
-	for _, path := range []string{scriptsDir, podInfoDir, configDir + "/edge-config"} {
+	for _, path := range []string{scriptsDir, podInfoDir, configDir} {
 		if _, ok := mounts[path]; !ok {
 			t.Errorf("missing mount %s", path)
 		}
@@ -235,13 +235,13 @@ func TestBuildStatefulSet(t *testing.T) {
 }
 
 func TestTemplateHashChangesWithImage(t *testing.T) {
-	a := buildStatefulSet(testCluster())
+	a := buildStatefulSet(testCluster(), testLayout(t, testCluster()))
 	fsc := testCluster()
 	fsc.Spec.Image = "example/freeswitch:2"
-	b := buildStatefulSet(fsc)
+	b := buildStatefulSet(fsc, testLayout(t, fsc))
 	ha, _ := templateHash(&a.Spec.Template)
 	hb, _ := templateHash(&b.Spec.Template)
-	ha2, _ := templateHash(&buildStatefulSet(testCluster()).Spec.Template)
+	ha2, _ := templateHash(&buildStatefulSet(testCluster(), testLayout(t, testCluster())).Spec.Template)
 	if ha == hb || ha != ha2 {
 		t.Fatalf("hash: %s %s %s", ha, hb, ha2)
 	}

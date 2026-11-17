@@ -26,8 +26,13 @@ spec:
     source: NodeExternalIP
     required: true
   config:
+    # The directory FreeSWITCH reads (-conf). Each ConfigMap's keys become files in its own directory under it.
+    mountPath: /usr/local/freeswitch/conf
     configMapRefs:
-      - name: edge-freeswitch-config
+      - {name: edge-freeswitch-conf, path: "."}                  # freeswitch.xml, vars.xml
+      - {name: edge-freeswitch-autoload, path: autoload_configs}
+      - {name: edge-freeswitch-dialplan, path: dialplan}
+      - {name: edge-freeswitch-profiles, path: sip_profiles}
   drain:
     maxDrainSeconds: 7200
   dispatcher:
@@ -35,5 +40,5 @@ spec:
     configMapName: edge-dispatcher
     transport: udp
     # Optional: Kamailio's JSON-RPC endpoint (jsonrpcs over xhttp) for immediate removal and reloads.
-    jsonrpcURL: http://kamailio.telephony.svc:5060/RPC
+    jsonrpcURL: http://kamailio.telephony.svc:5070/RPC
     reloadDelaySeconds: 75

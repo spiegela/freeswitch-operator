@@ -33,6 +33,9 @@ const (
 
 	// DispatcherHashAnnotation records the content hash of a rendered dispatcher list on its ConfigMap.
 	DispatcherHashAnnotation = "sip.instruments.com/dispatcher-hash"
+	// DispatcherUpdatedAtAnnotation records when the dispatcher list's content last changed (RFC 3339), written in
+	// the same update as the list, so the reload delay is measured from the change itself.
+	DispatcherUpdatedAtAnnotation = "sip.instruments.com/dispatcher-updated-at"
 )
 
 // ExternalAddressSource says where a FreeSWITCH pod's public address comes from.
@@ -107,13 +110,36 @@ type ExternalAddressSpec struct {
 	Required *bool `json:"required,omitempty"`
 }
 
-// ConfigSpec mounts FreeSWITCH configuration.
+// ConfigSpec assembles FreeSWITCH's configuration directory from ConfigMaps.
 type ConfigSpec struct {
-	// configMapRefs are mounted read-only at /etc/freeswitch-operator/config/<name>. A change to the
-	// referenced names rolls the fleet; a change to their contents is picked up by the image's own config
-	// loading (reloadxml) or the next roll.
+	// mountPath is the read-only directory the configuration is assembled in. Point FreeSWITCH at it with
+	// `-conf`. It must not contain the operator's own directories (/etc/freeswitch-operator/scripts and
+	// /etc/freeswitch-operator/podinfo).
+	// +kubebuilder:default="/etc/freeswitch-operator/config"
+	// +kubebuilder:validation:Pattern=`^/[^:]*$`
 	// +optional
-	ConfigMapRefs []corev1.LocalObjectReference `json:"configMapRefs,omitempty"`
+	MountPath string `json:"mountPath,omitempty"`
+
+	// configMapRefs are laid out under mountPath, each in its own directory, so a tree such as
+	// autoload_configs/, sip_profiles/ and dialplan/ can be built from several ConfigMaps. A change to the
+	// referenced ConfigMaps or their contents rolls the fleet, one drained node at a time.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	ConfigMapRefs []ConfigMapRef `json:"configMapRefs,omitempty"`
+}
+
+// ConfigMapRef places one ConfigMap's keys, as files, in a directory under spec.config.mountPath.
+type ConfigMapRef struct {
+	// name of a ConfigMap in the cluster's namespace.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// path is the directory under mountPath that receives the ConfigMap's keys: "." for mountPath itself,
+	// or a relative path such as "autoload_configs". Defaults to the ConfigMap's name.
+	// +kubebuilder:validation:Pattern=`^(\.|[A-Za-z0-9_-][A-Za-z0-9_.-]*(/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*)$`
+	// +optional
+	Path string `json:"path,omitempty"`
 }
 
 // DrainSpec bounds how long a node waits for its calls to finish before it stops.
