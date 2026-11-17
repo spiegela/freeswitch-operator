@@ -72,9 +72,30 @@ deploy() {
   "${KUBECTL[@]}" -n "$NS" rollout restart deployment/mockbackend
   "${KUBECTL[@]}" -n "$NS" rollout status deployment/mockbackend --timeout=120s
   "${KUBECTL[@]}" -n "$NS" rollout status deployment/kamailio --timeout=120s
-  say "waiting for the fleet to be Ready"
-  "${KUBECTL[@]}" -n "$NS" wait freeswitchcluster/edge --for=condition=Ready --timeout=300s
+  say "waiting for the fleet to be Ready and current"
+  wait_fleet 600
   status
+}
+
+# Ready alone can be the status from before the operator saw a new template (a rebuilt operator, a config edit),
+# so also wait until both the operator and the StatefulSet controller have caught up and every member runs the
+# StatefulSet's update revision.
+wait_fleet() {
+  local deadline=$((SECONDS + $1)) want have
+  sleep 5
+  while :; do
+    want=$("${KUBECTL[@]}" -n "$NS" get statefulset edge \
+      -o jsonpath='{.metadata.generation} {.status.updateRevision} {.spec.replicas} True')
+    have=$("${KUBECTL[@]}" -n "$NS" get statefulset edge -o jsonpath='{.status.observedGeneration}')
+    have="$have $("${KUBECTL[@]}" -n "$NS" get freeswitchcluster edge \
+      -o jsonpath='{.status.updateRevision} {.status.updatedReplicas} {.status.conditions[?(@.type=="Ready")].status}')"
+    [ "$have" = "$want" ] && return 0
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "fleet not ready and current after ${1}s (want: generation revision replicas Ready = $want; have: $have)" >&2
+      return 1
+    fi
+    sleep 5
+  done
 }
 
 status() {
