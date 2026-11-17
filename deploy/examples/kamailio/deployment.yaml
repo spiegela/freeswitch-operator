@@ -43,14 +43,19 @@ spec:
           # Kamailio 6.0.8, multi-arch. Pin by digest in production.
           image: ghcr.io/kamailio/kamailio-ci:6.0-alpine@sha256:b3f60a1d3f3dd0602cb750859c2ac1458ae4159d0678ab31b22f6c598f8eca9f
           command: ["/bin/sh", "-c"]
-          # PUBLIC_ADDR comes from the address pool once it exists (milestone M3). Until then, set it per
-          # environment or leave it out where the node's address is not translated.
+          # Kamailio listens on 0.0.0.0, so it must be told what to put in Via and Record-Route: with nothing
+          # advertised, Record-Route carries 0.0.0.0 and no ACK or BYE can follow it. Advertise the public address
+          # (from the address pool, milestone M3, or set per environment) or else the node's own.
           args:
             - |
               set -e
-              extra=""
-              if [ -s /etc/kamailio/public-address ]; then extra="-A PUBLIC_ADDR=$(cat /etc/kamailio/public-address)"; fi
-              exec kamailio -DD -E -m 128 -M 16 -A DS_SETID=1 $extra -f /etc/kamailio/config/kamailio.cfg
+              addr="$HOST_IP"
+              if [ -s /etc/kamailio/public-address ]; then addr="$(cat /etc/kamailio/public-address)"; fi
+              exec kamailio -DD -E -m 128 -M 16 -A DS_SETID=1 -A "PUBLIC_ADDR=$addr" -f /etc/kamailio/config/kamailio.cfg
+          env:
+            - name: HOST_IP
+              valueFrom:
+                fieldRef: {fieldPath: status.hostIP}
           ports:
             - {name: sip-udp, containerPort: 5060, hostPort: 5060, protocol: UDP}
             - {name: sip-tcp, containerPort: 5060, hostPort: 5060, protocol: TCP}

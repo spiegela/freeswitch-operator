@@ -15,8 +15,16 @@ dispatcher module. The operator keeps the dispatcher list in step with the fleet
 - in-dialog requests along their route set;
 - JSON-RPC over HTTP only on the internal port (`RPC_PORT`, 5070). Keep that port closed in the security group.
 
-Preprocessor values are set with `-A`: `DS_SETID` (the fleet's dispatcher set), `PUBLIC_ADDR` (the node's public
-address, advertised in `Via` and `Record-Route`) and `RPC_PORT`.
+Preprocessor values are set with `-A`: `DS_SETID` (the fleet's dispatcher set), `PUBLIC_ADDR` (the address advertised
+in `Via` and `Record-Route`) and `RPC_PORT`. Always set `PUBLIC_ADDR`: Kamailio listens on `0.0.0.0`, and without
+it `Record-Route` carries `0.0.0.0`, so no ACK or BYE can follow a call. The Deployment passes the public address
+from `/etc/kamailio/public-address` when one is mounted, and otherwise the node's own (`status.hostIP`).
+
+JSON-RPC is served over HTTP only (`jsonrpcs` `transport` 1). Kamailio's default leaves HTTP off, and
+`jsonrpc_dispatch()` then drops each request without an answer.
+
+`deploy/kind` runs this example on a local cluster in front of a `FreeswitchCluster`; see "The edge on kind" in the
+top-level README.
 
 Check the config with the same image the Deployment uses:
 
