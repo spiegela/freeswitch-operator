@@ -1,0 +1,1079 @@
+source:
+  id: etsi-ts-102-027-2
+  title: >
+    ETSI TS 102 027-2 V4.1.1 (2006-07), SIP (RFC 3261) conformance test specification, Part 2: Test Suite
+    Structure and Test Purposes
+  reference: https://www.etsi.org/deliver/etsi_ts/102000_102099/10202702/04.01.01_60/ts_10202702v040101p.pdf
+  citation: >
+    Test purpose (TP) identifiers and clause numbers only; every title and expectation here is our own paraphrase
+    and none of ETSI's text is reproduced. V4.1.1 holds 609 TPs (7 of them void); each appears in exactly one
+    entry's ref. Entries group TPs that test the same behaviour and take the first TP's ID; not-applicable groups
+    name the clause and an ID range (first..last, in document order). Proxy TPs are read against Kamailio; UA,
+    UAC and UAS TPs against FreeSWITCH as a B2BUA (UAS toward carriers, UAC toward the backend).
+
+cases:
+  # ---------------------------------------------------------------------------------------------------------
+  # Proxy (clause 5.3.3, 5.4.3, 5.5.5): Kamailio
+  # ---------------------------------------------------------------------------------------------------------
+  - id: etsi-SIP_CC_PR_MP_RQ_V_001
+    ref: SIP_CC_PR_MP_RQ_V_001, SIP_CC_PR_MP_RQ_V_031, SIP_CC_PR_MP_RQ_V_049
+    title: INVITE, CANCEL or BYE with a Request-URI scheme the proxy doesn't know is refused with 416
+    area: error-handling
+    component: proxy
+    expect: >
+      Kamailio answers 416 itself to an INVITE, an unmatched CANCEL or a BYE whose Request-URI scheme it doesn't
+      support, and nothing reaches a FreeSWITCH node.
+    status: planned
+    milestone: M2
+    gap: sipbench can't put a non-SIP scheme in the Request-URI; needs a raw-message sender.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_002
+    ref: SIP_CC_PR_MP_RQ_V_002, SIP_CC_PR_MP_RQ_V_032, SIP_CC_PR_MP_RQ_V_050
+    title: Max-Forwards of zero is refused with 483
+    area: error-handling
+    component: proxy
+    expect: An INVITE, unmatched CANCEL or BYE arriving with Max-Forwards 0 gets 483 from Kamailio and goes no further.
+    status: planned
+    milestone: M2
+    gap: The runner can't set Max-Forwards on its requests yet.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_003
+    ref: SIP_CC_PR_MP_RQ_V_003, SIP_CC_PR_MP_RQ_V_033, SIP_CC_PR_MP_RQ_V_051
+    title: Proxy-Require naming an extension the proxy lacks is refused with 420
+    area: error-handling
+    component: proxy
+    expect: >
+      Kamailio answers 420 with an Unsupported header listing the unknown option tags, instead of relaying the
+      request. The example config's sanity mask leaves out the Proxy-Require check, so today the request is relayed
+      to FreeSWITCH, and a UAS isn't bound by Proxy-Require.
+    status: planned
+    milestone: M2
+    gap: >
+      Likely runnable on kind with today's scenario fields (a Proxy-Require request header, expected status and
+      responseHeaders); not written yet. Under compose there is no Kamailio to test.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_004
+    ref: SIP_CC_PR_MP_RQ_V_004, SIP_CC_PR_MP_RQ_V_019, SIP_CC_PR_MP_RQ_V_034, SIP_CC_PR_MP_RQ_V_052
+    title: A maddr in the Request-URI naming the proxy itself is stripped before relaying
+    area: headers
+    component: proxy
+    expect: >
+      When the Request-URI's maddr names Kamailio (and the request came in on that port and transport), Kamailio
+      removes the maddr and any non-default port or transport parameters before relaying.
+    status: planned
+    milestone: M2
+    gap: Needs a hand-built Request-URI and a mock that records the Request-URI it receives.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_020
+    ref: SIP_CC_PR_MP_RQ_V_020, SIP_CC_PR_MP_RQ_V_053
+    title: In-dialog ACK and BYE with the proxy's own Route on top are relayed onward
+    area: call-release
+    component: proxy
+    expect: >
+      Kamailio consumes its own Route entry (the one it record-routed) and relays the in-dialog ACK or BYE to the
+      next hop, so a hangup from either end reaches the other.
+    status: partial
+    scenarios: [basic-two-way, backend-hangup]
+    gap: >
+      Only checked when the scenarios run on kind behind Kamailio, and only by the call ending on both sides;
+      nothing inspects the relayed Route, Via or Request-URI, and ACK delivery isn't asserted.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_005
+    ref: SIP_CC_PR_MP_RQ_V_005, SIP_CC_PR_MP_RQ_V_015, SIP_CC_PR_MP_RQ_V_016
+    title: Route headers on a dialog-creating INVITE
+    area: call-setup
+    component: proxy
+    expect: >
+      A Route naming Kamailio is consumed. By design the edge goes further: it drops every Route a peer preloads
+      on a new INVITE and sends the call to a FreeSWITCH node, so a peer can't steer it to another hop (strict or
+      loose). The purposes that expect relaying to the next Route fail on purpose; the test pins that policy.
+    status: planned
+    milestone: M2
+    gap: Needs preloaded Route headers on the runner's INVITE.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_027
+    ref: SIP_CC_PR_MP_RQ_V_027, SIP_CC_PR_MP_RQ_V_063, SIP_CC_PR_MP_RQ_V_064
+    title: In-dialog strict routing and loose routing to a further hop
+    area: call-setup
+    component: proxy
+    expect: >
+      For in-dialog ACK and BYE, Kamailio rewrites the request from a strict-routing previous hop (Request-URI
+      moved to the end of Route, first Route into the Request-URI) and relays to the next loose-routing Route entry
+      when one follows its own.
+    status: planned
+    milestone: M2
+    gap: Needs hand-built route sets on in-dialog requests; sipgo builds them from the dialog.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_006
+    ref: >-
+      SIP_CC_PR_MP_RQ_V_006, SIP_CC_PR_MP_RQ_V_007, SIP_CC_PR_MP_RQ_V_017, SIP_CC_PR_MP_RQ_V_021,
+      SIP_CC_PR_MP_RQ_V_022, SIP_CC_PR_MP_RQ_V_054, SIP_CC_PR_MP_RQ_V_055, SIP_QC_PR_V_002
+    title: Requests for a target the proxy isn't responsible for
+    area: call-setup
+    component: proxy
+    expect: >
+      From a FreeSWITCH node, Kamailio relays to the target in the Request-URI (or its maddr), from its fixed
+      address. From a peer, the edge is no open relay: a new request goes to a FreeSWITCH node whatever domain it
+      names, and an OPTIONS with a user part is answered by that node. The peer-side purposes fail on purpose.
+    status: planned
+    milestone: M2
+    gap: The node-to-peer direction needs a FreeSWITCH call out through Kamailio to a sipbench peer.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_008
+    ref: >-
+      SIP_CC_PR_MP_RQ_V_008, SIP_CC_PR_MP_RQ_V_009, SIP_CC_PR_MP_RQ_V_056, SIP_CC_PR_MP_RQ_V_057,
+      SIP_CC_PR_MP_RQ_V_058
+    title: No target for the request ends in a final failure, not silence
+    area: error-handling
+    component: edge
+    expect: >
+      An INVITE or BYE the edge can't place ends with a 4xx final response (404, or 480 or 485 where that is the
+      reason) from Kamailio or the node, never an unanswered transaction.
+    status: planned
+    milestone: M2
+    gap: Needs a number plan the bench can call that the fleet refuses.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_011
+    ref: >-
+      SIP_CC_PR_MP_RQ_V_011, SIP_CC_PR_MP_RQ_V_012, SIP_CC_PR_MP_RQ_V_013, SIP_CC_PR_MP_RQ_V_014,
+      SIP_CC_PR_MP_RQ_V_023, SIP_CC_PR_MP_RQ_V_024, SIP_CC_PR_MP_RQ_V_025, SIP_CC_PR_MP_RQ_V_026,
+      SIP_CC_PR_MP_RQ_V_059, SIP_CC_PR_MP_RQ_V_060, SIP_CC_PR_MP_RQ_V_061, SIP_CC_PR_MP_RQ_V_062
+    title: Max-Forwards decremented on relay, and inserted when missing
+    area: headers
+    component: proxy
+    expect: >
+      Kamailio relays INVITE, ACK and BYE with Max-Forwards one lower (1 becomes 0 and is still relayed), and adds
+      the header when absent. The recommended inserted value is 70; the example config inserts 10.
+    status: planned
+    milestone: M2
+    gap: Needs control of Max-Forwards on sent requests and a mock that records the value it receives.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_018
+    ref: >-
+      SIP_CC_PR_MP_RQ_V_018, SIP_CC_PR_MP_RQ_V_030, SIP_CC_PR_MP_RQ_V_066, SIP_MG_PR_V_009, SIP_MG_PR_V_010
+    title: Proxy adds its own Via on top and keeps the rest in order
+    area: headers
+    component: proxy
+    expect: >
+      Kamailio puts its own SIP/2.0 Via with a z9hG4bK branch on top of INVITE, ACK and BYE, and leaves the
+      received Via values in their order whether they came comma-separated or as separate headers.
+    status: planned
+    milestone: M2
+    gap: Needs a mock that records the Via headers it receives, and hand-built multi-value Via on sent requests.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_035
+    ref: >-
+      SIP_CC_PR_MP_RQ_V_035, SIP_CC_PR_MP_RQ_V_036, SIP_CC_PR_MP_RQ_V_037, SIP_CC_PR_MP_RQ_V_038,
+      SIP_CC_PR_MP_RQ_V_039, SIP_CC_PR_MP_RQ_V_040, SIP_CC_PR_MP_RQ_V_041, SIP_CC_PR_MP_RQ_V_042,
+      SIP_CC_PR_MP_RQ_V_043, SIP_CC_PR_MP_RQ_V_044, SIP_CC_PR_MP_RQ_V_045, SIP_CC_PR_MP_RQ_V_046,
+      SIP_CC_PR_MP_RQ_V_047, SIP_CC_PR_MP_RQ_V_048
+    title: CANCEL that matches no transaction
+    area: call-release
+    component: proxy
+    expect: >
+      RFC 3261 has a proxy relay such a CANCEL statelessly (with Route, Max-Forwards and Via handled as for any
+      request) or refuse it. The example config drops it unanswered. Decide which the edge does, then check it
+      never reaches a node that has no matching INVITE and never loops.
+    status: planned
+    milestone: M2
+    gap: Needs a CANCEL the runner sends without a pending INVITE; sipgo only cancels its own transactions.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_029
+    ref: SIP_CC_PR_MP_RQ_V_029, SIP_CC_PR_MP_RQ_V_065, SIP_CC_PR_TR_SE_V_029
+    title: In-dialog request carrying no Route for the proxy, or naming no dialog
+    area: error-handling
+    component: proxy
+    expect: >
+      ETSI expects relaying to the Request-URI, and 481 for a BYE that names no dialog. The example config answers
+      404 to any in-dialog request without its Route, and drops such an ACK. Pin one behaviour (481 is the clearer
+      answer to a stray BYE) and check nothing is relayed to an arbitrary Request-URI.
+    status: planned
+    milestone: M2
+    gap: Needs a hand-built in-dialog BYE and ACK.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_I_001
+    ref: SIP_CC_PR_MP_RQ_I_001, SIP_CC_PR_MP_RQ_I_002, SIP_CC_PR_MP_RQ_I_003, SIP_CC_PR_MP_RQ_I_004
+    title: Parameters not allowed in a Request-URI are removed before relaying
+    area: headers
+    component: proxy
+    expect: >
+      Kamailio strips Request-URI parameters RFC 3261 doesn't allow there (such as method or embedded headers)
+      from INVITE, ACK, CANCEL and BYE before relaying.
+    status: planned
+    milestone: M2
+    gap: Needs a hand-built Request-URI and a mock that records the one it receives.
+
+  - id: etsi-SIP_CC_PR_MP_RS_V_001
+    ref: >-
+      SIP_CC_PR_MP_RS_V_001, SIP_CC_PR_MP_RS_V_002, SIP_CC_PR_MP_RS_V_004, SIP_CC_PR_MP_RS_V_006,
+      SIP_CC_PR_MP_RS_V_007, SIP_CC_PR_MP_RS_V_008, SIP_CC_PR_MP_RS_V_009, SIP_CC_PR_MP_RS_V_010,
+      SIP_CC_PR_MP_RS_V_011
+    title: Responses that match no transaction
+    area: call-setup
+    component: proxy
+    expect: >
+      A stray response whose top Via is Kamailio's loses that Via and goes to the next Via; one whose top Via isn't
+      Kamailio's, or that has no further Via, is dropped.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender to inject responses with chosen Via headers.
+
+  - id: etsi-SIP_CC_PR_MP_RS_V_005
+    ref: >-
+      SIP_CC_PR_MP_RS_V_005, SIP_CC_PR_MP_RS_V_012, SIP_CC_PR_MP_RS_V_013, SIP_CC_PR_MP_RS_V_014,
+      SIP_CC_PR_MP_RS_V_015, SIP_CC_PR_MP_RS_V_017
+    title: Responses to a relayed INVITE are passed back upstream
+    area: call-setup
+    component: proxy
+    expect: >
+      Kamailio relays the node's 180, 200, 302, 410, 500 and 603 to an INVITE back to the peer, minus its own Via.
+    status: partial
+    scenarios: [basic-two-way]
+    gap: >
+      On kind, basic-two-way shows a 200 makes it back through Kamailio. The other codes never come from the
+      fleet in the bench (fallback answers 200 instead), and the relayed Via isn't inspected.
+
+  - id: etsi-SIP_CC_PR_MP_RS_V_016
+    ref: SIP_CC_PR_MP_RS_V_016
+    title: A node's 503 to an INVITE fails over, and the last one goes upstream as 500
+    area: resilience
+    component: proxy
+    expect: >
+      On 503 (or no answer) from a FreeSWITCH node Kamailio tries the next node in the set. When none is left, the
+      peer gets 500, not 503 (Kamailio's tm remaps a relayed 503 by default). With no active node at all, the
+      example config answers 503 itself, so a peer sees 500 or 503 for the same "fleet full" state; pick one.
+    status: planned
+    milestone: M2
+    gap: >
+      On kind the runner can't make a chosen node answer 503 (no per-node event socket); needs per-node control or
+      a sipbench node in the dispatcher set.
+
+  - id: etsi-SIP_CC_PR_TR_CL_V_001
+    ref: SIP_CC_PR_TR_CL_V_001, SIP_CC_PR_TR_CL_V_002, SIP_CC_PR_TR_SE_V_018, SIP_CC_PR_TR_SE_V_019
+    title: CANCEL for an INVITE being answered is passed to the pending branch
+    area: call-release
+    component: proxy
+    expect: >
+      Kamailio answers the peer's CANCEL with 200, sends its own CANCEL to the node (same Request-URI, Call-ID,
+      From, To, CSeq number and top Via as its INVITE), and the INVITE ends in 487.
+    status: partial
+    scenarios: [cancel]
+    gap: >
+      On kind, cancel checks the INVITE ends in 487 and the backend never answers; the 200 to the CANCEL and the
+      relayed CANCEL's headers aren't checked.
+
+  - id: etsi-SIP_CC_PR_TR_CL_V_003
+    ref: SIP_CC_PR_TR_CL_V_003, SIP_CC_PR_TR_CL_V_004, SIP_CC_PR_TR_CL_V_005
+    title: CANCEL arriving before the node has sent anything provisional
+    area: call-release
+    component: proxy
+    expect: >
+      Kamailio holds the CANCEL until the branch gets a provisional response, then sends it; if a final response
+      comes first, it sends none.
+    status: planned
+    milestone: M2
+    gap: Needs a node stand-in that delays its 100 Trying, and a CANCEL timed before it.
+
+  - id: etsi-SIP_CC_PR_TR_CL_V_006
+    ref: SIP_CC_PR_TR_CL_V_006, SIP_CC_PR_TR_CL_V_007, SIP_CC_PR_TR_CL_V_008, SIP_CC_PR_TR_CL_V_009
+    title: Proxy acknowledges a node's 3xx-6xx itself
+    area: call-setup
+    component: proxy
+    expect: >
+      For a 302, 410, 503 or 603 from a node, Kamailio sends the hop-by-hop ACK (same Call-ID, From, Request-URI,
+      CSeq number and top Via as its INVITE, To from the response).
+    status: planned
+    milestone: M2
+    gap: The fleet never returns these to Kamailio in the bench; needs a node stand-in or a recording of the node side.
+
+  - id: etsi-SIP_CC_PR_TR_CL_V_010
+    ref: >-
+      SIP_CC_PR_TR_CL_V_010, SIP_CC_PR_TR_CL_V_011, SIP_CC_PR_TR_CL_TI_001, SIP_CC_PR_TR_CL_TI_002,
+      SIP_CC_PR_TR_CL_TI_003, SIP_CC_PR_TR_CL_TI_004, SIP_CC_PR_TR_CL_TI_005, SIP_CC_PR_TR_CL_TI_007,
+      SIP_CC_PR_TR_CL_TI_008, SIP_CC_PR_TR_CL_TI_009, SIP_CC_PR_TR_CL_TI_010
+    title: INVITE retransmission toward a node, and giving up on it
+    area: timers
+    component: proxy
+    expect: >
+      Over UDP Kamailio resends the INVITE at T1 then doubling, never over TCP; stops once a 100 or 183 arrives;
+      gives up on a silent node and fails over (the example config's fr_timer is 5 s, deliberately shorter than
+      64*T1); and resends its ACK for each retransmitted final response.
+    status: planned
+    milestone: M2
+    gap: Needs a node stand-in that ignores or delays requests and records retransmission times.
+
+  - id: etsi-SIP_CC_PR_TR_CL_TI_012
+    ref: >-
+      SIP_CC_PR_TR_CL_TI_012, SIP_CC_PR_TR_CL_TI_013, SIP_CC_PR_TR_CL_TI_014, SIP_CC_PR_TR_CL_TI_015,
+      SIP_CC_PR_TR_CL_TI_016, SIP_CC_PR_TR_CL_TI_017, SIP_CC_PR_TR_CL_TI_018, SIP_CC_PR_TR_CL_TI_019
+    title: Relayed BYE retransmission and timeout
+    area: timers
+    component: proxy
+    expect: >
+      Over UDP Kamailio resends a relayed BYE at T1, doubling to T2, and keeps resending at T2 after a provisional.
+      It then gives up: after 5 s with the example config's fr_timer, not the 64*T1 these purposes expect.
+    status: planned
+    milestone: M2
+    gap: Needs an endpoint stand-in that withholds its answer to BYE and records retransmission times.
+
+  - id: etsi-SIP_CC_PR_TR_SE_V_001
+    ref: >-
+      SIP_CC_PR_TR_SE_V_001, SIP_CC_PR_TR_SE_V_002, SIP_CC_PR_TR_SE_V_003, SIP_CC_PR_TR_SE_V_004,
+      SIP_CC_PR_TR_SE_V_005
+    title: Proxy answers an INVITE with 100 Trying at once
+    area: call-setup
+    component: proxy
+    expect: >
+      Kamailio sends 100 Trying for each INVITE, copying From, Call-ID, CSeq and Via, keeping To as received (no
+      tag added), and echoing any Timestamp.
+    status: planned
+    milestone: M2
+    gap: The runner doesn't record provisional responses or their headers.
+
+  - id: etsi-SIP_CC_PR_TR_SE_V_006
+    ref: >-
+      SIP_CC_PR_TR_SE_V_006, SIP_CC_PR_TR_SE_V_007, SIP_CC_PR_TR_SE_V_008, SIP_CC_PR_TR_SE_V_009,
+      SIP_CC_PR_TR_SE_V_010, SIP_CC_PR_TR_SE_V_011, SIP_CC_PR_TR_SE_V_012, SIP_CC_PR_TR_SE_V_013,
+      SIP_CC_PR_TR_SE_V_014, SIP_CC_PR_TR_SE_V_015, SIP_CC_PR_TR_SE_V_016, SIP_CC_PR_TR_SE_V_017,
+      SIP_CC_PR_TR_SE_TI_009
+    title: Retransmitted INVITE or BYE gets the last response again
+    area: timers
+    component: proxy
+    expect: >
+      A retransmitted INVITE or BYE (matched by branch, or by RFC 2543 rules when the branch is absent or lacks
+      z9hG4bK) gets Kamailio's last response repeated and is not relayed again, until Timer J for BYE.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender to retransmit byte-identical requests and requests without RFC 3261 branches.
+
+  - id: etsi-SIP_CC_PR_TR_SE_V_020
+    ref: SIP_CC_PR_TR_SE_V_020, SIP_CC_PR_TR_SE_V_021, SIP_CC_PR_TR_SE_V_022, SIP_CC_PR_TR_SE_V_023
+    title: CANCEL matched by RFC 2543 rules
+    area: call-release
+    component: proxy
+    expect: >
+      A CANCEL with no branch, or a branch without z9hG4bK, that otherwise matches a pending INVITE gets 200 and
+      the INVITE ends in 487.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (sipgo always sends RFC 3261 branches).
+
+  - id: etsi-SIP_CC_PR_TR_SE_V_024
+    ref: >-
+      SIP_CC_PR_TR_SE_V_024, SIP_CC_PR_TR_SE_V_025, SIP_CC_PR_TR_SE_V_026, SIP_CC_PR_TR_SE_V_027,
+      SIP_CC_PR_TR_SE_V_028, SIP_CC_PR_TR_SE_TI_001, SIP_CC_PR_TR_SE_TI_002, SIP_CC_PR_TR_SE_TI_003,
+      SIP_CC_PR_TR_SE_TI_004, SIP_CC_PR_TR_SE_TI_005, SIP_CC_PR_TR_SE_TI_006, SIP_CC_PR_TR_SE_TI_007,
+      SIP_CC_PR_TR_SE_TI_008
+    title: Proxy's server side of a failed INVITE
+    area: timers
+    component: proxy
+    expect: >
+      After a 3xx-6xx to the peer, Kamailio resends that response over UDP (T1 doubling to T2) until the ACK,
+      absorbs the ACK instead of relaying it, and stops after Timer H; over TCP it doesn't resend.
+    status: planned
+    milestone: M2
+    gap: Needs a far end that withholds its ACK to a failure, and records response retransmissions.
+
+  - id: etsi-SIP_QC_PR_V_001
+    ref: SIP_QC_PR_V_001, SIP_QC_PR_V_003, SIP_QC_PR_V_004, SIP_QC_PR_V_005
+    title: OPTIONS to the proxy itself is answered 200
+    area: keepalive
+    component: proxy
+    expect: >
+      An OPTIONS whose Request-URI is Kamailio's address with no user part gets 200 from Kamailio, with From,
+      Call-ID, CSeq and Via copied and a To tag added (or kept if sent).
+    status: partial
+    scenarios: [options]
+    gap: >
+      On kind the runner addresses the Service name (kamailio-sip), which the example config doesn't count as
+      itself (auto_aliases=no, no alias), so the 200 may come from a FreeSWITCH node; headers aren't checked.
+
+  - id: etsi-SIP_QC_PR_V_006
+    ref: SIP_QC_PR_V_006, SIP_QC_PR_V_007, SIP_QC_PR_V_008
+    title: Proxy's OPTIONS answer describes its capabilities
+    area: keepalive
+    component: proxy
+    expect: >
+      Recommended only: the 200 carries Allow, Accept, Accept-Encoding, Accept-Language and Supported, and a body
+      unless Accept rules it out. The example config's bare 200 has none of these; decide if peers need them.
+    status: planned
+    milestone: M2
+    gap: The runner doesn't record response headers or bodies for OPTIONS.
+
+  - id: etsi-SIP_MG_PR_V_001
+    ref: >-
+      SIP_MG_PR_V_001, SIP_MG_PR_V_002, SIP_MG_PR_V_003, SIP_MG_PR_V_004, SIP_MG_PR_V_005, SIP_MG_PR_I_002,
+      SIP_MG_PR_I_003, SIP_MG_PR_I_004
+    title: Unusual but legal URI syntax is relayed untouched
+    area: parsing
+    component: proxy
+    expect: >
+      An INVITE with escaped characters, escaped delimiters, unknown parameters, header or method parameters in its
+      Contact URI, or transport, header or method parameters in its From and To URIs, is relayed with those URIs
+      unchanged.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (or hand-set Contact, From and To) and a mock recording what reaches it.
+
+  - id: etsi-SIP_MG_PR_V_006
+    ref: SIP_MG_PR_V_006, SIP_MG_PR_I_006
+    title: Header fields the proxy doesn't use are relayed unchanged
+    area: headers
+    component: proxy
+    expect: Unknown header fields, and known ones out of place (Retry-After on an INVITE), pass through Kamailio unmodified.
+    status: partial
+    scenarios: [header-passthrough]
+    gap: >
+      On kind, X- headers reach the backend unchanged through Kamailio and FreeSWITCH. Other unknown headers
+      aren't tried, and FreeSWITCH as a B2BUA copies only X- headers, so a check at the backend can't isolate
+      Kamailio.
+
+  - id: etsi-SIP_MG_PR_V_007
+    ref: SIP_MG_PR_V_007, SIP_MG_PR_V_008, SIP_MG_PR_V_011, SIP_MG_PR_V_014, SIP_MG_PR_I_001
+    title: Lexical variants (case, folding, compact forms) are accepted and relayed
+    area: parsing
+    component: proxy
+    expect: >
+      Mixed-case header names, folded values with extra leading whitespace, a mixed-case branch parameter name,
+      compact header names and a lowercase SIP version in the request line don't stop Kamailio relaying the INVITE.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender; sipgo normalises what it sends.
+
+  - id: etsi-SIP_MG_PR_V_012
+    ref: SIP_MG_PR_V_012, SIP_MG_PR_V_013
+    title: Odd 2xx status code or reason phrase is relayed
+    area: parsing
+    component: proxy
+    expect: A 299 or a 200 with an unknown reason phrase from a node is relayed to the peer as a success.
+    status: planned
+    milestone: M2
+    gap: Needs a node stand-in behind Kamailio that sends hand-crafted responses.
+
+  - id: etsi-SIP_MG_PR_V_015
+    ref: >-
+      SIP_MG_PR_V_015, SIP_MG_PR_V_016, SIP_MG_PR_I_007, SIP_MG_PR_I_008, SIP_MG_PR_I_009, SIP_MG_PR_I_010
+    title: Message size and Content-Length framing
+    area: parsing
+    component: proxy
+    expect: >
+      Kamailio relays a 65,535-byte INVITE and one preceded by blank lines on TCP. Over UDP, a request whose body
+      is shorter than Content-Length gets 400 and a response like that is dropped; extra bytes past
+      Content-Length are cut off and the message relayed.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender over UDP and TCP.
+
+  - id: etsi-SIP_MG_PR_I_005
+    ref: SIP_MG_PR_I_005
+    title: INVITE without Call-ID is refused with 400
+    area: parsing
+    component: proxy
+    expect: Kamailio answers 400 and nothing reaches FreeSWITCH.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender.
+
+  - id: etsi-SIP_CC_PR_MP_RQ_V_067
+    ref: >-
+      5.3.3.1.1: SIP_CC_PR_MP_RQ_V_067; 5.3.3.1.2: SIP_CC_PR_MP_RS_V_018..SIP_CC_PR_MP_RS_V_053;
+      5.4.3.1: SIP_QC_PR_V_009, SIP_QC_PR_V_010
+    title: Parallel forking and response selection across forked branches
+    area: call-setup
+    component: proxy
+    expect: Not applicable; see reason.
+    status: not-applicable
+    reason: >
+      Kamailio never forks a request in parallel: the dispatcher sends each call to one node and fails over to the
+      next in series. The serial case (503 from every node) is under etsi-SIP_CC_PR_MP_RS_V_016.
+
+  - id: etsi-SIP_CC_PR_TR_CL_V_012
+    ref: SIP_CC_PR_TR_CL_V_012, SIP_CC_PR_TR_CL_V_013, SIP_CC_PR_TR_CL_V_014, SIP_QC_PR_V_011, SIP_QC_PR_V_012, SIP_QC_PR_V_013
+    title: Proxy digest challenge (407) for INVITE and OPTIONS
+    area: security
+    component: proxy
+    expect: Not applicable; see reason.
+    status: not-applicable
+    reason: >
+      The edge admits peers by source address (per-peer ACLs, M5), not by digest authentication; Kamailio never
+      sends 407.
+
+  # ---------------------------------------------------------------------------------------------------------
+  # Originating endpoint (clause 5.3.1, 5.4.1, 5.5.3): FreeSWITCH as UAC toward the backend and transfer targets
+  # ---------------------------------------------------------------------------------------------------------
+  - id: etsi-SIP_CC_OE_CE_V_001
+    ref: >-
+      SIP_CC_OE_CE_V_001, SIP_CC_OE_CE_V_002, SIP_CC_OE_CE_V_003, SIP_CC_OE_CE_V_004, SIP_CC_OE_CE_V_005,
+      SIP_CC_OE_CE_V_006, SIP_CC_OE_CE_V_007, SIP_CC_OE_CE_V_008
+    title: The INVITE FreeSWITCH sends to the backend is well formed
+    area: headers
+    component: freeswitch
+    expect: >
+      The backend leg's INVITE carries To (no tag), From (with tag), CSeq method INVITE, Call-ID, Max-Forwards
+      (70 recommended), Contact and a SIP/2.0 Via with a z9hG4bK branch, Allow and Supported, and a Request-URI
+      matching To.
+    status: planned
+    milestone: M2
+    gap: The mock records only chosen headers; it needs to record the whole INVITE.
+
+  - id: etsi-SIP_CC_OE_CE_V_009
+    ref: >-
+      SIP_CC_OE_CE_V_009, SIP_CC_OE_CE_V_010, SIP_CC_OE_CE_V_011, SIP_CC_OE_CE_V_012, SIP_CC_OE_CE_V_013,
+      SIP_CC_OE_CE_V_014, SIP_CC_OE_CE_V_015, SIP_CC_OE_CE_V_016, SIP_CC_OE_CE_V_017, SIP_CC_OE_CE_V_018,
+      SIP_CC_OE_CE_V_019, SIP_CC_OE_CE_V_020, SIP_CC_OE_CE_V_021, SIP_CC_OE_CE_V_022, SIP_CC_OE_CE_V_023,
+      SIP_CC_OE_CE_V_041, SIP_CC_OE_CE_TI_011, SIP_CC_OE_CE_TI_012
+    title: Provisional responses and the ACK to the backend's 2xx
+    area: call-setup
+    component: freeswitch
+    expect: >
+      FreeSWITCH treats 100, 183 and an unknown 1xx as provisional; ACKs every 2xx (each fork's too) with the
+      INVITE's CSeq number, Call-ID and From, To from the response, Request-URI and Route from the 2xx's Contact
+      and Record-Route (strict or loose); ACKs retransmitted 2xx for 64*T1 and no longer; discards a 2xx carrying
+      more than one Via.
+    status: planned
+    milestone: M2
+    gap: >
+      basic-two-way exercises the ACK but asserts nothing about it; the mock needs to record ACKs, and to send
+      183, odd 1xx, forked and retransmitted 2xx, and Record-Route.
+
+  - id: etsi-SIP_CC_OE_CE_V_024
+    ref: >-
+      SIP_CC_OE_CE_V_024, SIP_CC_OE_CE_V_025, SIP_CC_OE_CE_V_026, SIP_CC_OE_CE_V_027, SIP_CC_OE_CE_V_028,
+      SIP_CC_OE_CE_V_032, SIP_CC_OE_CE_V_033, SIP_CC_OE_CE_V_034, SIP_CC_OE_CE_V_035, SIP_CC_OE_CE_V_036,
+      SIP_CC_OE_CE_V_037, SIP_CC_OE_CE_V_038, SIP_CC_OE_CE_V_039, SIP_CC_OE_CE_V_040, SIP_CC_OE_CE_V_042
+    title: ACK to the backend's 3xx-6xx
+    area: error-handling
+    component: freeswitch
+    expect: >
+      For each failure final (300, 301, 302, 404, 410, 480, 486, 500, 600, 603, an unknown 699) FreeSWITCH sends
+      one ACK with the INVITE's Call-ID, From, Request-URI, CSeq number and a single top Via, and To from the
+      response; it ACKs retransmissions and only one of two finals on different branches.
+    status: planned
+    milestone: M2
+    gap: >
+      busy-fallback and decline-fallback exercise 486 and 603 but don't check the ACK; the mock needs to record
+      ACKs and to answer with the other codes.
+
+  - id: etsi-SIP_CC_OE_CE_V_029
+    ref: SIP_CC_OE_CE_V_029, SIP_CC_OE_CE_V_030, SIP_CC_OE_CE_V_031, SIP_CC_OE_CE_V_043
+    title: Following redirects (301, 305) from the far side
+    area: call-setup
+    component: freeswitch
+    expect: >
+      Where a peer or backend is configured to allow it, FreeSWITCH follows a 301 to a Contact with a new INVITE
+      (new branch) and completes that call; where it isn't, it treats 3xx as a failure. A 305 is never followed.
+    status: planned
+    milestone: M5
+    gap: Per-peer redirect policy is M5 config; the mock needs to send 3xx with Contact.
+
+  - id: etsi-SIP_CC_OE_CE_V_044
+    ref: >-
+      SIP_CC_OE_CE_V_044, SIP_CC_OE_CE_V_045, SIP_CC_OE_CE_V_046, SIP_CC_OE_CE_V_047, SIP_CC_OE_CE_V_048,
+      SIP_CC_OE_CE_V_049
+    title: Offer/answer and body headers on the backend leg
+    area: call-setup
+    component: freeswitch
+    expect: >
+      FreeSWITCH offers SDP once (in the INVITE, or in the ACK when the backend makes the offer), sets
+      Content-Length and Content-Type on that body (Content-Encoding only with it), and answers an unacceptable
+      SDP in a 2xx with ACK and then BYE.
+    status: planned
+    milestone: M2
+    gap: The mock needs to answer a no-SDP INVITE with an offer, send unacceptable SDP, and record bodies.
+
+  - id: etsi-SIP_CC_OE_CE_V_050
+    ref: >-
+      SIP_CC_OE_CE_V_050, SIP_CC_OE_CE_V_051, SIP_CC_OE_CE_V_052, SIP_CC_OE_CE_V_053, SIP_QC_OE_V_012,
+      SIP_QC_OE_V_013, SIP_QC_OE_V_014, SIP_QC_OE_V_015
+    title: FreeSWITCH answers a peer's digest challenge
+    area: security
+    component: freeswitch
+    expect: >
+      On 401 or 407 to an INVITE or OPTIONS toward a peer that has credentials configured, FreeSWITCH resends with
+      Authorization or Proxy-Authorization (username, realm, nonce, digest URI, response) and CSeq one higher.
+    status: planned
+    milestone: M5
+    gap: Per-peer credentials are M5; needs a peer mock that challenges.
+
+  - id: etsi-SIP_CC_OE_CE_TI_001
+    ref: >-
+      SIP_CC_OE_CE_TI_001, SIP_CC_OE_CE_TI_002, SIP_CC_OE_CE_TI_003, SIP_CC_OE_CE_TI_004, SIP_CC_OE_CE_TI_005,
+      SIP_CC_OE_CE_TI_006, SIP_CC_OE_CE_TI_007, SIP_CC_OE_CE_TI_008, SIP_CC_OE_CE_TI_009, SIP_CC_OE_CE_TI_010
+    title: INVITE retransmission toward the backend, and Timer B
+    area: timers
+    component: freeswitch
+    expect: >
+      Over UDP FreeSWITCH resends the INVITE at T1 then doubling (never over TCP), stops once a provisional
+      arrives, gives up after 64*T1 without an ACK, and ACKs retransmitted failure responses until Timer D.
+    status: planned
+    milestone: M2
+    gap: >
+      unreachable-fallback exercises the silent backend but ends on the ring timeout first; the mock needs to drop
+      or delay requests and record retransmission times.
+
+  - id: etsi-SIP_CC_OE_CR_V_001
+    ref: >-
+      SIP_CC_OE_CR_V_001, SIP_CC_OE_CR_V_002, SIP_CC_OE_CR_V_003, SIP_CC_OE_CR_V_004, SIP_CC_OE_CR_V_005,
+      SIP_CC_OE_CR_V_006, SIP_CC_OE_CR_V_007, SIP_CC_OE_CR_V_008, SIP_CC_OE_CR_V_009
+    title: FreeSWITCH releases the backend leg with BYE
+    area: call-release
+    component: freeswitch
+    expect: >
+      When the caller hangs up, FreeSWITCH sends the backend a BYE in the dialog (To, From, Call-ID as
+      established, CSeq one higher, Request-URI and Route from the backend's Contact and Record-Route), and treats
+      200 or 481 as the end.
+    status: partial
+    scenarios: [basic-two-way]
+    gap: >
+      basic-two-way checks the backend's call ends with a BYE from the edge; the BYE's headers aren't recorded,
+      the mock doesn't record-route, and a 481 answer isn't tried.
+
+  - id: etsi-SIP_CC_OE_CR_V_010
+    ref: >-
+      SIP_CC_OE_CR_V_010, SIP_CC_OE_CR_V_011, SIP_CC_OE_CR_V_012, SIP_CC_OE_CR_V_013, SIP_CC_OE_CR_V_014,
+      SIP_CC_OE_CR_V_015
+    title: FreeSWITCH cancels the ringing backend leg
+    area: call-release
+    component: freeswitch
+    expect: >
+      When the caller cancels, or the ring timeout passes, FreeSWITCH sends the backend a CANCEL matching its INVITE
+      (Request-URI, Call-ID, From, To, CSeq number, single top Via; no Require or Proxy-Require), and if a 2xx
+      crosses it, ACKs that 2xx (then ends the call).
+    status: planned
+    milestone: M2
+    gap: >
+      cancel and no-answer-fallback exercise it but only check the backend never answered; the mock needs to record
+      the CANCEL and to answer 200 just after it.
+
+  - id: etsi-SIP_CC_OE_CR_TI_001
+    ref: >-
+      SIP_CC_OE_CR_TI_001, SIP_CC_OE_CR_TI_002, SIP_CC_OE_CR_TI_003, SIP_CC_OE_CR_TI_004, SIP_CC_OE_CR_TI_005,
+      SIP_CC_OE_CR_TI_006, SIP_CC_OE_CR_TI_007, SIP_CC_OE_CR_TI_008
+    title: BYE retransmission toward the backend and Timer F
+    area: timers
+    component: freeswitch
+    expect: >
+      Over UDP FreeSWITCH resends an unanswered BYE at T1, doubling to T2 (T2 after a provisional), and gives up
+      after 64*T1.
+    status: planned
+    milestone: M2
+    gap: The mock needs to withhold its answer to BYE and record retransmission times.
+
+  - id: etsi-SIP_QC_OE_V_001
+    ref: >-
+      SIP_QC_OE_V_001, SIP_QC_OE_V_002, SIP_QC_OE_V_003, SIP_QC_OE_V_004, SIP_QC_OE_V_005, SIP_QC_OE_V_007,
+      SIP_QC_OE_V_008, SIP_QC_OE_V_009, SIP_QC_OE_V_010, SIP_QC_OE_V_011, SIP_QC_OE_TI_001, SIP_QC_OE_TI_002,
+      SIP_QC_OE_TI_003, SIP_QC_OE_TI_004, SIP_QC_OE_TI_005, SIP_QC_OE_TI_006, SIP_QC_OE_TI_007
+    title: FreeSWITCH's OPTIONS pings to peers
+    area: keepalive
+    component: freeswitch
+    expect: >
+      Where a peer has pinging configured, FreeSWITCH's OPTIONS is well formed (To, From with tag, CSeq method
+      OPTIONS, Call-ID, Max-Forwards, z9hG4bK Via, Accept), is retransmitted over UDP per Timers E and F, and any
+      final response (200, 486, with capability headers) counts as an answer.
+    status: planned
+    milestone: M5
+    gap: Per-peer pinging is M5 config; needs a peer mock that records OPTIONS and their timing.
+
+  - id: etsi-SIP_MG_OE_V_001
+    ref: >-
+      SIP_MG_OE_V_001, SIP_MG_OE_V_002, SIP_MG_OE_V_003, SIP_MG_OE_V_004, SIP_MG_OE_V_005, SIP_MG_OE_V_006,
+      SIP_MG_OE_V_007, SIP_MG_OE_V_008, SIP_MG_OE_V_009, SIP_MG_OE_V_010, SIP_MG_OE_V_011, SIP_MG_OE_V_012,
+      SIP_MG_OE_V_013, SIP_MG_OE_V_014, SIP_MG_OE_I_001, SIP_MG_OE_I_002, SIP_MG_OE_I_003, SIP_MG_OE_I_004,
+      SIP_MG_OE_I_005, SIP_MG_OE_I_006, SIP_MG_OE_I_007, SIP_MG_OE_I_008
+    title: FreeSWITCH tolerates unusual syntax from the backend
+    area: parsing
+    component: freeswitch
+    expect: >
+      A 2xx from the backend with a 299 code, odd reason phrase, mixed-case, folded or compact headers, or stray
+      URI parameters in From, To or Contact, still gets an ACK; an in-dialog BYE with escaped or odd From/To URIs,
+      unknown or misplaced headers, or lexical variants still gets 200.
+    status: planned
+    milestone: M2
+    gap: The mock needs to send hand-crafted responses and requests (raw-message sender).
+
+  - id: etsi-SIP_MG_OE_V_015
+    ref: SIP_MG_OE_V_015, SIP_MG_OE_I_009, SIP_MG_OE_I_010
+    title: Size and Content-Length framing of the backend's 2xx
+    area: parsing
+    component: freeswitch
+    expect: >
+      Over UDP, FreeSWITCH accepts and ACKs a 65,535-byte 2xx, discards one whose body is shorter than its
+      Content-Length, and ignores bytes past Content-Length.
+    status: planned
+    milestone: M2
+    gap: The mock needs a raw-message sender over UDP.
+
+  # ---------------------------------------------------------------------------------------------------------
+  # Terminating endpoint (clause 5.3.2, 5.4.2, 5.5.4): FreeSWITCH as UAS toward carriers
+  # ---------------------------------------------------------------------------------------------------------
+  - id: etsi-SIP_CC_TE_CE_V_001
+    ref: SIP_CC_TE_CE_V_001, SIP_CC_TE_CE_V_007
+    title: FreeSWITCH answers an INVITE with an SDP offer, answer in the 2xx
+    area: call-setup
+    component: freeswitch
+    expect: An INVITE from the far end with an SDP offer gets a 2xx (after any 1xx) carrying the SDP answer.
+    status: covered
+    scenarios: [basic-two-way, codec-pcmu, codec-pcma]
+
+  - id: etsi-SIP_CC_TE_CE_V_002
+    ref: >-
+      SIP_CC_TE_CE_V_002, SIP_CC_TE_CE_V_003, SIP_CC_TE_CE_V_005, SIP_CC_TE_CE_V_010, SIP_CC_TE_CE_V_011,
+      SIP_CC_TE_CE_V_012, SIP_CC_TE_CE_V_013, SIP_CC_TE_CE_V_031
+    title: INVITEs FreeSWITCH refuses, with the right code
+    area: error-handling
+    component: freeswitch
+    expect: >
+      Unsupported Request-URI scheme gets 416; an address it doesn't serve, 404; Expires 0, 487; a required body
+      it can't handle (language, encoding, disposition), 415 with Accept-Encoding where encoding is the cause;
+      acceptable syntax but unacceptable session, 488; an unknown Require, 420 with Unsupported.
+    status: planned
+    milestone: M2
+    gap: The runner needs hand-set Require, Expires, body headers and Request-URI; some need a raw-message sender.
+
+  - id: etsi-SIP_CC_TE_CE_V_004
+    ref: >-
+      SIP_CC_TE_CE_V_004, SIP_CC_TE_CE_V_014, SIP_CC_TE_CE_V_015, SIP_CC_TE_CE_V_016, SIP_CC_TE_CE_V_017,
+      SIP_CC_TE_CE_V_018, SIP_CC_TE_CE_V_019, SIP_CC_TE_CE_V_020, SIP_CC_TE_CE_V_021
+    title: FreeSWITCH's responses to an INVITE are well formed
+    area: headers
+    component: freeswitch
+    expect: >
+      Responses copy From, Call-ID, CSeq and Via; add a To tag (or keep the one sent); carry one Contact; echo the
+      Record-Route set in order, unknown parameters included; keep a tagless From tagless; echo Timestamp in 100;
+      and the 2xx lists Allow and Supported.
+    status: planned
+    milestone: M2
+    gap: The runner doesn't record response headers beyond chosen ones; record-route needs a hand-set header.
+
+  - id: etsi-SIP_CC_TE_CE_V_006
+    ref: SIP_CC_TE_CE_V_006, SIP_CC_TE_CE_V_008, SIP_CC_TE_CE_V_009
+    title: Late offer, an INVITE without SDP, gets the offer in the 2xx
+    area: call-setup
+    component: freeswitch
+    expect: >
+      An INVITE with no session body (or only a non-session or optional body) gets a 2xx with FreeSWITCH's offer;
+      the far end's ACK carries the answer and the call has two-way audio.
+    status: planned
+    milestone: M2
+    gap: The runner can't send an INVITE without SDP and answer in the ACK.
+
+  - id: etsi-SIP_CC_TE_CE_V_022
+    ref: >-
+      SIP_CC_TE_CE_V_022, SIP_CC_TE_CE_V_023, SIP_CC_TE_CE_V_024, SIP_CC_TE_CE_V_025, SIP_CC_TE_CE_V_026,
+      SIP_CC_TE_CE_V_027, SIP_CC_TE_CE_V_028, SIP_CC_TE_CE_V_029, SIP_CC_TE_CE_V_030
+    title: Retransmitted and merged INVITEs
+    area: timers
+    component: freeswitch
+    expect: >
+      A retransmitted INVITE (same branch, or RFC 2543 matching) gets the last response again and starts no second
+      call; the same request arriving by another path (new branch or sent-by) is answered 482.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender to retransmit byte-identical and re-branched INVITEs.
+
+  - id: etsi-SIP_CC_TE_CE_V_032
+    ref: >-
+      SIP_CC_TE_CE_V_032, SIP_CC_TE_CE_V_033, SIP_CC_TE_CE_I_001, SIP_CC_TE_CE_I_002, SIP_CC_TE_CE_TI_001,
+      SIP_CC_TE_CE_TI_002, SIP_CC_TE_CE_TI_003, SIP_CC_TE_CE_TI_004, SIP_CC_TE_CE_TI_005, SIP_CC_TE_CE_TI_006,
+      SIP_CC_TE_CE_TI_007, SIP_CC_TE_CE_TI_008
+    title: FreeSWITCH's server side of a refused INVITE
+    area: timers
+    component: freeswitch
+    expect: >
+      After a 4xx-6xx (the 503 over the session limit included), FreeSWITCH resends it over UDP at T1 doubling to
+      T2 until the ACK (not over TCP), accepts that ACK even with an unknown Require or Proxy-Require, and stops at
+      Timer H.
+    status: planned
+    milestone: M2
+    gap: The runner needs to withhold or delay its ACK to a failure and record response retransmissions.
+
+  - id: etsi-SIP_CC_TE_CE_TI_009
+    ref: SIP_CC_TE_CE_TI_009, SIP_CC_TE_CE_TI_010, SIP_CC_TE_CE_TI_011, SIP_CC_TE_CE_TI_012
+    title: Lost ACK to the 2xx
+    area: timers
+    component: freeswitch
+    expect: >
+      With no ACK, FreeSWITCH resends its 2xx at T1 then 2*T1 and so on, stops after 64*T1, and then ends the call
+      with BYE (and the backend leg with it).
+    status: planned
+    milestone: M2
+    gap: The runner can't withhold the ACK; sipgo's dialog client sends it automatically.
+
+  - id: etsi-SIP_CC_TE_CR_V_001
+    ref: SIP_CC_TE_CR_V_001, SIP_CC_TE_CR_V_003
+    title: BYE from the far end in a confirmed call is answered 200
+    area: call-release
+    component: freeswitch
+    expect: FreeSWITCH answers the far end's BYE with 200 and releases the backend leg.
+    status: partial
+    scenarios: [basic-two-way]
+    gap: basic-two-way checks the backend leg ends after the caller's BYE, not the 200 to that BYE.
+
+  - id: etsi-SIP_CC_TE_CR_V_002
+    ref: >-
+      SIP_CC_TE_CR_V_002, SIP_CC_TE_CR_V_004, SIP_CC_TE_CR_V_005, SIP_CC_TE_CR_V_006, SIP_CC_TE_CR_V_007,
+      SIP_CC_TE_CR_V_008, SIP_CC_TE_CR_V_009, SIP_CC_TE_CR_V_020, SIP_CC_TE_CR_V_021, SIP_CC_TE_CR_I_001,
+      SIP_CC_TE_CR_I_005, SIP_CC_TE_CR_TI_001, SIP_CC_OE_CR_I_001
+    title: BYE edge cases at FreeSWITCH
+    area: call-release
+    component: freeswitch
+    expect: >
+      A BYE in an early dialog gets an answer; with an unknown header, 200; with an unknown Require, 420; for no
+      dialog, without a To tag, or after release, 481; a CSeq gap is fine, a CSeq below the INVITE's gets 500;
+      retransmitted BYEs get the same response until Timer J; a BYE after a CANCEL in an established call gets 200.
+      Responses copy From, Call-ID, CSeq and Via.
+    status: planned
+    milestone: M2
+    gap: Needs hand-built in-dialog BYEs (raw-message sender or sipgo request crafting).
+
+  - id: etsi-SIP_CC_TE_CR_V_010
+    ref: >-
+      SIP_CC_TE_CR_V_010, SIP_CC_TE_CR_V_011, SIP_CC_TE_CR_V_012, SIP_CC_TE_CR_V_013, SIP_CC_TE_CR_V_014
+    title: FreeSWITCH releases the far end with BYE
+    area: call-release
+    component: freeswitch
+    expect: >
+      When the backend hangs up, FreeSWITCH sends the far end a BYE in the dialog: To and From swapped from the
+      INVITE with tags, Request-URI and Route built from the far end's Contact and the Record-Route set (strict or
+      loose).
+    status: partial
+    scenarios: [backend-hangup]
+    gap: >
+      backend-hangup checks the far end receives the BYE (through Kamailio on kind); headers and route-set variants
+      aren't checked.
+
+  - id: etsi-SIP_CC_TE_CR_V_015
+    ref: SIP_CC_TE_CR_V_015, SIP_CC_TE_CR_V_016
+    title: CANCEL while ringing gets 200, and the INVITE 487
+    area: call-release
+    component: freeswitch
+    expect: FreeSWITCH answers the far end's CANCEL with 200 and ends the INVITE with 487.
+    status: partial
+    scenarios: [cancel]
+    gap: cancel checks the 487; the 200 to the CANCEL isn't asserted.
+
+  - id: etsi-SIP_CC_TE_CR_V_017
+    ref: >-
+      SIP_CC_TE_CR_V_017, SIP_CC_TE_CR_V_018, SIP_CC_TE_CR_V_019, SIP_CC_TE_CR_I_002, SIP_CC_TE_CR_I_003,
+      SIP_CC_TE_CR_I_004
+    title: CANCEL matching at FreeSWITCH
+    area: call-release
+    component: freeswitch
+    expect: >
+      A CANCEL whose branch or sent-by differs from the INVITE's matches nothing and gets 481, as does one for no
+      call; a matching CANCEL with an unknown Require or Proxy-Require still gets 200.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender for re-branched and stray CANCELs.
+
+  - id: etsi-SIP_CC_TE_SM_V_001
+    ref: >-
+      SIP_CC_TE_SM_V_001, SIP_CC_TE_SM_V_002, SIP_CC_TE_SM_V_003, SIP_CC_TE_SM_I_001, SIP_CC_OE_SM_V_001,
+      SIP_CC_OE_SM_V_002
+    title: Re-INVITE in an established call
+    area: call-setup
+    component: freeswitch
+    expect: >
+      A re-INVITE with a new offer gets 200 with an answer, one without SDP gets 200 with an offer, and the call
+      keeps its audio; if the re-INVITE's 200 is never ACKed FreeSWITCH ends the call with BYE; a re-INVITE while
+      its own INVITE is pending gets 491, and one while an earlier re-INVITE is unanswered gets 500 with
+      Retry-After.
+    status: planned
+    milestone: M2
+    gap: The runner and the mock can't send re-INVITEs yet.
+
+  - id: etsi-SIP_QC_TE_V_001
+    ref: SIP_QC_TE_V_001
+    title: FreeSWITCH answers OPTIONS with 200
+    area: keepalive
+    component: freeswitch
+    expect: An OPTIONS to a FreeSWITCH node gets 200.
+    status: covered
+    scenarios: [options]
+
+  - id: etsi-SIP_QC_TE_V_002
+    ref: SIP_QC_TE_V_002, SIP_QC_TE_V_003, SIP_QC_TE_V_004, SIP_QC_TE_V_005, SIP_QC_TE_V_006, SIP_QC_TE_V_007
+    title: FreeSWITCH's OPTIONS answer is well formed and describes its capabilities
+    area: keepalive
+    component: freeswitch
+    expect: >
+      The 200 copies From, Call-ID, CSeq and Via, adds or keeps the To tag, lists Allow, Accept, Accept-Encoding,
+      Accept-Language and Supported, and carries an SDP body unless Accept excludes it.
+    status: planned
+    milestone: M2
+    gap: The runner doesn't record OPTIONS response headers or bodies.
+
+  - id: etsi-SIP_MG_TE_V_001
+    ref: >-
+      SIP_MG_TE_V_001, SIP_MG_TE_V_002, SIP_MG_TE_V_003, SIP_MG_TE_V_004, SIP_MG_TE_V_005, SIP_MG_TE_V_007,
+      SIP_MG_TE_V_008, SIP_MG_TE_V_009, SIP_MG_TE_V_010, SIP_MG_TE_V_011, SIP_MG_TE_V_012, SIP_MG_TE_V_013,
+      SIP_MG_TE_I_001, SIP_MG_TE_I_002, SIP_MG_TE_I_003, SIP_MG_TE_I_004, SIP_MG_TE_I_006
+    title: FreeSWITCH answers INVITEs with unusual but acceptable syntax
+    area: parsing
+    component: edge
+    expect: >
+      An INVITE from a carrier with escaped or odd Contact URIs, unknown or misplaced headers, mixed case, folding,
+      compact forms, multi-value or several Via headers, a lowercase SIP version, or stray parameters in From and
+      To, passes Kamailio and is answered 2xx by FreeSWITCH, call bridged.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender for the INVITE (sipgo normalises what it sends).
+
+  - id: etsi-SIP_MG_TE_V_006
+    ref: SIP_MG_TE_V_006
+    title: Unsupported method gets 405 with Allow
+    area: error-handling
+    component: freeswitch
+    expect: A request with a method FreeSWITCH doesn't support gets 405 listing the methods it does in Allow.
+    status: planned
+    milestone: M2
+    gap: The runner can't send arbitrary methods yet.
+
+  - id: etsi-SIP_MG_TE_V_014
+    ref: SIP_MG_TE_V_014, SIP_MG_TE_V_015, SIP_MG_TE_I_005, SIP_MG_TE_I_007, SIP_MG_TE_I_008
+    title: INVITE size, framing and missing Call-ID at the edge
+    area: parsing
+    component: edge
+    expect: >
+      A 65,535-byte INVITE over UDP and one led by blank lines over TCP get answered 2xx; missing Call-ID, or a
+      body shorter than Content-Length over UDP, gets 400 (from Kamailio, before FreeSWITCH); bytes past
+      Content-Length are ignored.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender over UDP and TCP.
+
+  - id: etsi-SIP_CC_TE_CE_V_034
+    ref: >-
+      SIP_CC_TE_CE_V_034, SIP_CC_TE_CE_V_035, SIP_CC_TE_CE_V_036, SIP_QC_TE_V_008, SIP_QC_TE_V_009,
+      SIP_QC_TE_V_010
+    title: UAS digest challenge (401) for INVITE and OPTIONS
+    area: security
+    component: freeswitch
+    expect: Not applicable; see reason.
+    status: not-applicable
+    reason: >
+      Carriers are admitted by source address (per-peer ACLs, M5), not challenged; FreeSWITCH never sends 401
+      toward them.
+
+  # ---------------------------------------------------------------------------------------------------------
+  # Registrant (clause 5.2.1, 5.5.1): FreeSWITCH registering to carriers (M5 outbound registrations)
+  # ---------------------------------------------------------------------------------------------------------
+  - id: etsi-SIP_RG_RT_V_001
+    ref: >-
+      SIP_RG_RT_V_001, SIP_RG_RT_V_002, SIP_RG_RT_V_003, SIP_RG_RT_V_004, SIP_RG_RT_V_008, SIP_RG_RT_V_009,
+      SIP_RG_RT_V_010, SIP_RG_RT_V_011, SIP_RG_RT_V_012, SIP_RG_RT_V_013, SIP_RG_RT_V_015, SIP_RG_RT_V_017
+    title: FreeSWITCH registers to a carrier, refreshes and unregisters
+    area: registration
+    component: freeswitch
+    expect: >
+      For a peer with registration configured, FreeSWITCH sends REGISTER to the configured registrar (Request-URI
+      without user, AOR as SIP URI in both To and From), proposes an expiry, keeps Call-ID and raises CSeq by one
+      per refresh, refreshes within the shortest granted expiry, doesn't start another before the pending one
+      ends, accepts 200 with the binding list (and a Date), and unregisters with expiry 0.
+    status: planned
+    milestone: M5
+    gap: Needs a registrar mock (peer mock) that records REGISTERs and grants chosen expiries.
+
+  - id: etsi-SIP_RG_RT_V_007
+    ref: SIP_RG_RT_V_007, SIP_RG_RT_V_018, SIP_RG_RT_V_019, SIP_RG_RT_V_020
+    title: FreeSWITCH answers a registrar's digest challenge
+    area: registration
+    component: freeswitch
+    expect: >
+      On 401 or 407 FreeSWITCH resends the REGISTER with Authorization or Proxy-Authorization (username, realm,
+      nonce, digest URI, response) and CSeq one higher.
+    status: planned
+    milestone: M5
+    gap: Needs a registrar mock that challenges.
+
+  - id: etsi-SIP_RG_RT_TI_001
+    ref: >-
+      SIP_RG_RT_TI_001, SIP_RG_RT_TI_002, SIP_RG_RT_TI_003, SIP_RG_RT_TI_004, SIP_RG_RT_TI_005, SIP_RG_RT_TI_006,
+      SIP_RG_RT_TI_007
+    title: REGISTER retransmission and timeout
+    area: timers
+    component: freeswitch
+    expect: >
+      Over UDP FreeSWITCH resends an unanswered REGISTER at T1, doubling to T2 (T2 after a provisional), and gives
+      up after 64*T1.
+    status: planned
+    milestone: M5
+    gap: Needs a registrar mock that withholds answers and records timing.
+
+  - id: etsi-SIP_MG_RT_V_001
+    ref: >-
+      SIP_MG_RT_V_001, SIP_MG_RT_V_002, SIP_MG_RT_V_003, SIP_MG_RT_V_004, SIP_MG_RT_V_005, SIP_MG_RT_V_006,
+      SIP_MG_RT_V_007, SIP_MG_RT_V_008, SIP_MG_RT_I_001, SIP_MG_RT_I_002, SIP_MG_RT_I_003, SIP_MG_RT_I_004,
+      SIP_MG_RT_I_005
+    title: FreeSWITCH accepts a registrar's unusual 2xx
+    area: registration
+    component: freeswitch
+    expect: >
+      A 200 or 299 to REGISTER with an odd reason phrase, mixed-case, folded or compact headers, leading blank
+      lines on TCP, or stray parameters in From, To or Contact, still counts as registered; a 183 before it is
+      ignored.
+    status: planned
+    milestone: M5
+    gap: Needs a registrar mock with a raw-message sender.
+
+  - id: etsi-SIP_RG_RT_V_005
+    ref: SIP_RG_RT_V_005, SIP_RG_RT_V_014, SIP_RG_RT_V_016
+    title: Multicast registration, binding queries and contact preferences
+    area: registration
+    component: freeswitch
+    expect: Not applicable; see reason.
+    status: not-applicable
+    reason: >
+      Optional registrant features FreeSWITCH gateways don't use toward carriers: it registers to a configured
+      registrar (never multicast), never queries bindings, and sends one contact without q-values.
+
+  # ---------------------------------------------------------------------------------------------------------
+  # Registrar and redirect server (clauses 5.2.2, 5.3.4, 5.5.2, 5.5.6)
+  # ---------------------------------------------------------------------------------------------------------
+  - id: etsi-SIP_RG_RR_V_001
+    ref: "5.2.2: SIP_RG_RR_V_001..SIP_RG_RR_O_003"
+    title: Registrar behaviour
+    area: registration
+    component: proxy
+    expect: Not applicable; see reason.
+    status: not-applicable
+    reason: The edge has no registrar; Kamailio keeps no location service and FreeSWITCH accepts no registrations.
+
+  - id: etsi-SIP_MG_RR_V_001
+    ref: "5.5.2: SIP_MG_RR_V_001..SIP_MG_RR_I_006"
+    title: Registrar message handling
+    area: parsing
+    component: proxy
+    expect: Not applicable; see reason.
+    status: not-applicable
+    reason: The edge has no registrar.
+
+  - id: etsi-SIP_CC_RD_CE_V_001
+    ref: "5.3.4: SIP_CC_RD_CE_V_001..SIP_CC_RD_CR_V_003"
+    title: Redirect server call handling
+    area: call-setup
+    component: proxy
+    expect: Not applicable; see reason.
+    status: not-applicable
+    reason: Kamailio proxies; the edge never answers with 3xx as a redirect server.
+
+  - id: etsi-SIP_MG_RD_V_001
+    ref: "5.5.6: SIP_MG_RD_V_001..SIP_MG_RD_I_008"
+    title: Redirect server message handling
+    area: parsing
+    component: proxy
+    expect: Not applicable; see reason.
+    status: not-applicable
+    reason: The edge has no redirect server.
+
+  - id: etsi-SIP_RG_RT_V_006
+    ref: >-
+      SIP_RG_RT_V_006, SIP_CC_TE_CR_V_022, SIP_CC_PR_MP_RQ_V_010, SIP_CC_PR_MP_RQ_V_028, SIP_CC_PR_MP_RS_V_003,
+      SIP_CC_PR_TR_CL_TI_006, SIP_CC_PR_TR_CL_TI_011
+    title: Purposes marked void
+    area: call-setup
+    component: edge
+    expect: Not applicable; see reason.
+    status: not-applicable
+    reason: Void in V4.1.1; the document keeps the identifiers but no purpose.
