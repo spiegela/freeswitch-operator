@@ -117,8 +117,11 @@ spec:
                     type: integer
                   setID:
                     default: 1
-                    description: setID is the dispatcher set for this fleet.
+                    description: |-
+                      setID is the dispatcher set for this fleet. Sets 1-99 are for fleets; the operator assigns sets it creates
+                      (peers, inside profiles) from 100 up, so the two never collide.
                     format: int32
+                    maximum: 99
                     minimum: 0
                     type: integer
                   transport:
