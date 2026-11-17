@@ -6,12 +6,17 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  operator:
     permissions:
       contents: read
-    name: Run on Ubuntu
+    name: Operator
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -23,7 +28,37 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Running Tests
+      # Fails rather than fixing it here, so an untidy go.mod can't pass CI and still be wrong in the repo.
+      - name: Check go.mod and go.sum are tidy (both modules)
+        run: make check-tidy
+
+      - name: Run tests
+        run: make test
+
+      # make test regenerates the CRDs, RBAC and deepcopy code and runs go fmt; any change means it wasn't committed.
+      - name: Check generated files are committed
         run: |
-          go mod tidy
-          make test
+          git status --porcelain
+          test -z "$(git status --porcelain)"
+
+  sipbench:
+    permissions:
+      contents: read
+    name: sipbench
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: sipbench/go.mod
+          cache-dependency-path: sipbench/go.sum
+
+      # Includes the conformance record's checks (sipbench/conformance).
+      - name: Vet and test sipbench
+        run: make test-sipbench
