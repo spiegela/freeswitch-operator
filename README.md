@@ -91,14 +91,16 @@ spec:
     source: NodeExternalIP          # v0: NodeExternalIP | None. Planned: AddressPool
     # addressPoolRef: {name: edge-addresses}   # planned (M3)
   config:
-    configMapRefs:                  # v0. Mounted read-only under /etc/freeswitch-operator/config/<name>
-      - name: edge-freeswitch-config
+    mountPath: /usr/local/freeswitch/conf   # v0. Point FreeSWITCH here with -conf
+    configMapRefs:                  # v0. Each ConfigMap's keys become files in its directory; a change rolls the fleet
+      - {name: edge-freeswitch-conf, path: "."}
+      - {name: edge-freeswitch-profiles, path: sip_profiles}
   drain:
     maxDrainSeconds: 7200           # v0. Upper bound on waiting for live calls to finish
   dispatcher:
     setID: 1                        # v0. Kamailio dispatcher set for this fleet
     configMapName: edge-dispatcher  # v0. The operator writes dispatcher.list here
-    jsonrpcURL: ""                  # v0, optional. Kamailio JSON-RPC endpoint for immediate state changes
+    jsonrpcURL: ""                  # v0, optional. Kamailio JSON-RPC endpoint (port 5070 in the example)
 status:
   readyReplicas: 2
   members:                          # v0. One entry per pod
@@ -177,10 +179,14 @@ kill a node mid-call and check the outcome. Until then a node's calls drop when 
 
 ### 6. Configuration from git (v0 mounting; M5 typed)
 
-v0 mounts ConfigMaps (dial plan, ACLs, profiles) that Flux applies from git, and a change rolls the fleet through
-loop 3. In M5, typed resources take over, each reloaded where it lives. Peer resources (loop 9) render into the
-Kamailio fleet and reload over its JSON-RPC. FreeSWITCH keeps only its own config (profiles, and the ACL of who may
-reach it), reloaded with `reloadxml` and `reloadacl`.
+v0 assembles FreeSWITCH's configuration directory from ConfigMaps that Flux applies from git. Each reference names a
+directory under `config.mountPath` (`.` for the top, `autoload_configs`, `sip_profiles`, ...), and the operator lays
+the ConfigMaps' keys out there as one read-only projected volume, so a whole tree like FreeSWITCH's own fits. It
+hashes their contents into the pod template: any change rolls the fleet through loop 3, one drained node at a time.
+A missing ConfigMap, or two writing the same file, marks the fleet `Degraded` and leaves the running pods alone.
+In M5, typed resources take over, each reloaded where it lives. Peer resources (loop 9) render into the Kamailio
+fleet and reload over its JSON-RPC. FreeSWITCH keeps only its own config (profiles, and the ACL of who may reach
+it), reloaded with `reloadxml` and `reloadacl`.
 
 ### 7. Kamailio as a managed resource (M2)
 
@@ -345,8 +351,8 @@ which version runs where.
 | | Milestone | State |
 | --- | --- | --- |
 | M0 | Repository, plan, operator scaffold, sipbench mock backend and runner running against FreeSWITCH in Docker | done |
-| M1 | v0 operator on kind: fleet, dispatcher list, drains and rolling updates; sipbench runs against it | in progress |
-| M2 | `KamailioCluster`: managed Kamailio, dispatcher changes to every pod over authenticated JSON-RPC, restart list; sipbench fleet scenarios (drain mid-call, rolling update with live calls) | planned |
+| M1 | v0 operator on kind: fleet, dispatcher list, drains and rolling updates; sipbench runs against it ([how](#the-edge-on-kind)) | done |
+| M2 | `KamailioCluster`: managed Kamailio, dispatcher changes to every pod over authenticated JSON-RPC, restart list; sipbench fleet scenarios (drain mid-call, rolling update with live calls, run as scenarios rather than by hand), with call records kept per run so concurrent runners don't clear each other's | planned |
 | M3 | `SIPAddressPool` with an AWS Elastic IP provider, shared by both fleets; edge node group on EKS | planned |
 | M4 | v1 failover with fencing and call recovery | planned |
 | M5 | Typed peer and ACL resources (loop 9), outbound registrations when a peer needs them (loop 8), sipbench peer mocks; reload without restart | planned |
@@ -366,6 +372,30 @@ make docker-build IMG=<registry>/freeswitch-operator:<tag>
 ```
 
 sipbench has its own instructions in [`sipbench/README.md`](sipbench/README.md).
+
+### The edge on kind
+
+[`hack/kind.sh`](hack/kind.sh) runs the whole edge locally: a kind cluster with two proxy nodes and three tainted
+edge nodes ([`deploy/kind`](deploy/kind/)), the operator built from this tree, Kamailio from
+[`deploy/examples/kamailio`](deploy/examples/kamailio/), a three-node `FreeswitchCluster` running sipbench's
+FreeSWITCH configuration, and sipbench's mock backend behind it.
+
+```sh
+make kind-up         # create the cluster (about 6 GB of Docker memory)
+make kind-deploy     # build and load the images, install the operator, apply deploy/kind, wait for Ready
+make kind-bench      # run sipbench through Kamailio; hack/kind.sh bench <regexp> runs a subset
+hack/kind.sh status  # members, the dispatcher list, and what each Kamailio has loaded
+make kind-down
+```
+
+Through Kamailio the bench passes everything but `codec-g722` (the image has no G.722) and `admission-limit` (it
+needs the event socket of one particular node). M1 was also checked by hand on this cluster:
+
+- **Rolling update with a live call:** the call on the first pod to be replaced kept two-way audio while that pod
+  drained, the operator held the other two until it finished, then replaced them one at a time.
+- **Node drain with a live call:** `kubectl drain` on the call's node made its pod unready and took it out of the
+  dispatcher list at once; a new call placed meanwhile went to another node; the drain finished when the call ended.
+- **Config change:** editing a referenced ConfigMap rolled the fleet one node at a time.
 
 ## Decisions
 

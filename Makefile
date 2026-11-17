@@ -94,6 +94,24 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+##@ The edge on kind (hack/kind.sh)
+
+.PHONY: kind-up
+kind-up: ## Create the local edge cluster: two proxy nodes, three edge nodes
+	KIND=$(KIND) hack/kind.sh up
+
+.PHONY: kind-deploy
+kind-deploy: kustomize ## Build and load the images, install the operator, deploy Kamailio, FreeSWITCH and the bench
+	KIND=$(KIND) hack/kind.sh deploy
+
+.PHONY: kind-bench
+kind-bench: ## Run sipbench through Kamailio against the FreeswitchCluster
+	KIND=$(KIND) hack/kind.sh bench
+
+.PHONY: kind-down
+kind-down: ## Delete the local edge cluster
+	KIND=$(KIND) hack/kind.sh down
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
