@@ -1,0 +1,27 @@
+<include>
+  <!--
+    Variables are read from the environment at start through the exec-set pre-processor, so the same files
+    run on a laptop, in compose and on a cluster. Defaults suit the compose bench. See bin/env.sh.
+  -->
+
+  <!-- The address peers see (ext-sip-ip, ext-rtp-ip). On a cluster freeswitch-operator writes it to the
+       downward-API file /etc/freeswitch-operator/podinfo/external-address; without it, this host's address. -->
+  <X-PRE-PROCESS cmd="exec-set" data="external_address=/bin/sh /usr/local/freeswitch/conf/bin/external-address.sh"/>
+
+  <!-- Where calls from trunks go: the mock backend today, LiveKit SIP later. host[:port] -->
+  <X-PRE-PROCESS cmd="exec-set" data="backend_host=/bin/sh /usr/local/freeswitch/conf/bin/env.sh BACKEND_HOST mockbackend:5060"/>
+  <!-- Where transfers asked for by the backend (REFER) are placed. host[:port] -->
+  <X-PRE-PROCESS cmd="exec-set" data="transfer_host=/bin/sh /usr/local/freeswitch/conf/bin/env.sh TRANSFER_HOST sipbench:5090"/>
+  <!-- An address that never answers, for the unreachable-backend scenario (TEST-NET-1). Bench only. -->
+  <X-PRE-PROCESS cmd="exec-set" data="unreachable_host=/bin/sh /usr/local/freeswitch/conf/bin/env.sh UNREACHABLE_HOST 192.0.2.1:5060"/>
+  <!-- Seconds the backend may ring before the caller gets the fallback. -->
+  <X-PRE-PROCESS cmd="exec-set" data="ring_timeout=/bin/sh /usr/local/freeswitch/conf/bin/env.sh RING_TIMEOUT 6"/>
+  <!-- The fallback a caller hears when the backend can't take the call: a tone, then hang up. -->
+  <X-PRE-PROCESS cmd="exec-set" data="fallback_tone_hz=/bin/sh /usr/local/freeswitch/conf/bin/env.sh FALLBACK_TONE_HZ 1400"/>
+  <X-PRE-PROCESS cmd="exec-set" data="fallback_tone_ms=/bin/sh /usr/local/freeswitch/conf/bin/env.sh FALLBACK_TONE_MS 3000"/>
+
+  <X-PRE-PROCESS cmd="set" data="domain=$${local_ip_v4}"/>
+  <X-PRE-PROCESS cmd="set" data="global_codec_prefs=PCMU,PCMA"/>
+  <X-PRE-PROCESS cmd="set" data="outbound_codec_prefs=PCMU,PCMA"/>
+  <X-PRE-PROCESS cmd="set" data="console_loglevel=info"/>
+</include>

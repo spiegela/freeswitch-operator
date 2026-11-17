@@ -1,0 +1,20 @@
+<include>
+  <!--
+    Blind transfers the backend asks for with a REFER. FreeSWITCH ends the REFER itself (answers 202, notifies
+    the backend, releases it) and places the transfer to the Refer-To user at transfer_host, so the caller's
+    trunk never sees a REFER. The caller's X- headers (the conversation id among them) ride the new leg.
+    If the target doesn't answer, the caller gets the fallback tone.
+  -->
+  <context name="transfers">
+    <extension name="blind-transfer">
+      <condition field="destination_number" expression="^(.+)$">
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="set" data="call_timeout=$${ring_timeout}"/>
+        <action application="bridge" data="sofia/trunks/$1@$${transfer_host}"/>
+        <action application="playback" data="tone_stream://%($${fallback_tone_ms},0,$${fallback_tone_hz})"/>
+        <action application="hangup" data="NORMAL_CLEARING"/>
+      </condition>
+    </extension>
+  </context>
+</include>

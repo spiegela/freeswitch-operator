@@ -1,0 +1,15 @@
+name: no-answer-fallback
+area: failures
+description: The backend rings past the edge's ring timeout (6 s in the bench); the caller gets the fallback.
+requires: [mock]
+calls:
+  - id: a
+    to: noanswer
+    maxDurationMs: 15000
+    expect:
+      status: 200
+      responseHeaders: {X-Fallback-Reason: NO_ANSWER}
+      tonesHeard: [1400]
+      endedBy: remote
+      backend:
+        answered: false

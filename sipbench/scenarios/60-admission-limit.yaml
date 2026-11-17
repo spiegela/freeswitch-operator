@@ -1,0 +1,28 @@
+name: admission-limit
+area: admission
+description: >
+  With the edge's session limit lowered to 4 (two bridged calls), a third concurrent call is refused with 503
+  and never reaches the backend. The limit is restored afterwards.
+requires: [mock, esl]
+setup: ["fsctl max_sessions 4"]
+teardown: ["fsctl max_sessions 1000"]
+calls:
+  - id: a
+    to: hold
+    steps:
+      - wait: {ms: 5000}
+      - hangup: {}
+    expect: {status: 200}
+  - id: b
+    to: hold
+    startMs: 300
+    steps:
+      - wait: {ms: 5000}
+      - hangup: {}
+    expect: {status: 200}
+  - id: c
+    to: hold
+    startMs: 2000
+    expect:
+      status: 503
+      backend: {calls: 0}

@@ -1,0 +1,79 @@
+# The mock backend's starting routes. The Request-URI user picks the route; scenarios can add or replace
+# routes for their own run (POST /routes), and POST /reset returns here.
+#
+# Steps run in order. Answering side: ring, reject, earlyMedia, answer. Media (after answer): tone, digits,
+# wait, echo, refer, hangup. After the last step an answered call is held until the other end hangs up or
+# holdMs passes.
+#
+# Bench tones: 600 Hz far end, 1000 Hz backend, 1400 Hz edge fallback, 1800 Hz transfer target.
+detectHz: [600, 1000, 1400, 1800]
+holdMs: 30000
+defaultRoute: agent
+
+routes:
+  # A voice agent: answers, speaks (a tone), and listens until the caller hangs up.
+  agent:
+    steps:
+      - answer: {}
+      - tone: {hz: 1000, ms: 2000}
+
+  # Rings briefly first.
+  ringing:
+    steps:
+      - ring: {ms: 1000}
+      - answer: {}
+      - tone: {hz: 1000, ms: 2000}
+
+  # Early media before answering.
+  early:
+    steps:
+      - earlyMedia: {hz: 1000, ms: 1500}
+      - answer: {}
+      - tone: {hz: 1000, ms: 1500}
+
+  # Answers, speaks, then hangs up itself.
+  hangup:
+    steps:
+      - answer: {}
+      - tone: {hz: 1000, ms: 1500}
+      - wait: {ms: 500}
+      - hangup: {}
+
+  busy:
+    steps:
+      - reject: {code: 486}
+
+  decline:
+    steps:
+      - reject: {code: 603}
+
+  # Rings until cancelled.
+  noanswer:
+    steps:
+      - ring: {ms: 0}
+
+  # Sends RFC 2833 digits one second after answering, and records the caller's.
+  dtmf:
+    steps:
+      - answer: {}
+      - wait: {ms: 1000}
+      - digits: {digits: "4321", gapMs: 150}
+
+  # Echoes the caller's audio back.
+  echo:
+    steps:
+      - answer: {}
+      - echo: {ms: 8000}
+
+  # Speaks, then asks the edge to blind-transfer the caller to user "target" (routed to transfer_host).
+  transfer:
+    steps:
+      - answer: {}
+      - tone: {hz: 1000, ms: 1000}
+      - refer: {to: target}
+
+  # Answers and stays up, quietly: for load and admission scenarios.
+  hold:
+    steps:
+      - answer: {}
+      - tone: {hz: 1000, ms: 500}

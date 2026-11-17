@@ -1,0 +1,21 @@
+name: header-passthrough
+area: headers
+description: X- headers from the far end reach the backend unchanged.
+requires: [mock]
+calls:
+  - id: a
+    to: agent
+    headers:
+      X-Conversation-Id: 7d0c1f9e-5b8a-4c2e-9f3a-0e6b1d2c3a4f
+      X-Tenant: example-tenant
+      X-Campaign: spring-renewals
+    steps:
+      - wait: {ms: 1000}
+      - hangup: {}
+    expect:
+      status: 200
+      backend:
+        headers:
+          X-Conversation-Id: 7d0c1f9e-5b8a-4c2e-9f3a-0e6b1d2c3a4f
+          X-Tenant: example-tenant
+          X-Campaign: spring-renewals

@@ -1,0 +1,17 @@
+name: dtmf-both-ways
+area: dtmf
+description: RFC 2833 digits pass through the edge in both directions.
+requires: [mock]
+calls:
+  - id: a
+    to: dtmf
+    steps:
+      - wait: {ms: 500}
+      - digits: {digits: "1234#", gapMs: 150}
+      - wait: {ms: 2500}
+      - hangup: {}
+    expect:
+      status: 200
+      digits: "4321"
+      backend:
+        digits: "1234#"

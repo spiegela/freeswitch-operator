@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!--
+  sipbench: a minimal FreeSWITCH configuration for the SBC role.
+
+  Two SIP profiles:
+    trunks  (port 5060) - far ends: carriers and PBXs; the profile Kamailio dispatches to.
+    backend (port 5080) - what sits behind the edge: the mock backend today, LiveKit SIP later.
+
+  Everything that differs between a laptop, the bench and a cluster comes from vars.xml.
+-->
+<document type="freeswitch/xml">
+  <X-PRE-PROCESS cmd="include" data="vars.xml"/>
+
+  <section name="configuration" description="Various Configuration">
+    <X-PRE-PROCESS cmd="include" data="autoload_configs/*.xml"/>
+  </section>
+
+  <section name="dialplan" description="Regex/XML Dialplan">
+    <X-PRE-PROCESS cmd="include" data="dialplan/*.xml"/>
+  </section>
+</document>

@@ -1,0 +1,42 @@
+<include>
+  <!--
+    Calls arriving from far ends. Every call is bridged to the backend with its X- headers (FreeSWITCH copies
+    custom headers to the bridged leg by default). If the backend rejects the call, doesn't answer within
+    ring_timeout, or can't be reached, the caller gets the fallback: the call is answered with a response
+    header X-Fallback-Reason (FreeSWITCH's originate disposition, e.g. USER_BUSY, NO_ANSWER, CALL_REJECTED),
+    hears a tone of fallback_tone_hz for fallback_tone_ms, and is hung up. A real edge replaces the tone with
+    a configured fallback number or announcement.
+  -->
+  <context name="trunks">
+    <extension name="backend-target" continue="true">
+      <condition field="destination_number" expression="^.+$">
+        <action application="set" data="bench_target_host=$${backend_host}" inline="true"/>
+      </condition>
+    </extension>
+
+    <!-- Bench only: a backend address that never answers. -->
+    <extension name="bench-unreachable" continue="true">
+      <condition field="destination_number" expression="^unreachable$">
+        <action application="set" data="bench_target_host=$${unreachable_host}" inline="true"/>
+      </condition>
+    </extension>
+
+    <extension name="to-backend">
+      <condition field="destination_number" expression="^(.+)$">
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="set" data="call_timeout=$${ring_timeout}"/>
+        <action application="set" data="inherit_codec=true"/>
+        <!-- A REFER from the backend transfers this caller through the transfers context. -->
+        <action application="set" data="force_transfer_context=transfers"/>
+        <action application="set" data="force_transfer_dialplan=XML"/>
+        <action application="bridge" data="{force_transfer_context=transfers,force_transfer_dialplan=XML}sofia/backend/$1@${bench_target_host}"/>
+        <!-- Reached only when the bridge failed: the fallback. -->
+        <action application="set" data="sip_rh_X-Fallback-Reason=${originate_disposition}"/>
+        <action application="answer"/>
+        <action application="playback" data="tone_stream://%($${fallback_tone_ms},0,$${fallback_tone_hz})"/>
+        <action application="hangup" data="NORMAL_CLEARING"/>
+      </condition>
+    </extension>
+  </context>
+</include>

@@ -1,0 +1,12 @@
+name: cancel
+area: basic
+description: The far end gives up while the backend is ringing; the CANCEL reaches the backend.
+requires: [mock]
+calls:
+  - id: a
+    to: noanswer
+    cancelAfterMs: 2000
+    expect:
+      status: 487
+      backend:
+        answered: false

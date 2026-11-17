@@ -1,0 +1,18 @@
+name: codec-g722
+area: codecs
+description: >
+  A far end offering only G.722 gets G.722. Skipped unless the run declares codec:g722: the bench's
+  FreeSWITCH image has no G.722 module and the runner has no G.722 codec yet.
+requires: [mock, codec:g722]
+calls:
+  - id: a
+    to: agent
+    codecs: [g722]
+    steps:
+      - tone: {hz: 600, ms: 1500}
+      - hangup: {}
+    expect:
+      status: 200
+      codec: G722
+      tonesHeard: [1000]
+      backend: {codec: G722, tonesHeard: [600]}

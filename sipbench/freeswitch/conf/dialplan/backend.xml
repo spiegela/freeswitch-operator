@@ -1,0 +1,13 @@
+<include>
+  <!--
+    Calls the backend places toward the far end (outbound from the assistant). Not covered by the bench yet:
+    they're refused until outbound routing is designed.
+  -->
+  <context name="backend">
+    <extension name="outbound-not-configured">
+      <condition field="destination_number" expression="^.*$">
+        <action application="respond" data="403 Outbound not configured"/>
+      </condition>
+    </extension>
+  </context>
+</include>

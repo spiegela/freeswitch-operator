@@ -1,0 +1,28 @@
+<!--
+  backend: the profile facing what sits behind the edge. The mock backend in the bench; LiveKit SIP later.
+  It stays on the private network, so it advertises its local address.
+-->
+<profile name="backend">
+  <gateways/>
+  <domains/>
+  <settings>
+    <param name="context" value="backend"/>
+    <param name="dialplan" value="XML"/>
+    <param name="sip-ip" value="$${local_ip_v4}"/>
+    <param name="rtp-ip" value="$${local_ip_v4}"/>
+    <param name="sip-port" value="5080"/>
+    <param name="apply-inbound-acl" value="bench"/>
+    <param name="auth-calls" value="false"/>
+    <param name="inbound-codec-prefs" value="$${global_codec_prefs}"/>
+    <param name="outbound-codec-prefs" value="$${outbound_codec_prefs}"/>
+    <param name="inbound-codec-negotiation" value="generous"/>
+    <param name="dtmf-type" value="rfc2833"/>
+    <param name="rfc2833-pt" value="101"/>
+    <param name="liberal-dtmf" value="true"/>
+    <param name="rtp-timer-name" value="soft"/>
+    <param name="manage-presence" value="false"/>
+    <param name="inbound-late-negotiation" value="false"/>
+    <param name="enable-timer" value="false"/>
+    <param name="user-agent-string" value="sipbench-edge"/>
+  </settings>
+</profile>

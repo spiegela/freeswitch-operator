@@ -1,0 +1,17 @@
+name: unreachable-fallback
+area: failures
+description: >
+  The backend address doesn't respond at all (the edge routes user "unreachable" to a TEST-NET address);
+  the caller gets the fallback once the ring timeout passes.
+requires: [mock]
+calls:
+  - id: a
+    to: unreachable
+    maxDurationMs: 20000
+    expect:
+      status: 200
+      responseHeaders: {X-Fallback-Reason: ""}
+      tonesHeard: [1400]
+      endedBy: remote
+      backend:
+        calls: 0

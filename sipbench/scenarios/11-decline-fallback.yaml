@@ -1,0 +1,15 @@
+name: decline-fallback
+area: failures
+description: The backend declines with 603; the caller gets the fallback.
+requires: [mock]
+calls:
+  - id: a
+    to: decline
+    maxDurationMs: 10000
+    expect:
+      status: 200
+      responseHeaders: {X-Fallback-Reason: CALL_REJECTED}
+      tonesHeard: [1400]
+      endedBy: remote
+      backend:
+        answered: false

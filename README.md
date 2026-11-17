@@ -78,7 +78,7 @@ metadata:
   namespace: telephony
 spec:
   replicas: 3                       # v0. One pod per node; keep one spare for updates and failover
-  image: registry.example.com/freeswitch:1.10.12-1   # v0. Must contain freeswitch and fs_cli
+  image: drachtio/drachtio-freeswitch-mrf:0.9.6     # pin by digest; must contain freeswitch and fs_cli
   nodeSelector:                     # v0. Pin to the edge node group
     node-role.example.com/sip-edge: "true"
   tolerations: []                   # v0
@@ -270,7 +270,7 @@ which version runs where.
 
 | | Milestone | State |
 | --- | --- | --- |
-| M0 | Repository, plan, operator scaffold, sipbench mock backend and runner running against FreeSWITCH in Docker | in progress |
+| M0 | Repository, plan, operator scaffold, sipbench mock backend and runner running against FreeSWITCH in Docker | done |
 | M1 | v0 operator on kind: fleet, dispatcher list, drains and rolling updates; sipbench runs against it | in progress |
 | M2 | `KamailioCluster`: managed Kamailio, dispatcher changes to every pod, outbound registrations; sipbench fleet scenarios (drain mid-call, rolling update with live calls) | planned |
 | M3 | `SIPAddressPool` with an AWS Elastic IP provider, shared by both fleets; edge node group on EKS | planned |
@@ -304,8 +304,10 @@ sipbench has its own instructions in [`sipbench/README.md`](sipbench/README.md).
 3. **Registrations live on Kamailio** ([loop 8](#8-outbound-registrations-m2)), whose address is fixed.
 4. **Apache 2.0 from the start** ([`LICENSE`](LICENSE)). The repository is private; whether and when to publish
    is decided separately, and the license can change before then if that decision says so.
-5. **Start with an off-the-shelf public FreeSWITCH image** (chosen and pinned in [`sipbench`](sipbench/README.md)),
-   and build our own only when we need something it lacks.
+5. **Start with an off-the-shelf public FreeSWITCH image**: `drachtio/drachtio-freeswitch-mrf:0.9.6` (FreeSWITCH
+   1.10.10, amd64 and arm64), pinned by digest in [`sipbench`](sipbench/compose.yaml) and the sample. It passes the
+   bench and the operator's ready and drain scripts. It has no G.722, so that scenario is skipped. We build our own
+   only when we need something it lacks.
 
 ## Open questions
 

@@ -8,8 +8,9 @@ metadata:
 spec:
   # One FreeSWITCH per node; keep one spare for updates and failover.
   replicas: 3
-  # Any image with freeswitch, fs_cli and /bin/sh. Build and pin your own for production.
-  image: registry.example.com/freeswitch:1.10.12-1
+  # Any image with freeswitch, fs_cli and /bin/sh. This public image (FreeSWITCH 1.10.10, amd64 and arm64)
+  # is the one sipbench tests against; build and pin your own once you need something it lacks.
+  image: drachtio/drachtio-freeswitch-mrf:0.9.6@sha256:cb81acc1112990ca33693374f1de7443d44cf9c95e6ae6c02ba1edcee4b68bba
   nodeSelector:
     node-role.example.com/sip-edge: "true"
   tolerations:

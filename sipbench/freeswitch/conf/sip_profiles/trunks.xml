@@ -1,0 +1,33 @@
+<!--
+  trunks: the profile far ends reach (carriers, PBXs), and the one Kamailio dispatches to on a cluster.
+  The external address is what peers see; see bin/external-address.sh.
+-->
+<profile name="trunks">
+  <gateways/>
+  <domains/>
+  <settings>
+    <param name="context" value="trunks"/>
+    <param name="dialplan" value="XML"/>
+    <param name="sip-ip" value="$${local_ip_v4}"/>
+    <param name="rtp-ip" value="$${local_ip_v4}"/>
+    <param name="ext-sip-ip" value="$${external_address}"/>
+    <param name="ext-rtp-ip" value="$${external_address}"/>
+    <param name="sip-port" value="5060"/>
+    <!-- A real edge lists each trunk's addresses in an ACL; the bench allows its own network. -->
+    <param name="apply-inbound-acl" value="bench"/>
+    <param name="auth-calls" value="false"/>
+    <param name="inbound-codec-prefs" value="$${global_codec_prefs}"/>
+    <param name="outbound-codec-prefs" value="$${outbound_codec_prefs}"/>
+    <param name="inbound-codec-negotiation" value="generous"/>
+    <param name="dtmf-type" value="rfc2833"/>
+    <param name="rfc2833-pt" value="101"/>
+    <param name="liberal-dtmf" value="true"/>
+    <param name="rtp-timer-name" value="soft"/>
+    <param name="manage-presence" value="false"/>
+    <param name="inbound-late-negotiation" value="false"/>
+    <param name="enable-timer" value="false"/>
+    <!-- Answer OPTIONS with 503 when this node is paused or full, so Kamailio's dispatcher probe sees it. -->
+    <param name="sip-options-respond-503-on-busy" value="true"/>
+    <param name="user-agent-string" value="sipbench-edge"/>
+  </settings>
+</profile>

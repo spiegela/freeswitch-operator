@@ -1,0 +1,17 @@
+name: busy-fallback
+area: failures
+description: >
+  The backend answers 486. The edge does not pass the failure back: it answers with the fallback, which in the
+  bench is a 1400 Hz tone and an X-Fallback-Reason response header, then hangs up.
+requires: [mock]
+calls:
+  - id: a
+    to: busy
+    maxDurationMs: 10000
+    expect:
+      status: 200
+      responseHeaders: {X-Fallback-Reason: USER_BUSY}
+      tonesHeard: [1400]
+      endedBy: remote
+      backend:
+        answered: false

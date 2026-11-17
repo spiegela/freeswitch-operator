@@ -1,0 +1,4 @@
+name: options
+area: health
+description: The edge answers OPTIONS with 200 while it has capacity (what a SIP proxy's dispatcher probes).
+options: {expectStatus: 200}

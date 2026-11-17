@@ -1,0 +1,14 @@
+<configuration name="switch.conf" description="Core Configuration">
+  <settings>
+    <param name="colorize-console" value="false"/>
+    <param name="loglevel" value="info"/>
+    <!-- Admission: the bench lowers this at run time with `fsctl max_sessions`. -->
+    <param name="max-sessions" value="1000"/>
+    <param name="sessions-per-second" value="100"/>
+    <!-- Must match the node security group on a cluster. Small here: the bench runs a few calls at a time. -->
+    <param name="rtp-start-port" value="16384"/>
+    <param name="rtp-end-port" value="16584"/>
+    <param name="rtp-enable-zrtp" value="false"/>
+    <param name="dump-cores" value="no"/>
+  </settings>
+</configuration>
