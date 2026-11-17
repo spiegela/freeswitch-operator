@@ -42,7 +42,7 @@ var (
 		"headers", "identity", "keepalive", "transport", "timers", "parsing", "security", "impairment", "capacity",
 		"registration", "resilience")
 	components = set("edge", "proxy", "freeswitch", "operator")
-	milestones = set("M2", "M3", "M4", "M5", "M6")
+	milestones = set("M2", "M2b", "M3", "M4", "M5", "M6")
 )
 
 func set(xs ...string) map[string]bool {
@@ -136,7 +136,7 @@ func TestRecord(t *testing.T) { //nolint:gocyclo // one linear pass over each ch
 				}
 			case "planned":
 				if !milestones[c.Milestone] {
-					t.Errorf("%s: planned needs a milestone (M2-M6), got %q", where, c.Milestone)
+					t.Errorf("%s: planned needs a milestone (M2, M2b, M3-M6), got %q", where, c.Milestone)
 				}
 			case "not-applicable":
 				if c.Reason == "" {

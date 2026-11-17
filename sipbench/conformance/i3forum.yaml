@@ -77,7 +77,7 @@ cases:
       A re-INVITE from either side to refresh the session (before the session interval runs out) gets 200 with
       SDP, reaches the node holding the call through Kamailio's record-route, and media continues undisturbed.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Neither the runner nor the mock can send a re-INVITE or negotiate session timers.
 
   - id: i3f-5.2-refer
@@ -224,7 +224,7 @@ cases:
       Ten or more calls in a row, to several backend numbers, all complete with two-way audio, and on a fleet
       they are spread across nodes.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Each scenario places one call (admission-limit three); nothing repeats calls or reports which node took each.
 
   - id: i3f-7.2.1-long
@@ -236,7 +236,7 @@ cases:
       A call held for more than fifteen minutes keeps two-way audio throughout; no session, RTP or dialog timer
       on the edge or Kamailio ends it, and both ends record the same duration.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Scenarios run seconds long; a long call also has to span any drain or roll that happens meanwhile.
 
   - id: i3f-7.2.2
@@ -289,7 +289,7 @@ cases:
       A call the edge can't route (no FreeSWITCH node in dispatch, or a number not provisioned for that peer) is
       refused at once with a final response the carrier can reroute on (e.g. 503 or 404 with a Reason), not left to time out.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: >
       With no node active Kamailio answers 503 at once, and when every node answers 503 the carrier now gets that
       503 too (it got 500 before); neither carries a Reason yet. No scenario empties the dispatch set; per-peer
@@ -304,7 +304,7 @@ cases:
       A 404 (unallocated number) from the backend gets the defined treatment, today the fallback with a reason
       naming the cause; whether such causes should instead go back to the carrier is an open choice.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The mock can already reject with 404; there is no scenario for it.
 
   - id: i3f-7.2.8-g3
@@ -380,7 +380,7 @@ cases:
       While the backend plays a prompt as early media (183 with SDP), digits the carrier sends as
       telephone-events reach the backend before it answers.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The mock can play early media, but the runner sends digits only after answer.
 
   - id: i3f-7.2.14

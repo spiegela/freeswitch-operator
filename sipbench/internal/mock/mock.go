@@ -105,6 +105,8 @@ type Server struct {
 
 	mu  sync.RWMutex
 	cfg *Config
+	// runs holds route overrides per run (see uas.RunOf), so concurrent runners don't see each other's.
+	runs map[string]map[string]Route
 }
 
 // NewServer starts from cfg; POST /reset returns to it.
@@ -112,7 +114,7 @@ func NewServer(cfg *Config, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{log: log, initial: cfg.clone(), cfg: cfg.clone(), store: &uas.Store{}}
+	return &Server{log: log, initial: cfg.clone(), cfg: cfg.clone(), store: &uas.Store{}, runs: map[string]map[string]Route{}}
 }
 
 // Store exposes the call records.
@@ -124,12 +126,26 @@ func (s *Server) config() *Config {
 	return s.cfg
 }
 
+// route picks the route for a call to user in run: the run's own routes first, then the config's.
+func (s *Server) route(run, user string) (*Config, Route, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if r, ok := s.runs[run][user]; ok && run != "" {
+		return s.cfg, r, true
+	}
+	r, ok := s.cfg.Routes[user]
+	return s.cfg, r, ok
+}
+
 // HandleCall answers one call. Pass it to diago's Serve.
 func (s *Server) HandleCall(d *diago.DialogServerSession) {
-	cfg := s.config()
 	user := d.InviteRequest.Recipient.User
+	run := ""
+	if h := d.InviteRequest.GetHeader(uas.BenchCallHeader); h != nil {
+		run = uas.RunOf(h.Value())
+	}
 	name := user
-	route, ok := cfg.Routes[user]
+	cfg, route, ok := s.route(run, user)
 	if !ok && cfg.DefaultRoute != "" {
 		name, route, ok = cfg.DefaultRoute, cfg.Routes[cfg.DefaultRoute], true
 	}
@@ -146,10 +162,15 @@ func (s *Server) HandleCall(d *diago.DialogServerSession) {
 //
 //	GET  /healthz              200 when serving
 //	GET  /calls[?benchCall=id] call records, oldest first
-//	POST /reset                forget calls and return to the starting config
+//	POST /runs/{run}/routes    add or replace routes for one run's calls only (see uas.RunOf)
+//	DELETE /runs/{run}         forget one run's calls and routes
+//	POST /reset                forget every call and run, and return to the starting config
 //	GET  /config               the current config
 //	PUT  /config               replace the config (YAML or JSON body)
-//	POST /routes               add or replace routes (YAML or JSON map of name to route)
+//	POST /routes               add or replace routes for every run (YAML or JSON map of name to route)
+//
+// A runner keeps to its own run, so several can share the mock; /reset and the config endpoints are for tests and
+// operators.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -162,6 +183,37 @@ func (s *Server) Handler() http.Handler {
 		s.store.Reset()
 		s.mu.Lock()
 		s.cfg = s.initial.clone()
+		s.runs = map[string]map[string]Route{}
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /runs/{run}/routes", func(w http.ResponseWriter, r *http.Request) {
+		routes, err := readRoutes(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Check them as a config would, against the config's routes so a default route still resolves.
+		check := s.config().clone()
+		maps.Copy(check.Routes, routes)
+		if err := check.Validate(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		run := r.PathValue("run")
+		s.mu.Lock()
+		if s.runs[run] == nil {
+			s.runs[run] = map[string]Route{}
+		}
+		maps.Copy(s.runs[run], routes)
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("DELETE /runs/{run}", func(w http.ResponseWriter, r *http.Request) {
+		run := r.PathValue("run")
+		s.store.DeleteRun(run)
+		s.mu.Lock()
+		delete(s.runs, run)
 		s.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -185,13 +237,8 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /routes", func(w http.ResponseWriter, r *http.Request) {
-		b, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		routes, err := readRoutes(r)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		var routes map[string]Route
-		if err := yaml.Unmarshal(b, &routes); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -208,6 +255,18 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux
+}
+
+func readRoutes(r *http.Request) (map[string]Route, error) {
+	b, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	var routes map[string]Route
+	if err := yaml.Unmarshal(b, &routes); err != nil {
+		return nil, err
+	}
+	return routes, nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

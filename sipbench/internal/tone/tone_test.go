@@ -3,6 +3,7 @@ package tone
 import (
 	"math/rand"
 	"testing"
+	"time"
 )
 
 func frames(hz float64, amplitude float64, n int) []int16 {
@@ -67,5 +68,30 @@ func TestDetectorToneWithNoise(t *testing.T) {
 	}
 	if got := d.Heard(20); len(got) != 1 {
 		t.Fatalf("Heard = %v (frames %v), want [600]", got, d.Frames())
+	}
+}
+
+func TestDetectorMaxGaps(t *testing.T) {
+	d := NewDetector([]float64{1000})
+	clock := time.Unix(0, 0)
+	d.now = func() time.Time { return clock }
+	g := NewGenerator(1000, 8000)
+	frame := make([]int16, FrameSamples)
+	feed := func(n int, step time.Duration) {
+		for range n {
+			g.Frame(frame)
+			d.Feed(frame)
+			clock = clock.Add(step)
+		}
+	}
+	feed(50, 20*time.Millisecond)
+	clock = clock.Add(1500 * time.Millisecond) // packets stop for 1.5 s
+	feed(50, 20*time.Millisecond)
+	gap := d.MaxGaps()[1000]
+	if gap < 1500*time.Millisecond || gap > 1600*time.Millisecond {
+		t.Fatalf("max gap %v, want about 1.52s", gap)
+	}
+	if _, ok := d.MaxGaps()[600]; ok {
+		t.Fatal("a tone never heard has no gap")
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/fleet"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/runner"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
 
@@ -123,6 +124,8 @@ func run(args []string) (int, error) {
 		"where to answer transfers (host:port); empty disables")
 	caps := fs.String("caps", env("SIPBENCH_CAPS", "mock,esl,codec:pcmu,codec:pcma"),
 		"capabilities this run provides, comma separated")
+	fleetRef := fs.String("fleet", env("SIPBENCH_FLEET", ""),
+		"the FreeswitchCluster fleet scenarios act on, namespace/name; adds the fleet capability")
 	only := fs.String("run", env("SIPBENCH_RUN", ""), "only run scenarios whose name matches this regexp")
 	jsonOut := fs.String("json", env("SIPBENCH_JSON", ""),
 		"write the JSON report here ('-' for stdout, which moves the summary to stderr)")
@@ -166,6 +169,16 @@ func run(args []string) (int, error) {
 			capList = append(capList, c)
 		}
 	}
+	var fl fleet.Fleet
+	if *fleetRef != "" {
+		if fl, err = fleet.Connect(*fleetRef); err != nil {
+			return 2, err
+		}
+		if !capSet["fleet"] {
+			capSet["fleet"] = true
+			capList = append(capList, "fleet")
+		}
+	}
 	slices.Sort(capList)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -173,7 +186,7 @@ func run(args []string) (int, error) {
 
 	r := runner.New(runner.Config{
 		Edge: *edge, MockURL: *mockURL, ESL: *eslAddr, ESLPassword: *eslPass,
-		TargetListen: *target, Caps: capSet, Log: log,
+		TargetListen: *target, Caps: capSet, Fleet: fl, Log: log,
 	})
 	if err := r.Start(ctx); err != nil {
 		return 2, err

@@ -55,6 +55,49 @@ calls:
 	}
 }
 
+const fleetCalls = "name: x\nrequires: [fleet]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n"
+
+func TestParseActions(t *testing.T) {
+	s, err := Parse([]byte(`
+name: x
+requires: [mock, fleet]
+calls:
+  - {id: a, to: agent, expect: {status: 200}}
+  - {id: b, to: agent, startAfter: drained, expect: {status: 200, backend: {otherNodeThan: a}}}
+actions:
+  - {name: drained, afterAnswered: a, afterMs: 100, drainNodeOf: a}
+  - {waitMember: {of: a, state: Draining}}
+  - {hangup: a}
+  - {uncordon: {}}
+  - {rollFleet: {}}
+  - {breakConfig: {configMap: c, key: k, replace: x, with: y}}
+  - {expectRollStuck: {forMs: 10}}
+  - {restoreConfig: {}}
+  - {afterEnded: a, waitFleetCurrent: {timeoutMs: 5}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := make([]string, 0, len(s.Actions))
+	for i := range s.Actions {
+		kinds = append(kinds, s.Actions[i].Kind())
+	}
+	want := "drainNodeOf waitMember hangup uncordon rollFleet breakConfig expectRollStuck restoreConfig waitFleetCurrent"
+	if got := strings.Join(kinds, " "); got != want {
+		t.Errorf("kinds = %s", got)
+	}
+	if !s.NeedsFleet() {
+		t.Errorf("NeedsFleet = false")
+	}
+	hangupOnly, err := Parse([]byte("name: y\ncalls: [{id: a, to: b, expect: {status: 200}}]\nactions: [{afterMs: 5, hangup: a}]"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hangupOnly.NeedsFleet() {
+		t.Errorf("hanging up a call doesn't need the fleet")
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	cases := map[string]string{
 		"unknown field":      "name: x\nbogus: 1\noptions: {expectStatus: 200}",
@@ -66,6 +109,18 @@ func TestParseErrors(t *testing.T) {
 		"answer from caller": "name: x\ncalls: [{id: a, to: b, steps: [{answer: {}}], expect: {status: 200}}]",
 		"bad endedBy":        "name: x\ncalls: [{id: a, to: b, expect: {status: 200, endedBy: both}}]",
 		"empty route":        "name: x\noptions: {expectStatus: 200}\nbackend: {routes: {r: {steps: []}}}",
+		"two kinds":          fleetCalls + "actions: [{rollFleet: {}, hangup: a}]",
+		"no kind":            fleetCalls + "actions: [{afterMs: 5}]",
+		"unknown call":       fleetCalls + "actions: [{drainNodeOf: b}]",
+		"unknown trigger":    fleetCalls + "actions: [{afterAnswered: b, rollFleet: {}}]",
+		"bad member state":   fleetCalls + "actions: [{waitMember: {of: a, state: Sleepy}}]",
+		"no stuck time":      fleetCalls + "actions: [{expectRollStuck: {}}]",
+		"break nothing":      fleetCalls + "actions: [{breakConfig: {configMap: c, key: k, replace: x, with: x}}]",
+		"duplicate action":   fleetCalls + "actions: [{name: n, rollFleet: {}}, {name: n, uncordon: {}}]",
+		"start after none":   "name: x\nrequires: [fleet]\ncalls: [{id: a, to: b, startAfter: n, expect: {status: 200}}]",
+		"fleet unrequired":   "name: x\ncalls: [{id: a, to: b, expect: {status: 200}}]\nactions: [{rollFleet: {}}]",
+		"other node of self": "name: x\ncalls: [{id: a, to: b, expect: {status: 200, backend: {otherNodeThan: a}}}]",
+		"other node target":  "name: x\ncalls: [{id: a, to: b, expect: {status: 200, target: {otherNodeThan: a}}}]",
 	}
 	for name, y := range cases {
 		if _, err := Parse([]byte(y)); err == nil {

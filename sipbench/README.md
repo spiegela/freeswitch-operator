@@ -103,10 +103,15 @@ Each end plays a frequency only it uses, so hearing it proves the path from that
 | 1400 Hz | edge fallback |
 | 1800 Hz | transfer target (runner) |
 
-Tones are detected with a Goertzel filter on 20 ms frames; a tone counts as heard after 200 ms.
+Tones are detected with a Goertzel filter on 20 ms frames; a tone counts as heard after 200 ms. Each end also
+records, per tone, the longest it went missing once it had started (`audioGapsMs`), so a far end that plays a tone
+throughout can be checked for "audio both ways the whole time" with `maxAudioGapMs`.
 
 Every call carries `X-Sipbench-Call: <run>-<scenario>-<call>-<n>`. The edge passes X- headers through (which is
 itself under test), so the mock and the transfer target can file what they saw under the call that caused it.
+`<run>` is fresh for every scenario run (8 random hex digits from the runner, then a counter), and the mock keeps
+each run's routes and records apart: runners sharing one mock don't see or clear each other's. The mock also
+records where each INVITE came from (`source`), which on a cluster is the edge node that sent it.
 
 ## Scenarios
 
@@ -139,17 +144,20 @@ calls:
       - tone: {hz: 600, ms: 7000}
       - hangup: {}
     maxDurationMs: 30000
+    startAfter: ""               # an action's name: start once that action is done (startMs counts from then)
     expect:
       status: 200
       responseHeaders: {}        # on the final response; "" means present with any value
       tonesHeard: [1000, 1800]
       tonesNotHeard: []
+      maxAudioGapMs: 0           # >0: no tone in tonesHeard may go missing longer than this once started
       digits: null               # e.g. "4321"
       endedBy: local             # local: the runner hung up; remote: the edge did
       codec: PCMU
       backend:                   # what the mock recorded (needs the mock)
         calls: 1                 # legs that reached it; 0 means none must have
         referAccepted: true
+        otherNodeThan: ""        # another call's id: this one must have come from a different edge node
         endedBy: remote
       target:                    # what the transfer target recorded
         answered: true
@@ -159,7 +167,31 @@ calls:
 
 Capabilities a run provides are set with `-caps` (default `mock,esl,codec:pcmu,codec:pcma`): `mock` when
 the backend is mockbackend, `esl` when the runner can reach FreeSWITCH's event socket, `codec:*` for codecs the
-edge and runner both support.
+edge and runner both support, and `fleet`, added by `-fleet namespace/name` (`SIPBENCH_FLEET`), when the runner
+can act on the FreeswitchCluster under test.
+
+### Actions: driving the fleet during a scenario
+
+`actions:` is a timeline that runs alongside the calls, one action after another. Each waits for its triggers
+(`afterAnswered: <call>`, `afterEnded: <call>`, then `afterMs`) and does one thing:
+
+| Action | Effect |
+|---|---|
+| `drainNodeOf: <call>` | what `kubectl drain` does to the call's edge node: cordon it, evict the FreeSWITCH pod |
+| `uncordon: {}` | uncordon every node this scenario cordoned |
+| `rollFleet: {}` | set `SIPBENCH_ROLL` on the fleet's pod template, so the operator rolls every pod |
+| `breakConfig: {configMap, key, replace, with}` | edit a ConfigMap the fleet reads |
+| `restoreConfig: {}` | put back every ConfigMap `breakConfig` edited |
+| `waitMember: {of: <call>, state, timeoutMs}` | wait until the call's pod is `Active`, `Draining`, `Starting` or `Gone` |
+| `waitFleetCurrent: {timeoutMs}` | wait until every pod runs the latest template and takes calls |
+| `expectRollStuck: {forMs, timeoutMs}` | wait for a roll's first replacement, then fail if the roll goes further within `forMs`, more than one pod stops taking calls, or the replacement takes calls |
+| `hangup: <call>` | the runner hangs the call up |
+
+A call's pod is found from where the mock received the INVITE: the fleet runs on the host network, so that is a
+member's address. Whatever happens, a scenario ends with its cordoned nodes uncordoned and its edited ConfigMaps
+put back. Every action but `hangup` needs the `fleet` capability, and a scenario using them must say
+`requires: [fleet]`. The runner's access is in `k8s/runner-rbac.yaml`. Results carry a `timeline` of what each
+action did and when.
 
 ## mockbackend
 
@@ -188,9 +220,11 @@ HTTP API (default `:8080`):
 |---|---|
 | `GET /healthz` | 200 when serving |
 | `GET /calls[?benchCall=id]` | call records, oldest first |
-| `POST /reset` | forget calls; return to the starting config |
+| `POST /runs/{run}/routes` | add or replace routes for one run's calls only (the runner does this per scenario) |
+| `DELETE /runs/{run}` | forget one run's calls and routes (the runner does this when a scenario ends) |
+| `POST /reset` | forget every call and run; return to the starting config |
 | `GET /config`, `PUT /config` | read or replace the whole config (YAML or JSON) |
-| `POST /routes` | add or replace routes (YAML or JSON map of name to route) |
+| `POST /routes` | add or replace routes for every run (YAML or JSON map of name to route) |
 
 ## The edge configuration (`freeswitch/conf`)
 
@@ -249,8 +283,9 @@ profiles, and which scenario checks each one. A new scenario needs an entry ther
 - UDP only; no TLS/SRTP scenarios yet.
 - The runner's caller drops early media and can't send re-INVITEs (hold/unhold).
 - `sipgo` logs a harmless `UDP ref went negative` warning when the OPTIONS client closes.
-- Each scenario starts by clearing the mock backend's call records, so two runners sharing one mock backend
-  clear each other's. Run one at a time until records are kept per run (M2).
+- Runners can share a mock backend, but not a transfer target: FreeSWITCH sends transfers to one address
+  (`TRANSFER_HOST`, the `sipbench` Service on a cluster), so concurrent runners each need their own. Scenarios that
+  change the edge itself (setup commands, fleet actions) disturb whatever else runs on it.
 
 ## Layout
 
@@ -262,6 +297,7 @@ internal/uas        answering side shared by the mock and transfer targets; call
 internal/script     steps and the media engine (tones, digits, echo; continuous 20 ms RTP)
 internal/tone       tone generator and Goertzel detector
 internal/scenario   scenario files
+internal/fleet      the FreeswitchCluster scenario actions act on (client-go)
 internal/mock       mock config and HTTP API
 internal/esl        minimal FreeSWITCH event socket client
 freeswitch/conf     the edge configuration (freeswitch/kustomization.yaml: the same as ConfigMaps)

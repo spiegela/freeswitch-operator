@@ -24,7 +24,7 @@ cases:
       Kamailio answers 416 itself to an INVITE, an unmatched CANCEL or a BYE whose Request-URI scheme it doesn't
       support, and nothing reaches a FreeSWITCH node.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: sipbench can't put a non-SIP scheme in the Request-URI; needs a raw-message sender.
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_002
@@ -34,7 +34,7 @@ cases:
     component: proxy
     expect: An INVITE, unmatched CANCEL or BYE arriving with Max-Forwards 0 gets 483 from Kamailio and goes no further.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The runner can't set Max-Forwards on its requests yet.
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_003
@@ -48,7 +48,7 @@ cases:
       with Proxy-Require: frobnicate got 420 with Unsupported: frobnicate and reached no node. No scenario checks
       it yet.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: >
       Likely runnable on kind with today's scenario fields (a Proxy-Require request header, expected status and
       responseHeaders); not written yet. Under compose there is no Kamailio to test.
@@ -62,7 +62,7 @@ cases:
       When the Request-URI's maddr names Kamailio (and the request came in on that port and transport), Kamailio
       removes the maddr and any non-default port or transport parameters before relaying.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a hand-built Request-URI and a mock that records the Request-URI it receives.
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_020
@@ -89,7 +89,7 @@ cases:
       on a new INVITE and sends the call to a FreeSWITCH node, so a peer can't steer it to another hop (strict or
       loose). The purposes that expect relaying to the next Route fail on purpose; the test pins that policy.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs preloaded Route headers on the runner's INVITE.
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_027
@@ -102,7 +102,7 @@ cases:
       moved to the end of Route, first Route into the Request-URI) and relays to the next loose-routing Route entry
       when one follows its own.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs hand-built route sets on in-dialog requests; sipgo builds them from the dialog.
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_006
@@ -118,7 +118,7 @@ cases:
       names, an OPTIONS with a user part is answered by that node, and one without a user part is answered by
       Kamailio itself whatever host it names. The peer-side purposes fail on purpose.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The node-to-peer direction needs a FreeSWITCH call out through Kamailio to a sipbench peer.
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_008
@@ -132,7 +132,7 @@ cases:
       An INVITE or BYE the edge can't place ends with a 4xx final response (404, or 480 or 485 where that is the
       reason) from Kamailio or the node, never an unanswered transaction.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a number plan the bench can call that the fleet refuses.
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_011
@@ -148,7 +148,7 @@ cases:
       the header when absent, with the recommended value 70. The example config now inserts 70 and decrements
       otherwise (verified by hand); no scenario checks it yet.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs control of Max-Forwards on sent requests and a mock that records the value it receives.
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_018
@@ -161,7 +161,7 @@ cases:
       Kamailio puts its own SIP/2.0 Via with a z9hG4bK branch on top of INVITE, ACK and BYE, and leaves the
       received Via values in their order whether they came comma-separated or as separate headers.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a mock that records the Via headers it receives, and hand-built multi-value Via on sent requests.
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_035
@@ -180,7 +180,7 @@ cases:
       reaches a node with no matching INVITE and never loops. The relaying purposes fail on purpose. The example
       config does this now (verified by hand: 481; it was dropped unanswered before); no scenario checks it yet.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a CANCEL the runner sends without a pending INVITE; sipgo only cancels its own transactions.
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_029
@@ -195,7 +195,7 @@ cases:
       fails on purpose. The example config does this now (verified by hand with a stray BYE: 481); no scenario
       checks it yet.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a hand-built in-dialog BYE and ACK.
 
   - id: etsi-SIP_CC_PR_MP_RQ_I_001
@@ -207,7 +207,7 @@ cases:
       Kamailio strips Request-URI parameters RFC 3261 doesn't allow there (such as method or embedded headers)
       from INVITE, ACK, CANCEL and BYE before relaying.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a hand-built Request-URI and a mock that records the one it receives.
 
   - id: etsi-SIP_CC_PR_MP_RS_V_001
@@ -222,7 +222,7 @@ cases:
       A stray response whose top Via is Kamailio's loses that Via and goes to the next Via; one whose top Via isn't
       Kamailio's, or that has no further Via, is dropped.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender to inject responses with chosen Via headers.
 
   - id: etsi-SIP_CC_PR_MP_RS_V_005
@@ -251,7 +251,7 @@ cases:
       relayed 503 to 500 (remap_503_500 0), so a peer sees the same 503 it gets when Kamailio has no active node
       at all and answers itself.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: >
       On kind the runner can't make a chosen node answer 503 (no per-node event socket); needs per-node control or
       a sipbench node in the dispatcher set.
@@ -279,7 +279,7 @@ cases:
       Kamailio holds the CANCEL until the branch gets a provisional response, then sends it; if a final response
       comes first, it sends none.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a node stand-in that delays its 100 Trying, and a CANCEL timed before it.
 
   - id: etsi-SIP_CC_PR_TR_CL_V_006
@@ -291,7 +291,7 @@ cases:
       For a 302, 410, 503 or 603 from a node, Kamailio sends the hop-by-hop ACK (same Call-ID, From, Request-URI,
       CSeq number and top Via as its INVITE, To from the response).
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The fleet never returns these to Kamailio in the bench; needs a node stand-in or a recording of the node side.
 
   - id: etsi-SIP_CC_PR_TR_CL_V_010
@@ -309,7 +309,7 @@ cases:
       stays 60 s);
       and resends its ACK for each retransmitted final response.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a node stand-in that ignores or delays requests and records retransmission times.
 
   - id: etsi-SIP_CC_PR_TR_CL_TI_012
@@ -324,7 +324,7 @@ cases:
       It then gives up after 64*T1 (32 s), as these purposes expect: the example config gives every request it
       relays to a peer or along a dialog 32 s (it was 5 s); only new calls to nodes and its own probes keep 5 s.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs an endpoint stand-in that withholds its answer to BYE and records retransmission times.
 
   - id: etsi-SIP_CC_PR_TR_SE_V_001
@@ -338,7 +338,7 @@ cases:
       Kamailio sends 100 Trying for each INVITE, copying From, Call-ID, CSeq and Via, keeping To as received (no
       tag added), and echoing any Timestamp.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The runner doesn't record provisional responses or their headers.
 
   - id: etsi-SIP_CC_PR_TR_SE_V_006
@@ -354,7 +354,7 @@ cases:
       A retransmitted INVITE or BYE (matched by branch, or by RFC 2543 rules when the branch is absent or lacks
       z9hG4bK) gets Kamailio's last response repeated and is not relayed again, until Timer J for BYE.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender to retransmit byte-identical requests and requests without RFC 3261 branches.
 
   - id: etsi-SIP_CC_PR_TR_SE_V_020
@@ -366,7 +366,7 @@ cases:
       A CANCEL with no branch, or a branch without z9hG4bK, that otherwise matches a pending INVITE gets 200 and
       the INVITE ends in 487.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (sipgo always sends RFC 3261 branches).
 
   - id: etsi-SIP_CC_PR_TR_SE_V_024
@@ -382,7 +382,7 @@ cases:
       After a 3xx-6xx to the peer, Kamailio resends that response over UDP (T1 doubling to T2) until the ACK,
       absorbs the ACK instead of relaying it, and stops after Timer H; over TCP it doesn't resend.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a far end that withholds its ACK to a failure, and records response retransmissions.
 
   - id: etsi-SIP_QC_PR_V_001
@@ -412,7 +412,7 @@ cases:
       INFO, UPDATE, REFER, NOTIFY; verified by hand) and none of the others, nor a body: a keepalive answer needs
       no more, and these are only recommended.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The runner doesn't record response headers or bodies for OPTIONS.
 
   - id: etsi-SIP_MG_PR_V_001
@@ -427,7 +427,7 @@ cases:
       Contact URI, or transport, header or method parameters in its From and To URIs, is relayed with those URIs
       unchanged.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (or hand-set Contact, From and To) and a mock recording what reaches it.
 
   - id: etsi-SIP_MG_PR_V_006
@@ -452,7 +452,7 @@ cases:
       Mixed-case header names, folded values with extra leading whitespace, a mixed-case branch parameter name,
       compact header names and a lowercase SIP version in the request line don't stop Kamailio relaying the INVITE.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender; sipgo normalises what it sends.
 
   - id: etsi-SIP_MG_PR_V_012
@@ -462,7 +462,7 @@ cases:
     component: proxy
     expect: A 299 or a 200 with an unknown reason phrase from a node is relayed to the peer as a success.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a node stand-in behind Kamailio that sends hand-crafted responses.
 
   - id: etsi-SIP_MG_PR_V_015
@@ -476,7 +476,7 @@ cases:
       is shorter than Content-Length gets 400 and a response like that is dropped; extra bytes past
       Content-Length are cut off and the message relayed.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender over UDP and TCP.
 
   - id: etsi-SIP_MG_PR_I_005
@@ -486,7 +486,7 @@ cases:
     component: proxy
     expect: Kamailio answers 400 and nothing reaches FreeSWITCH.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender.
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_067
@@ -528,7 +528,7 @@ cases:
       (70 recommended), Contact and a SIP/2.0 Via with a z9hG4bK branch, Allow and Supported, and a Request-URI
       matching To.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The mock records only chosen headers; it needs to record the whole INVITE.
 
   - id: etsi-SIP_CC_OE_CE_V_009
@@ -546,7 +546,7 @@ cases:
       and Record-Route (strict or loose); ACKs retransmitted 2xx for 64*T1 and no longer; discards a 2xx carrying
       more than one Via.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: >
       basic-two-way exercises the ACK but asserts nothing about it; the mock needs to record ACKs, and to send
       183, odd 1xx, forked and retransmitted 2xx, and Record-Route.
@@ -564,7 +564,7 @@ cases:
       one ACK with the INVITE's Call-ID, From, Request-URI, CSeq number and a single top Via, and To from the
       response; it ACKs retransmissions and only one of two finals on different branches.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: >
       busy-fallback and decline-fallback exercise 486 and 603 but don't check the ACK; the mock needs to record
       ACKs and to answer with the other codes.
@@ -593,7 +593,7 @@ cases:
       Content-Length and Content-Type on that body (Content-Encoding only with it), and answers an unacceptable
       SDP in a 2xx with ACK and then BYE.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The mock needs to answer a no-SDP INVITE with an offer, send unacceptable SDP, and record bodies.
 
   - id: etsi-SIP_CC_OE_CE_V_050
@@ -621,7 +621,7 @@ cases:
       Over UDP FreeSWITCH resends the INVITE at T1 then doubling (never over TCP), stops once a provisional
       arrives, gives up after 64*T1 without an ACK, and ACKs retransmitted failure responses until Timer D.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: >
       unreachable-fallback exercises the silent backend but ends on the ring timeout first; the mock needs to drop
       or delay requests and record retransmission times.
@@ -655,7 +655,7 @@ cases:
       (Request-URI, Call-ID, From, To, CSeq number, single top Via; no Require or Proxy-Require), and if a 2xx
       crosses it, ACKs that 2xx (then ends the call).
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: >
       cancel and no-answer-fallback exercise it but only check the backend never answered; the mock needs to record
       the CANCEL and to answer 200 just after it.
@@ -671,7 +671,7 @@ cases:
       Over UDP FreeSWITCH resends an unanswered BYE at T1, doubling to T2 (T2 after a provisional), and gives up
       after 64*T1.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The mock needs to withhold its answer to BYE and record retransmission times.
 
   - id: etsi-SIP_QC_OE_V_001
@@ -704,7 +704,7 @@ cases:
       URI parameters in From, To or Contact, still gets an ACK; an in-dialog BYE with escaped or odd From/To URIs,
       unknown or misplaced headers, or lexical variants still gets 200.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The mock needs to send hand-crafted responses and requests (raw-message sender).
 
   - id: etsi-SIP_MG_OE_V_015
@@ -716,7 +716,7 @@ cases:
       Over UDP, FreeSWITCH accepts and ACKs a 65,535-byte 2xx, discards one whose body is shorter than its
       Content-Length, and ignores bytes past Content-Length.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The mock needs a raw-message sender over UDP.
 
   # ---------------------------------------------------------------------------------------------------------
@@ -743,7 +743,7 @@ cases:
       it can't handle (language, encoding, disposition), 415 with Accept-Encoding where encoding is the cause;
       acceptable syntax but unacceptable session, 488; an unknown Require, 420 with Unsupported.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The runner needs hand-set Require, Expires, body headers and Request-URI; some need a raw-message sender.
 
   - id: etsi-SIP_CC_TE_CE_V_004
@@ -758,7 +758,7 @@ cases:
       Record-Route set in order, unknown parameters included; keep a tagless From tagless; echo Timestamp in 100;
       and the 2xx lists Allow and Supported.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The runner doesn't record response headers beyond chosen ones; record-route needs a hand-set header.
 
   - id: etsi-SIP_CC_TE_CE_V_006
@@ -770,7 +770,7 @@ cases:
       An INVITE with no session body (or only a non-session or optional body) gets a 2xx with FreeSWITCH's offer;
       the far end's ACK carries the answer and the call has two-way audio.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The runner can't send an INVITE without SDP and answer in the ACK.
 
   - id: etsi-SIP_CC_TE_CE_V_022
@@ -784,7 +784,7 @@ cases:
       A retransmitted INVITE (same branch, or RFC 2543 matching) gets the last response again and starts no second
       call; the same request arriving by another path (new branch or sent-by) is answered 482.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender to retransmit byte-identical and re-branched INVITEs.
 
   - id: etsi-SIP_CC_TE_CE_V_032
@@ -800,7 +800,7 @@ cases:
       T2 until the ACK (not over TCP), accepts that ACK even with an unknown Require or Proxy-Require, and stops at
       Timer H.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The runner needs to withhold or delay its ACK to a failure and record response retransmissions.
 
   - id: etsi-SIP_CC_TE_CE_TI_009
@@ -812,7 +812,7 @@ cases:
       With no ACK, FreeSWITCH resends its 2xx at T1 then 2*T1 and so on, stops after 64*T1, and then ends the call
       with BYE (and the backend leg with it).
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The runner can't withhold the ACK; sipgo's dialog client sends it automatically.
 
   - id: etsi-SIP_CC_TE_CR_V_001
@@ -839,7 +839,7 @@ cases:
       retransmitted BYEs get the same response until Timer J; a BYE after a CANCEL in an established call gets 200.
       Responses copy From, Call-ID, CSeq and Via.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs hand-built in-dialog BYEs (raw-message sender or sipgo request crafting).
 
   - id: etsi-SIP_CC_TE_CR_V_010
@@ -879,7 +879,7 @@ cases:
       A CANCEL whose branch or sent-by differs from the INVITE's matches nothing and gets 481, as does one for no
       call; a matching CANCEL with an unknown Require or Proxy-Require still gets 200.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender for re-branched and stray CANCELs.
 
   - id: etsi-SIP_CC_TE_SM_V_001
@@ -895,7 +895,7 @@ cases:
       its own INVITE is pending gets 491, and one while an earlier re-INVITE is unanswered gets 500 with
       Retry-After.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The runner and the mock can't send re-INVITEs yet.
 
   - id: etsi-SIP_QC_TE_V_001
@@ -916,7 +916,7 @@ cases:
       The 200 copies From, Call-ID, CSeq and Via, adds or keeps the To tag, lists Allow, Accept, Accept-Encoding,
       Accept-Language and Supported, and carries an SDP body unless Accept excludes it.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The runner doesn't record OPTIONS response headers or bodies.
 
   - id: etsi-SIP_MG_TE_V_001
@@ -932,7 +932,7 @@ cases:
       compact forms, multi-value or several Via headers, a lowercase SIP version, or stray parameters in From and
       To, passes Kamailio and is answered 2xx by FreeSWITCH, call bridged.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender for the INVITE (sipgo normalises what it sends).
 
   - id: etsi-SIP_MG_TE_V_006
@@ -942,7 +942,7 @@ cases:
     component: freeswitch
     expect: A request with a method FreeSWITCH doesn't support gets 405 listing the methods it does in Allow.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: The runner can't send arbitrary methods yet.
 
   - id: etsi-SIP_MG_TE_V_014
@@ -955,7 +955,7 @@ cases:
       body shorter than Content-Length over UDP, gets 400 (from Kamailio, before FreeSWITCH); bytes past
       Content-Length are ignored.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender over UDP and TCP.
 
   - id: etsi-SIP_CC_TE_CE_V_034
