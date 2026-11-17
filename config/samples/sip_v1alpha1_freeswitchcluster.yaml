@@ -1,0 +1,39 @@
+apiVersion: sip.instruments.com/v1alpha1
+kind: FreeswitchCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: freeswitch-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: edge
+spec:
+  # One FreeSWITCH per node; keep one spare for updates and failover.
+  replicas: 3
+  # Any image with freeswitch, fs_cli and /bin/sh. Build and pin your own for production.
+  image: registry.example.com/freeswitch:1.10.12-1
+  nodeSelector:
+    node-role.example.com/sip-edge: "true"
+  tolerations:
+    - key: node-role.example.com/sip-edge
+      operator: Exists
+      effect: NoSchedule
+  sip:
+    port: 5060
+  rtp:
+    # Must match the edge node group's security group.
+    portRangeStart: 16384
+    portRangeEnd: 32768
+  externalAddress:
+    source: NodeExternalIP
+    required: true
+  config:
+    configMapRefs:
+      - name: edge-freeswitch-config
+  drain:
+    maxDrainSeconds: 7200
+  dispatcher:
+    setID: 1
+    configMapName: edge-dispatcher
+    transport: udp
+    # Optional: Kamailio's JSON-RPC endpoint (jsonrpcs over xhttp) for immediate removal and reloads.
+    jsonrpcURL: http://kamailio.telephony.svc:5060/RPC
+    reloadDelaySeconds: 75
