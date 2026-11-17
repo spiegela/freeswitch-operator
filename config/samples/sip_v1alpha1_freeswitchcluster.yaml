@@ -11,6 +11,10 @@ spec:
   # Any image with freeswitch, fs_cli and /bin/sh. This public image (FreeSWITCH 1.10.10, amd64 and arm64)
   # is the one sipbench tests against; build and pin your own once you need something it lacks.
   image: drachtio/drachtio-freeswitch-mrf:0.9.6@sha256:cb81acc1112990ca33693374f1de7443d44cf9c95e6ae6c02ba1edcee4b68bba
+  # The config below is mounted read-only, and this image's entrypoint edits its config (sed -i) before starting,
+  # so it would exit at once. Run the binary against the assembled config instead.
+  command: ["/usr/local/freeswitch/bin/freeswitch"]
+  args: ["-nonat", "-nf", "-nc", "-conf", "/usr/local/freeswitch/conf", "-log", "/tmp", "-db", "/tmp"]
   nodeSelector:
     node-role.example.com/sip-edge: "true"
   tolerations:

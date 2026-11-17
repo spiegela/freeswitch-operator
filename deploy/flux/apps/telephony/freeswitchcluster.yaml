@@ -10,6 +10,10 @@ spec:
   replicas: 3
   # Any image with freeswitch, fs_cli and /bin/sh. Build and pin your own for production.
   image: registry.example.com/freeswitch:1.10.12-1
+  # The config below is mounted read-only: run freeswitch against it directly, past any entrypoint that edits
+  # its config before starting (many public images do).
+  command: ["/usr/local/freeswitch/bin/freeswitch"]
+  args: ["-nonat", "-nf", "-nc", "-conf", "/usr/local/freeswitch/conf", "-log", "/tmp", "-db", "/tmp"]
   nodeSelector:
     node-role.example.com/sip-edge: "true"
   tolerations:
