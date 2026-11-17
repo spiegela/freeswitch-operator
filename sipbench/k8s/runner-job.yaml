@@ -33,7 +33,7 @@ spec:
             - {name: SIPBENCH_MOCK, value: "http://mockbackend:8080"}
             - {name: SIPBENCH_ESL, value: ""}             # set but empty: no event socket
             - {name: SIPBENCH_TARGET, value: "0.0.0.0:5090"}
-            - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma"}
+            - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma,proxy"}  # proxy: the edge address is Kamailio
             - {name: SIPBENCH_FLEET, value: "telephony/edge"}    # namespace/name; empty skips the fleet scenarios
             - {name: SIPBENCH_RUN, value: ""}             # a regexp picking scenarios by name; hack/kind.sh bench sets it
             - {name: SIPBENCH_JSON, value: ""}            # "-" prints the JSON report after the summary; hack/kind.sh bench sets it

@@ -121,6 +121,13 @@ func TestParseErrors(t *testing.T) {
 		"fleet unrequired":   "name: x\ncalls: [{id: a, to: b, expect: {status: 200}}]\nactions: [{rollFleet: {}}]",
 		"other node of self": "name: x\ncalls: [{id: a, to: b, expect: {status: 200, backend: {otherNodeThan: a}}}]",
 		"other node target":  "name: x\ncalls: [{id: a, to: b, expect: {status: 200, target: {otherNodeThan: a}}}]",
+		"raw no expect":      "name: x\nraw: [{id: r, message: OPTIONS}]",
+		"raw no message":     "name: x\nraw: [{id: r, expect: {status: 200}}]",
+		"raw no id":          "name: x\nraw: [{message: OPTIONS, expect: {status: 200}}]",
+		"raw duplicate":      "name: x\nraw: [{id: r, message: A, expect: {status: 200}}, {id: r, message: B, expect: {status: 200}}]",
+		"raw bad transport":  "name: x\nraw: [{id: r, transport: sctp, message: A, expect: {status: 200}}]",
+		"raw closed on udp":  "name: x\nraw: [{id: r, message: A, expect: {closed: true}}]",
+		"raw none and code":  "name: x\nraw: [{id: r, message: A, expect: {noResponse: true, status: 200}}]",
 	}
 	for name, y := range cases {
 		if _, err := Parse([]byte(y)); err == nil {

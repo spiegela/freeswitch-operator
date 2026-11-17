@@ -22,7 +22,8 @@ type Scenario struct {
 	Area string `yaml:"area,omitempty"`
 	// Requires lists capabilities the run must provide, or the scenario is skipped: a backend kind ("mock",
 	// "livekit-sip", "runtime"), "esl" (the runner can reach FreeSWITCH's event socket), or an edge feature
-	// such as "codec:g722", or "fleet" (the runner can act on the FreeSWITCH fleet; see Actions).
+	// such as "codec:g722", "fleet" (the runner can act on the FreeSWITCH fleet; see Actions), or "proxy" (the
+	// edge address is Kamailio, not a FreeSWITCH node).
 	Requires []string `yaml:"requires,omitempty"`
 	// Setup and Teardown are FreeSWITCH API commands run over the event socket around the scenario.
 	Setup    []string `yaml:"setup,omitempty"`
@@ -34,6 +35,8 @@ type Scenario struct {
 	// Options sends an OPTIONS request to the edge and checks the response code.
 	Options *Options `yaml:"options,omitempty"`
 	Calls   []Call   `yaml:"calls,omitempty"`
+	// Raw messages are sent to the edge byte for byte, one exchange after another, before the calls start.
+	Raw []Raw `yaml:"raw,omitempty"`
 	// Actions run one after another while the calls are up: the scenario's timeline.
 	Actions []Action `yaml:"actions,omitempty"`
 	// TimeoutMs bounds the whole scenario. Default 60000.
@@ -133,6 +136,47 @@ type EndExpect struct {
 	// OtherNodeThan names another call: this end must have received this call from a different edge node (INVITE
 	// source address) than that one. Backend only.
 	OtherNodeThan string `yaml:"otherNodeThan,omitempty"`
+}
+
+// Raw is one hand-written message sent to the edge, and what must come back.
+type Raw struct {
+	ID string `yaml:"id"`
+	// Transport is udp (default) or tcp.
+	Transport string `yaml:"transport,omitempty"`
+	// Message is the message as sent, after placeholders are filled in: {{edge}} (the edge's host:port as the
+	// runner reaches it), {{local}} / {{localHost}} / {{localPort}} (the runner's end of the connection),
+	// {{transport}} (UDP or TCP, for Via), {{branch}} (a fresh z9hG4bK branch), {{callId}}, {{tag}}, {{bench}}
+	// (an X-Sipbench-Call value, so the mock files the call under this exchange) and {{len}} (the body's length).
+	// Line ends become CRLF unless keepLineEnds is set.
+	Message      string `yaml:"message"`
+	KeepLineEnds bool   `yaml:"keepLineEnds,omitempty"`
+	// WaitMs is how long to wait for a final response, or for nothing to come (default 3000). Over UDP the
+	// message is resent after 500 ms, 1 s and 2 s while nothing has come back.
+	WaitMs int `yaml:"waitMs,omitempty"`
+	// HangupAfterMs: an INVITE answered 2xx is acknowledged, then hung up with BYE this much later (default 500).
+	HangupAfterMs int       `yaml:"hangupAfterMs,omitempty"`
+	Expect        RawExpect `yaml:"expect"`
+}
+
+// RawExpect is what must come back for a raw message. Give status, noResponse, or closed.
+type RawExpect struct {
+	// Status is the final response's code.
+	Status int `yaml:"status,omitempty"`
+	// NoResponse: nothing at all may come back within waitMs.
+	NoResponse bool `yaml:"noResponse,omitempty"`
+	// Closed: the edge closes the TCP connection within waitMs (after any response).
+	Closed bool `yaml:"closed,omitempty"`
+	// Provisional codes that must all arrive before the final response.
+	Provisional []int `yaml:"provisional,omitempty"`
+	// WithinMs bounds when the first response may arrive, from sending.
+	WithinMs int `yaml:"withinMs,omitempty"`
+	// Headers must be on the final response; an empty value means present with any value, otherwise the value
+	// must contain it (case-insensitively).
+	Headers map[string]string `yaml:"headers,omitempty"`
+	// Copied names headers the first response must carry exactly as the request did (Via, From, To...).
+	Copied []string `yaml:"copied,omitempty"`
+	// Backend checks what the mock recorded under {{bench}}: calls: 0 for a message that must go no further.
+	Backend *EndExpect `yaml:"backend,omitempty"`
 }
 
 // Action is one step of a scenario's timeline. It waits for its triggers, in the order listed (afterAnswered,
@@ -280,8 +324,11 @@ func (s *Scenario) Validate() error {
 	if s.Name == "" {
 		return fmt.Errorf("name is required")
 	}
-	if len(s.Calls) == 0 && s.Options == nil {
-		return fmt.Errorf("scenario %q has no calls and no options check", s.Name)
+	if len(s.Calls) == 0 && s.Options == nil && len(s.Raw) == 0 {
+		return fmt.Errorf("scenario %q has no calls, raw messages or options check", s.Name)
+	}
+	if err := s.validateRaw(); err != nil {
+		return err
 	}
 	ids := map[string]bool{}
 	for i, c := range s.Calls {
@@ -338,6 +385,41 @@ func (s *Scenario) Validate() error {
 	if s.Target != nil {
 		if err := script.Validate(s.Target.Steps, true); err != nil {
 			return fmt.Errorf("target: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Scenario) validateRaw() error {
+	ids := map[string]bool{}
+	for i, x := range s.Raw {
+		if x.ID == "" {
+			return fmt.Errorf("raw %d: id is required", i+1)
+		}
+		if ids[x.ID] {
+			return fmt.Errorf("raw %q: duplicate id", x.ID)
+		}
+		ids[x.ID] = true
+		if strings.TrimSpace(x.Message) == "" {
+			return fmt.Errorf("raw %q: message is required", x.ID)
+		}
+		switch x.Transport {
+		case "", "udp", "tcp":
+		default:
+			return fmt.Errorf("raw %q: transport must be udp or tcp", x.ID)
+		}
+		e := x.Expect
+		if e.Status == 0 && !e.NoResponse && !e.Closed {
+			return fmt.Errorf("raw %q: expect needs status, noResponse or closed", x.ID)
+		}
+		if e.NoResponse && (e.Status != 0 || len(e.Provisional) > 0 || len(e.Headers) > 0 || len(e.Copied) > 0) {
+			return fmt.Errorf("raw %q: noResponse can't be combined with expectations about a response", x.ID)
+		}
+		if e.Closed && x.Transport != "tcp" {
+			return fmt.Errorf("raw %q: closed is for tcp", x.ID)
+		}
+		if e.Backend != nil && e.Backend.OtherNodeThan != "" {
+			return fmt.Errorf("raw %q: otherNodeThan is for calls", x.ID)
 		}
 	}
 	return nil

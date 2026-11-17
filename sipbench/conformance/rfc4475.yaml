@@ -21,9 +21,14 @@ cases:
     expect: >
       Kamailio parses it as well formed (no 400), relays it to a FreeSWITCH node, and passes the unknown header
       fields (the oddly valued one included) and unknown parameters through unchanged; the call proceeds.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+    status: partial
+    scenarios: [raw-tortuous-invite]
+    gap: >
+      Over UDP the INVITE is accepted and relayed and the call completes, with two deviations checked as they
+      behave today, neither decided: Kamailio's core can't parse a CSeq folded across lines and drops that message
+      unanswered; and a From display name with escaped quotes gets through Kamailio, but FreeSWITCH can't build its
+      leg to the backend with it, so its dialplan's fallback answers 200 and the call never reaches the backend.
+      TCP isn't checked.
 
   - id: rfc4475-3.1.1.2
     ref: "3.1.1.2"
@@ -105,9 +110,12 @@ cases:
     expect: >
       Kamailio handles the REGISTER at the front of the datagram and ignores the trailing octets: no INVITE is
       processed, and a relayed REGISTER carries none of them.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender (UDP) in sipbench.
+    status: partial
+    scenarios: [raw-trailing-octets]
+    gap: >
+      Deviation, not decided: Kamailio answers the message at the front of the datagram 400 Content-Length
+      mis-match rather than handling it and ignoring the trailing octets. Nothing is relayed and no INVITE is
+      processed (checked). The check sends OPTIONS, not REGISTER.
 
   - id: rfc4475-3.1.1.9
     ref: "3.1.1.9"
@@ -191,9 +199,11 @@ cases:
     expect: >
       Over UDP Kamailio answers 400. Over TCP it waits for the rest, then closes the connection when none comes;
       nothing is relayed either way.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+    status: partial
+    scenarios: [raw-content-length]
+    gap: >
+      Over UDP Kamailio answers 400 and relays nothing (checked). TCP, where it should wait and then close,
+      isn't checked.
 
   - id: rfc4475-3.1.2.3
     ref: "3.1.2.3"
@@ -203,9 +213,11 @@ cases:
     expect: >
       Over UDP an error response (400) and the rest of the datagram discarded; over TCP the connection closed.
       Never relayed, no crash. The same for a non-numeric Content-Length.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+    status: partial
+    scenarios: [raw-content-length]
+    gap: >
+      Deviation, not decided: over UDP Kamailio's core drops a negative or non-numeric Content-Length without
+      answering (no 400); nothing is relayed (checked). TCP isn't checked.
 
   - id: rfc4475-3.1.2.4
     ref: "3.1.2.4"
@@ -340,9 +352,11 @@ cases:
     area: parsing
     component: proxy
     expect: Kamailio answers 505 Version Not Supported and relays nothing.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+    status: partial
+    scenarios: [raw-unknown-version]
+    gap: >
+      Deviation, not decided: Kamailio's core can't parse a request line with SIP/7.0 and drops it, over UDP
+      and TCP, instead of answering 505. Nothing is relayed and Kamailio keeps answering (both checked).
 
   - id: rfc4475-3.1.2.17
     ref: "3.1.2.17"
@@ -395,9 +409,12 @@ cases:
     area: parsing
     component: proxy
     expect: Kamailio doesn't break and answers 400; nothing reaches FreeSWITCH.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+    status: partial
+    scenarios: [raw-missing-headers]
+    gap: >
+      Deviation, not decided: Kamailio 6.0's core drops a request missing Call-ID, From or To before the
+      routing script runs, so no 400 comes back. It doesn't break: nothing reaches FreeSWITCH and it answers
+      the next request (both checked).
 
   - id: rfc4475-3.3.2
     ref: "3.3.2"
@@ -405,10 +422,11 @@ cases:
     area: parsing
     component: proxy
     expect: >
-      Parsed as well formed; Kamailio answers 416 and doesn't fall back to routing on the To header.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+      Parsed as well formed; Kamailio answers 416 and doesn't fall back to routing on the To header. The
+      config matches the request line's scheme itself (sip, sips and tel pass), since a URI Kamailio can't
+      parse would otherwise get sanity's 400.
+    status: covered
+    scenarios: [raw-unknown-scheme]
 
   - id: rfc4475-3.3.3
     ref: "3.3.3"
@@ -438,12 +456,9 @@ cases:
     area: parsing
     component: proxy
     expect: >
-      Kamailio answers 420 with Unsupported listing the Proxy-Require options, and nothing reaches a node. The
-      example config now runs the Proxy-Require sanity check (verified by hand: 420 with Unsupported naming the
-      extension); no scenario checks it yet.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+      Kamailio answers 420 with Unsupported listing the Proxy-Require options, and nothing reaches a node.
+    status: covered
+    scenarios: [raw-proxy-require]
 
   - id: rfc4475-3.3.6
     ref: "3.3.6"
@@ -486,9 +501,11 @@ cases:
     expect: >
       Over UDP an error response (400) and the rest of the datagram discarded; over TCP the connection closed.
       Nothing relayed.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+    status: partial
+    scenarios: [raw-content-length]
+    gap: >
+      Deviation, not decided: over UDP Kamailio's core drops the message without answering (no 400); nothing
+      is relayed (checked). TCP isn't checked.
 
   - id: rfc4475-3.3.10
     ref: "3.3.10"
@@ -508,9 +525,8 @@ cases:
     area: parsing
     component: proxy
     expect: Legal message; Kamailio doesn't relay it and answers 483.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+    status: covered
+    scenarios: [raw-max-forwards-zero]
 
   - id: rfc4475-3.3.12
     ref: "3.3.12"
@@ -568,6 +584,5 @@ cases:
     expect: >
       Accepted: Kamailio matches the transaction by RFC 2543 rules, adds Max-Forwards: 70, takes the body to the end
       of the UDP datagram, and relays it; the call completes and later requests in it match.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+    status: covered
+    scenarios: [raw-rfc2543-invite]

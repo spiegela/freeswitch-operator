@@ -1,0 +1,35 @@
+name: raw-100-trying
+area: proxy-validation
+description: >
+  Kamailio answers an INVITE with 100 Trying at once, before any node does, copying Via, From, To (no tag added),
+  Call-ID and CSeq from the request; the call then completes and is hung up.
+requires: [proxy, mock]
+raw:
+  - id: invite
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: "sipbench" <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 7 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0 101
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:101 telephone-event/8000
+    expect:
+      status: 200
+      provisional: [100]
+      withinMs: 200
+      copied: [Via, From, To, Call-ID, CSeq]
+      backend: {answered: true}

@@ -162,6 +162,7 @@ type Result struct {
 	Failures []string      `json:"failures,omitempty"`
 	Duration time.Duration `json:"durationNs"`
 	Calls    []CallResult  `json:"calls,omitempty"`
+	Raw      []RawResult   `json:"raw,omitempty"`
 	// Timeline is what the scenario's actions did, when, as "+12.3s action: what happened".
 	Timeline []string `json:"timeline,omitempty"`
 }
@@ -249,6 +250,15 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 			fail("OPTIONS: %v", err)
 		case code != s.Options.ExpectStatus:
 			fail("OPTIONS: got %d, want %d", code, s.Options.ExpectStatus)
+		}
+	}
+
+	// Raw messages, one exchange at a time, before the calls.
+	for _, x := range s.Raw {
+		rr, fs := r.rawExchange(ctx, x, fmt.Sprintf("%s-%s-%s-%d", key, s.Name, x.ID, r.seq.Add(1)))
+		res.Raw = append(res.Raw, rr)
+		for _, f := range fs {
+			fail("raw %s: %s", x.ID, f)
 		}
 	}
 

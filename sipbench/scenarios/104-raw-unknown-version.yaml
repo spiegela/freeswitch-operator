@@ -1,0 +1,48 @@
+name: raw-unknown-version
+area: proxy-validation
+description: >
+  A request naming a SIP version other than 2.0 in its request line goes no further, over UDP and TCP, and
+  Kamailio goes on answering. RFC 3261 would have it answered 505 Version Not Supported; Kamailio's core parser
+  drops the message instead, before the routing script runs. That gap is recorded in the conformance record.
+requires: [proxy, mock]
+raw:
+  - id: udp
+    message: |
+      INVITE sip:agent@{{edge}} SIP/7.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    waitMs: 2000
+    expect: {noResponse: true, backend: {calls: 0}}
+  - id: tcp
+    transport: tcp
+    message: |
+      INVITE sip:agent@{{edge}};transport=tcp SIP/7.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}};transport=tcp>
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    waitMs: 2000
+    expect: {noResponse: true, backend: {calls: 0}}
+  - id: still-up
+    message: |
+      OPTIONS sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 OPTIONS
+      Content-Length: 0
+    expect: {status: 200}

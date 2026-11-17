@@ -1,0 +1,56 @@
+name: raw-max-forwards-zero
+area: proxy-validation
+description: >
+  Requests arriving with Max-Forwards 0 go no further: Kamailio answers 483 itself to an INVITE (over UDP and
+  TCP), a BYE inside a dialog, and a CANCEL, and the INVITE never reaches the backend.
+requires: [proxy, mock]
+raw:
+  - id: invite-udp
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 0
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    expect: {status: 483, backend: {calls: 0}}
+  - id: invite-tcp
+    transport: tcp
+    message: |
+      INVITE sip:agent@{{edge}};transport=tcp SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 0
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}};transport=tcp>
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    expect: {status: 483, backend: {calls: 0}}
+  - id: bye-in-dialog
+    message: |
+      BYE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 0
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>;tag=elsewhere
+      Call-ID: {{callId}}
+      CSeq: 2 BYE
+      Content-Length: 0
+    expect: {status: 483}
+  - id: cancel
+    message: |
+      CANCEL sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 0
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 CANCEL
+      Content-Length: 0
+    expect: {status: 483}

@@ -23,9 +23,8 @@ cases:
     expect: >
       Kamailio answers 416 itself to an INVITE, an unmatched CANCEL or a BYE whose Request-URI scheme it doesn't
       support, and nothing reaches a FreeSWITCH node.
-    status: planned
-    milestone: M2b
-    gap: sipbench can't put a non-SIP scheme in the Request-URI; needs a raw-message sender.
+    status: covered
+    scenarios: [raw-unknown-scheme]
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_002
     ref: SIP_CC_PR_MP_RQ_V_002, SIP_CC_PR_MP_RQ_V_032, SIP_CC_PR_MP_RQ_V_050
@@ -33,9 +32,8 @@ cases:
     area: error-handling
     component: proxy
     expect: An INVITE, unmatched CANCEL or BYE arriving with Max-Forwards 0 gets 483 from Kamailio and goes no further.
-    status: planned
-    milestone: M2b
-    gap: The runner can't set Max-Forwards on its requests yet.
+    status: covered
+    scenarios: [raw-max-forwards-zero]
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_003
     ref: SIP_CC_PR_MP_RQ_V_003, SIP_CC_PR_MP_RQ_V_033, SIP_CC_PR_MP_RQ_V_051
@@ -44,14 +42,10 @@ cases:
     component: proxy
     expect: >
       Kamailio answers 420 with an Unsupported header listing the unknown option tags, instead of relaying the
-      request. The example config's sanity mask now includes the Proxy-Require check: verified by hand, a request
-      with Proxy-Require: frobnicate got 420 with Unsupported: frobnicate and reached no node. No scenario checks
-      it yet.
-    status: planned
-    milestone: M2b
-    gap: >
-      Likely runnable on kind with today's scenario fields (a Proxy-Require request header, expected status and
-      responseHeaders); not written yet. Under compose there is no Kamailio to test.
+      request. raw-proxy-require checks it over UDP and TCP on kind; under compose there is no Kamailio to
+      test.
+    status: covered
+    scenarios: [raw-proxy-require]
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_004
     ref: SIP_CC_PR_MP_RQ_V_004, SIP_CC_PR_MP_RQ_V_019, SIP_CC_PR_MP_RQ_V_034, SIP_CC_PR_MP_RQ_V_052
@@ -174,14 +168,12 @@ cases:
     area: call-release
     component: proxy
     expect: >
-      RFC 3261 (16.10) has a proxy relay such a CANCEL statelessly (with Route, Max-Forwards and Via handled as
-      for any request), and these purposes expect that. Decided: Kamailio answers it 481 itself and relays
+      RFC 3261 (16.10) has a proxy relay such a CANCEL statelessly (with Route, Max-Forwards and Via handled
+      as for any request), and these purposes expect that. Decided: Kamailio answers it 481 itself and relays
       nothing, a deliberate deviation, since without the INVITE there is no node to send it to; so it never
-      reaches a node with no matching INVITE and never loops. The relaying purposes fail on purpose. The example
-      config does this now (verified by hand: 481; it was dropped unanswered before); no scenario checks it yet.
-    status: planned
-    milestone: M2b
-    gap: Needs a CANCEL the runner sends without a pending INVITE; sipgo only cancels its own transactions.
+      reaches a node with no matching INVITE and never loops. The relaying purposes fail on purpose.
+    status: covered
+    scenarios: [raw-stray-requests]
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_029
     ref: SIP_CC_PR_MP_RQ_V_029, SIP_CC_PR_MP_RQ_V_065, SIP_CC_PR_TR_SE_V_029
@@ -189,14 +181,12 @@ cases:
     area: error-handling
     component: proxy
     expect: >
-      ETSI expects relaying to the Request-URI, and 481 for a BYE that names no dialog. Decided: Kamailio relays
-      nothing to an arbitrary Request-URI; an in-dialog request without its Route gets 481 Call/Transaction Does
-      Not Exist (it got 404 before), and such an ACK is dropped silently, never answered. The relaying purpose
-      fails on purpose. The example config does this now (verified by hand with a stray BYE: 481); no scenario
-      checks it yet.
-    status: planned
-    milestone: M2b
-    gap: Needs a hand-built in-dialog BYE and ACK.
+      ETSI expects relaying to the Request-URI, and 481 for a BYE that names no dialog. Decided: Kamailio
+      relays nothing to an arbitrary Request-URI; an in-dialog request without its Route gets 481
+      Call/Transaction Does Not Exist, and such an ACK is dropped silently, never answered. The relaying
+      purpose fails on purpose.
+    status: covered
+    scenarios: [raw-stray-requests]
 
   - id: etsi-SIP_CC_PR_MP_RQ_I_001
     ref: SIP_CC_PR_MP_RQ_I_001, SIP_CC_PR_MP_RQ_I_002, SIP_CC_PR_MP_RQ_I_003, SIP_CC_PR_MP_RQ_I_004
@@ -221,9 +211,12 @@ cases:
     expect: >
       A stray response whose top Via is Kamailio's loses that Via and goes to the next Via; one whose top Via isn't
       Kamailio's, or that has no further Via, is dropped.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender to inject responses with chosen Via headers.
+    status: partial
+    scenarios: [raw-stray-response]
+    gap: >
+      raw-stray-response checks the dropped half: a stray 200 whose top Via isn't Kamailio's gets nothing back
+      and Kamailio still answers afterwards. The forwarded half (top Via Kamailio's, passed on to the next
+      Via) isn't checked: it needs a Via naming the proxy's own address in the message.
 
   - id: etsi-SIP_CC_PR_MP_RS_V_005
     ref: >-
@@ -337,9 +330,12 @@ cases:
     expect: >
       Kamailio sends 100 Trying for each INVITE, copying From, Call-ID, CSeq and Via, keeping To as received (no
       tag added), and echoing any Timestamp.
-    status: planned
-    milestone: M2b
-    gap: The runner doesn't record provisional responses or their headers.
+    status: partial
+    scenarios: [raw-100-trying]
+    gap: >
+      raw-100-trying checks the 100 comes within 200 ms with Via, From, To, Call-ID and CSeq as sent (Via
+      apart from the received parameter Kamailio adds when the source address differs). The Timestamp echo
+      isn't checked.
 
   - id: etsi-SIP_CC_PR_TR_SE_V_006
     ref: >-
@@ -451,9 +447,8 @@ cases:
     expect: >
       Mixed-case header names, folded values with extra leading whitespace, a mixed-case branch parameter name,
       compact header names and a lowercase SIP version in the request line don't stop Kamailio relaying the INVITE.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender; sipgo normalises what it sends.
+    status: covered
+    scenarios: [raw-lexical-variants]
 
   - id: etsi-SIP_MG_PR_V_012
     ref: SIP_MG_PR_V_012, SIP_MG_PR_V_013
@@ -485,9 +480,12 @@ cases:
     area: parsing
     component: proxy
     expect: Kamailio answers 400 and nothing reaches FreeSWITCH.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender.
+    status: partial
+    scenarios: [raw-missing-headers]
+    gap: >
+      Deviation, not decided: Kamailio 6.0's core drops a request missing Call-ID before the routing script
+      runs, so no 400 comes back; nothing reaches FreeSWITCH and Kamailio keeps answering (both checked).
+      Accepting the silent drop, or answering 400, is for the team to decide.
 
   - id: etsi-SIP_CC_PR_MP_RQ_V_067
     ref: >-

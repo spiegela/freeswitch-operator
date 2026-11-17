@@ -1,0 +1,82 @@
+name: raw-tortuous-invite
+area: proxy-validation
+description: >
+  A legal but tortuous INVITE: odd whitespace around colons and separators, header names in mixed case, folded
+  values, unknown header fields (one with an odd value), and unknown parameters on the Request-URI, Via, From and
+  Contact. Kamailio parses it as well formed and relays it; the call completes, and an unknown X- header passes
+  through to the backend unchanged. Two legal forms don't get through, each checked as it behaves today and
+  recorded as a deviation in the conformance record: a CSeq folded across two lines, which Kamailio's core parser
+  drops without an answer; and a From display name with escaped quotes, which Kamailio relays but FreeSWITCH
+  can't carry onto its leg to the backend ("Error creating HANDLE"), so its dialplan's fallback answers 200 itself
+  and the call never reaches the backend.
+requires: [proxy, mock]
+raw:
+  - id: invite
+    message: |
+      INVITE sip:agent@{{edge}};unknownparam=yes;novalue SIP/2.0
+      VIA  :   SIP/2.0/{{transport}}   {{local}};branch={{branch}};x-odd=1
+      Max-Forwards :70
+      From:"sip bench"   <sip:sipbench@{{localHost}}>;tag={{tag}};x-from-param=value
+      To  : <sip:agent@{{edge}}>
+      Call-ID   :   {{callId}}
+      cseq   :1    INVITE
+      Contact: <sip:sipbench@{{local}};x-contact=1>;expires=60;x-unknown
+      X-Sipbench-Call: {{bench}}
+      X-Sipbench-Odd:   keep  this    spacing ; and=this
+      NewFangledHeader: newfangled value
+        continued newfangled value
+      UnknownHeaderWithUnusualValue: ;;,,;;,;
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0 101
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:101 telephone-event/8000
+    expect:
+      status: 200
+      backend:
+        answered: true
+        headers: {X-Sipbench-Odd: "keep  this    spacing ; and=this"}
+  - id: cseq-folded
+    waitMs: 2000
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1
+       INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    expect: {noResponse: true, backend: {calls: 0}}
+  - id: display-name-escaped-quotes
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: "sip \"bench\"" <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    # Today's behaviour, a deviation: FreeSWITCH answers itself and the backend never sees the call.
+    expect: {status: 200, backend: {calls: 0}}
