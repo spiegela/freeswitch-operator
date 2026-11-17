@@ -386,7 +386,7 @@ FreeSWITCH configuration, and sipbench's mock backend behind it.
 
 ```sh
 make kind-up         # create the cluster (about 6 GB of Docker memory)
-make kind-deploy     # build and load the images, install the operator, apply deploy/kind, wait for Ready
+make kind-deploy     # build and load the images, install the operator, apply deploy/kind, wait for the fleet
 make kind-bench      # run sipbench through Kamailio; hack/kind.sh bench <regexp> runs a subset
 hack/kind.sh status  # members, the dispatcher list, and what each Kamailio has loaded
 make kind-down
@@ -399,7 +399,8 @@ needs the event socket of one particular node). M1 was also checked by hand on t
   drained, the operator held the other two until it finished, then replaced them one at a time.
 - **Node drain with a live call:** `kubectl drain` on the call's node made its pod unready and took it out of the
   dispatcher list at once; a new call placed meanwhile went to another node; the drain finished when the call ended.
-- **Config change:** editing a referenced ConfigMap rolled the fleet one node at a time.
+- **Config change:** editing a referenced ConfigMap made a new snapshot and rolled the fleet one node at a time
+  (about 35 s). Pods not yet replaced never saw the edit, and the old snapshot was deleted once no pod used it.
 
 ## Decisions
 
