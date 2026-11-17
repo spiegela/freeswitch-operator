@@ -48,8 +48,8 @@ type configLayout struct {
 	hash      string
 }
 
-// configError is a problem with the referenced configuration the user has to fix: a missing ConfigMap or two
-// references claiming the same path. The operator reports it and leaves the running fleet alone.
+// configError is a problem with the referenced configuration the user has to fix: a missing or empty ConfigMap,
+// or two references claiming the same path. The operator reports it and leaves the running fleet alone.
 type configError struct{ msg string }
 
 func (e *configError) Error() string { return e.msg }
@@ -186,12 +186,13 @@ func layoutConfig(fsc *sipv1alpha1.FreeswitchCluster, cms map[string]*corev1.Con
 		}
 		dir := configRefDir(ref)
 		keys := configMapKeys(cm)
+		if len(keys) == 0 {
+			// Almost always an accident (a generator or template gone wrong, an object cleared by hand), and rolling
+			// it out could remove a whole directory, such as every SIP profile. Remove the reference instead.
+			return out, &configError{fmt.Sprintf("ConfigMap %s has no keys; remove it from configMapRefs if that is intended", ref.Name)}
+		}
 		contentHash := hashOf(cm)
 		fmt.Fprintf(h, "ref\x00%s\x00%s\x00", dir, contentHash)
-		if len(keys) == 0 {
-			// Nothing to mount. (A projection without items would mean every key at the volume's root.)
-			continue
-		}
 
 		items := make([]corev1.KeyToPath, 0, len(keys))
 		for _, k := range keys {

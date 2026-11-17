@@ -213,8 +213,14 @@ func TestBuildStatefulSet(t *testing.T) {
 	if c.ReadinessProbe == nil || !strings.HasSuffix(c.ReadinessProbe.Exec.Command[1], readyScriptName) {
 		t.Fatal("readiness must run the ready script")
 	}
+	if c.StartupProbe == nil || !strings.HasSuffix(c.StartupProbe.Exec.Command[1], startupScriptName) {
+		t.Fatal("startup must run the startup script")
+	}
+	if got := c.StartupProbe.PeriodSeconds * c.StartupProbe.FailureThreshold; got != startupGraceSeconds {
+		t.Fatalf("startup window %ds, want %ds", got, startupGraceSeconds)
+	}
 	if c.LivenessProbe != nil {
-		t.Fatal("no liveness probe in v0")
+		t.Fatal("no liveness probe: a false positive drops every call on the node")
 	}
 	env := map[string]string{}
 	for _, e := range c.Env {
@@ -253,6 +259,9 @@ func TestScriptsReferenceSharedPaths(t *testing.T) {
 	}
 	if !strings.Contains(readyScript, externalAddrFile) {
 		t.Fatal("ready script must check the external address file")
+	}
+	if !strings.Contains(readyScript, startupScriptName) || !strings.Contains(buildScriptsConfigMap(testCluster()).Data[startupScriptName], "sofia status") {
+		t.Fatal("ready script must run the startup checks, shipped beside it")
 	}
 	if !strings.Contains(drainScript, "fsctl pause inbound") || !strings.Contains(drainScript, "show calls count") {
 		t.Fatal("drain script must pause inbound calls and wait on the call count")

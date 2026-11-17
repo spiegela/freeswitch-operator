@@ -127,8 +127,16 @@ The operator renders a StatefulSet with:
   otherwise);
 - `updateStrategy: OnDelete`, so the operator, not the StatefulSet controller, decides when a pod is replaced;
 - `terminationGracePeriodSeconds` set from `drain.maxDrainSeconds`, so a draining pod is not killed early;
-- a `preStop` hook and a readiness probe from scripts the operator ships in a ConfigMap (below), so any image with
-  `freeswitch` and `fs_cli` works;
+- a `preStop` hook, a startup probe and a readiness probe from scripts the operator ships in a ConfigMap (below),
+  so any image with `freeswitch` and `fs_cli` works. **Startup** passes once FreeSWITCH is ready with a SIP profile
+  running on `sip.port`, the port Kamailio sends to; FreeSWITCH calls itself ready even with no profile loaded. A pod
+  that doesn't get there within two minutes is restarted, which costs nothing: it has never been ready, so it holds
+  no calls. **Readiness** adds "not draining" and, when required, "knows its external address", and keeps
+  re-checking the profile, so a profile that stops later takes the node out of dispatch without touching its calls.
+  **No liveness probe:** a failure restarts the container and drops every call on the node, and `fs_cli` can be
+  slow under load, so a false positive at peak would do more harm than the hang it guards against. A crash needs no
+  probe, since the process exits and the container restarts. (Opt-in hang detection with a lax default is planned
+  for M2.)
 - a downward-API volume of the pod's annotations, through which the operator hands the pod its external address
   (loop 4).
 
@@ -153,7 +161,8 @@ Kamailio's own OPTIONS probing (`ds_ping_interval`) stays on as a backstop, and 
 - `preStop` marks the pod as draining (readiness fails at once, so loop 2 removes it from dispatch), runs
   `fsctl pause inbound`, and waits until `show calls count` reaches zero or `maxDrainSeconds` passes.
 - **Rolling update:** when the pod template changes, the operator replaces one pod at a time, only while every
-  other pod is ready and none is terminating: delete, wait for the replacement to pass readiness, move on.
+  other pod is ready and none is terminating: delete, wait for the replacement to pass readiness, move on. A
+  replacement that never gets its SIP profile up stops the roll there, with the rest of the fleet still serving.
 - **Node drain, autoscaler consolidation or node expiry:** eviction respects the PodDisruptionBudget, and the same
   `preStop` drain runs under the same long grace period. (Planned: the operator sets `karpenter.sh/do-not-disrupt`
   on pods with live calls; to be verified against EKS Auto Mode before we rely on it.)
@@ -186,8 +195,10 @@ never mount the ConfigMaps themselves: the kubelet would push an edit into every
 of any drain. The operator copies each one into an immutable ConfigMap named by a hash of its contents
 (`<cluster>-config-<hash>`), and each revision of the pod template mounts its own copies. An edit therefore makes a
 new template, which loop 3 rolls through one drained node at a time, while pods not yet replaced keep the files they
-started with. Copies no template or pod uses any more are deleted. A missing ConfigMap, or two claiming the same
-path, marks the fleet `Degraded`, leaves the running pods alone and pauses any roll in progress.
+started with. Copies no template or pod uses any more are deleted. A missing or empty ConfigMap, or two claiming
+the same path, marks the fleet `Degraded`, leaves the running pods alone and pauses any roll in progress. (An empty
+one is nearly always an accident, and rolling it out could remove a whole directory, such as every SIP profile; to
+ship an empty directory on purpose, drop the reference.)
 Later, typed resources for peers (loop 9) and ACLs, reloaded with `reloadxml` and `reloadacl` without a restart.
 
 ### 7. Kamailio as a managed resource (M2)
@@ -308,7 +319,7 @@ which version runs where.
 | --- | --- | --- |
 | M0 | Repository, plan, operator scaffold, sipbench mock backend and runner running against FreeSWITCH in Docker | done |
 | M1 | v0 operator on kind: fleet, dispatcher list, drains and rolling updates; sipbench runs against it ([how](#the-edge-on-kind)) | done |
-| M2 | `KamailioCluster`: managed Kamailio, dispatcher changes to every pod; sipbench fleet scenarios (drain mid-call, rolling update with live calls, run as scenarios rather than by hand), with call records kept per run so concurrent runners don't clear each other's | planned |
+| M2 | `KamailioCluster`: managed Kamailio, dispatcher changes to every pod; sipbench fleet scenarios (drain mid-call, rolling update with live calls, run as scenarios rather than by hand), with call records kept per run so concurrent runners don't clear each other's; opt-in liveness (hang detection) with a lax default | planned |
 | M3 | `SIPAddressPool` with an AWS Elastic IP provider, shared by both fleets; edge node group on EKS | planned |
 | M4 | v1 failover with fencing and call recovery | planned |
 | M5 | Typed peer and ACL resources (loop 9), outbound registrations when a peer needs them (loop 8), sipbench peer mocks; reload without restart | planned |
