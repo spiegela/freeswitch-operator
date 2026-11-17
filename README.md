@@ -1,15 +1,14 @@
-# freeswitch-operator
+# freeSWITCH Operator
 
 A Kubernetes operator for running a fleet of FreeSWITCH nodes as a SIP edge (an SBC) behind a Kamailio proxy, plus
-**sipbench**, a SIP test bench that proves every call flow against that edge before real traffic moves onto it.
+**sipbench**, a SIP test bench that call flows against that edge before real traffic moves onto it.
 
-> **Status: early, under construction (v0).** The API is `v1alpha1` and will change. Nothing here has carried a
-> production call yet. The plan below is the design we are building toward; the [milestones](#milestones) say what
-> exists today.
+> **Status: early, under construction (v0).** The API is `v1alpha1` and will change. The plan below is the design we
+> are building toward; the [milestones](#milestones) describe what is in place today.
 
 ## Why this exists
 
-FreeSWITCH runs well on Kubernetes once a few non-default things are true, and every team that does it rebuilds
+FreeSWITCH runs well on Kubernetes once a few non-default things are true, and every team that does it must rebuild
 the same pieces by hand:
 
 - **Media needs the node's own network.** Overlay pod networking breaks RTP: signaling succeeds and audio silently
@@ -230,7 +229,7 @@ peer (loop 9).
     and a test call decide which order a carrier needs. If the registering pod fails instead of draining, the
     operator registers from another pod as soon as it sees the pod isn't ready. Registrations use a short expiry,
     so a carrier stops sending to a dead contact soon, even if nothing re-registers.
-  - `perPod` registers from every pod, so the carrier can fail over by itself. It's turned on per peer, once
+  - `perReplica` registers from every pod, so the carrier can fail over by itself. It's turned on per peer, once
     sipbench and a test call against that carrier show it accepts several contacts.
 
 ### 9. Per-peer behaviour (M5)
@@ -271,7 +270,7 @@ peer. Behaviours peers need in practice, and the Kamailio feature that covers ea
 ### 10. Peers on the inside network (M6)
 
 Some peers reach the edge over a VPN into the VPC rather than over the internet, with no NAT on either side. For
-them, both fleets have to use the nodes' inside addresses, for signaling and media alike. The public address that
+them, both fleets have to use the nodes' internal addresses, for signaling and media alike. The public address that
 FreeSWITCH advertises (loop 4) would send their RTP somewhere they can't reach.
 - **FreeSWITCH:** a second SIP profile on the node's private address, advertising that address in SDP (no
   `ext-rtp-ip`). The operator publishes the fleet's members on that profile as a second dispatcher set.
@@ -370,22 +369,19 @@ sipbench has its own instructions in [`sipbench/README.md`](sipbench/README.md).
 
 ## Decisions
 
-1. **The operator runs Kamailio too**, as a `KamailioCluster` resource ([loop 7](#7-kamailio-as-a-managed-resource-m2)).
+1. **The operator runs a Kamailio proxy**, as a `KamailioCluster` resource ([loop 7](#7-kamailio-as-a-managed-resource-m2)).
    One operator describes the whole edge.
-2. **No media relay for now: each FreeSWITCH node advertises its own fixed public address.** In the Kamailio and
-   FreeSWITCH communities, rtpengine in front of FreeSWITCH is a *sometimes* pattern, not the default. FreeSWITCH
-   already anchors media, so it only needs a routable address it can advertise (`ext-rtp-ip`). rtpengine earns its
-   place when FreeSWITCH must stay on private addresses or media needs per-direction control, and it puts another
-   component in the media path. It stays an option for later.
-3. **Registrations live on Kamailio** ([loop 8](#8-outbound-registrations-m5-when-a-peer-needs-them)), whose
+2. **Media relay deferred for now: each FreeSWITCH node advertises its own fixed public address.** In the Kamailio and
+   FreeSWITCH communities, rtpengine may be used when FreeSWITCH must stay on private addresses or media needs per-direction
+   control. FreeSWITCH already anchors media, so it only needs a routable address it can advertise (`ext-rtp-ip`). `rtpengine`
+   maybe be added later as needed.
+4. **Registrations live on Kamailio** ([loop 8](#8-outbound-registrations-m5-when-a-peer-needs-them)), whose
    address is fixed, with the mode chosen per peer: one pod at a time by default, every pod once a carrier is shown
    to accept several contacts. **Per-peer behaviour is data in one Kamailio fleet** ([loop 9](#9-per-peer-behaviour-m5));
    a second fleet is for isolation only.
-4. **Apache 2.0 from the start** ([`LICENSE`](LICENSE)). The repository is private; whether and when to publish
-   is decided separately, and the license can change before then if that decision says so.
 5. **Start with an off-the-shelf public FreeSWITCH image**: `drachtio/drachtio-freeswitch-mrf:0.9.6` (FreeSWITCH
    1.10.10, amd64 and arm64), pinned by digest in [`sipbench`](sipbench/compose.yaml) and the sample. It passes the
-   bench and the operator's ready and drain scripts. It has no G.722, so that scenario is skipped. We build our own
+   bench and the operator's ready and drain scripts. It has no G.722, so that scenario is skipped. We maintain our own
    only when we need something it lacks.
 
 ## Open questions
