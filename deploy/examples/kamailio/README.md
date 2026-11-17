@@ -19,8 +19,9 @@ dispatcher module. The operator keeps the dispatcher list in step with the fleet
 - JSON-RPC over HTTP only on the internal port (`RPC_PORT`, 5070). Keep that port closed in the security group.
 
 It also inserts `Max-Forwards: 70` when missing and refuses requests that require an extension it doesn't support
-(`420`). Transactions wait RFC 3261's 32 s, except a new call sent to a FreeSWITCH node, which fails over to the next
-node after `DS_FR_TIMER` (5 s) without any answer. A `503` from the last node is passed on as `503`, the same answer a
+(`420`). Requests it relays onward (to a peer, or along a dialog) wait RFC 3261's 32 s. A new call sent to a FreeSWITCH
+node fails over to the next node after `DS_FR_TIMER` (5 s) without any answer, and the dispatcher's probes use the
+same 5 s, so a dead node goes inactive in about 25 s. A `503` from the last node is passed on as `503`, the same answer a
 peer gets when no node is up (Kamailio would otherwise turn it into `500`). The conformance record
 (`sipbench/conformance`) tracks these against the standards.
 

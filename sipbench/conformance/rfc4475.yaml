@@ -31,9 +31,8 @@ cases:
     area: parsing
     component: proxy
     expect: >
-      Parsed without error. As a new request from a peer it goes to a FreeSWITCH node, whose 501 with Allow comes
-      back (or Kamailio answers 404/501 itself); the method, branch, Call-ID and quoted strings are relayed byte
-      for byte.
+      Parsed without error. As a new request from a peer (no To tag) it goes to a FreeSWITCH node, whose 501 with
+      Allow comes back; the method, branch, Call-ID and quoted strings are relayed byte for byte.
     status: planned
     milestone: M2
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
@@ -71,7 +70,7 @@ cases:
     component: proxy
     expect: >
       Parsed as well formed; Kamailio treats the method as unknown, not as REGISTER, and sees two Contact values,
-      not three. The caller gets 501 from the node (or 404/501 from Kamailio).
+      not three. As a new request it goes to a node, and the caller gets the node's 501.
     status: planned
     milestone: M2
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
@@ -439,9 +438,9 @@ cases:
     area: parsing
     component: proxy
     expect: >
-      Kamailio answers 420 with Unsupported listing the Proxy-Require options. The example config doesn't run the
-      Proxy-Require sanity check, so today the request reaches a node, which would answer 420 listing the
-      Require options instead.
+      Kamailio answers 420 with Unsupported listing the Proxy-Require options, and nothing reaches a node. The
+      example config now runs the Proxy-Require sanity check (verified by hand: 420 with Unsupported naming the
+      extension); no scenario checks it yet.
     status: planned
     milestone: M2
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
@@ -567,7 +566,7 @@ cases:
     area: parsing
     component: proxy
     expect: >
-      Accepted: Kamailio matches the transaction by RFC 2543 rules, adds Max-Forwards, takes the body to the end
+      Accepted: Kamailio matches the transaction by RFC 2543 rules, adds Max-Forwards: 70, takes the body to the end
       of the UDP datagram, and relays it; the call completes and later requests in it match.
     status: planned
     milestone: M2

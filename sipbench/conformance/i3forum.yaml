@@ -290,7 +290,10 @@ cases:
       refused at once with a final response the carrier can reroute on (e.g. 503 or 404 with a Reason), not left to time out.
     status: planned
     milestone: M2
-    gap: No scenario empties the dispatch set; per-peer number provisioning arrives with M5.
+    gap: >
+      With no node active Kamailio answers 503 at once, and when every node answers 503 the carrier now gets that
+      503 too (it got 500 before); neither carries a Reason yet. No scenario empties the dispatch set; per-peer
+      number provisioning arrives with M5.
 
   - id: i3f-7.2.7
     ref: "7.2.7"
@@ -405,10 +408,11 @@ cases:
     component: edge
     expect: >
       OPTIONS from a carrier get 200 while the edge can take calls, and 503 when it can't (fleet full, every node
-      draining or down), so the carrier routes elsewhere.
+      draining or down), so the carrier routes elsewhere. Kamailio answers these itself, whatever host they
+      name: 200 with Allow, or 503 when no node is active (both verified by hand).
     status: partial
     scenarios: [options]
-    gap: Only the 200 case is checked; Kamailio answers OPTIONS itself, and nothing checks it says 503 with no node in dispatch.
+    gap: No scenario automates the 503 case yet.
 
   - id: i3f-7.2.16-outbound
     ref: "7.2.16"
@@ -491,7 +495,9 @@ cases:
       matching SIP code with a Reason (Q.850) the carrier can map, e.g. 503 for congestion.
     status: partial
     scenarios: [admission-limit]
-    gap: Only the 503 at the session limit is checked (and not behind Kamailio); no Reason header, no-route or unallocated cases.
+    gap: >
+      Only the 503 at the session limit is checked (and not behind Kamailio, which now passes a fleet-wide 503 on
+      as 503 rather than 500); no Reason header, no-route or unallocated cases.
 
   - id: i3f-7.2-note-cpn
     ref: "7.2 (note)"
