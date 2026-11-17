@@ -178,7 +178,7 @@ kill a node mid-call and check the outcome. Until then a node's calls drop when 
 ### 6. Configuration from git (v0 mounting; M5 typed)
 
 v0 mounts ConfigMaps (dial plan, ACLs, profiles) that Flux applies from git, and a change rolls the fleet through
-loop 3. Later, typed resources for trunks and ACLs, reloaded with `reloadxml` and `reloadacl` without a restart.
+loop 3. Later, typed resources for peers (loop 9) and ACLs, reloaded with `reloadxml` and `reloadacl` without a restart.
 
 ### 7. Kamailio as a managed resource (M2)
 
@@ -193,21 +193,46 @@ node on the host network, a fixed public address each, and the operator in charg
   one Service name that reaches only one of them.
 - **Updates and drains:** Kamailio holds transactions, not calls, so a drain is short: stop taking new requests,
   let transactions finish, hand registrations over (loop 8), stop.
+- **One Kamailio fleet by default.** Per-peer behaviour is data in that fleet (loop 9), not a fleet per peer. Because
+  a `FreeswitchCluster` publishes its membership as a ConfigMap, more than one `KamailioCluster` can dispatch to the
+  same FreeSWITCH fleet. That is for isolation, for example keeping a lane for customer PBXs over a VPN, on the
+  nodes' inside addresses, apart from carrier traffic. Behaviour alone isn't a reason for one.
 - The example in `deploy/examples/kamailio` becomes the template once this lands; until then, it is how v0 is run.
 
-### 8. Outbound registrations (M2)
+### 8. Outbound registrations (M5, when a peer needs them)
 
 Some carriers send inbound calls only to an address that has registered for the number, with a username and
 password. The registration names one address (its `Contact`), so it belongs on the proxy, whose address is fixed,
-not on a FreeSWITCH node that can drain or die.
+not on a FreeSWITCH node that can drain or die. Many peers don't register at all: they recognise the edge by its
+source address, or challenge each call. So this loop is built when the first peer needs it, as a field of that
+peer (loop 9).
 - Kamailio's `uac` module registers for each configured number and re-registers before expiry; the carrier then
   sends calls to Kamailio, which dispatches them like any other.
-- Credentials come from a Kubernetes Secret; the operator renders the registrations table from a typed list and
-  reloads it over JSON-RPC.
-- Outbound calls to such a carrier answer its digest challenge with the same credentials, in Kamailio or in
-  FreeSWITCH's gateway config (to be decided with the carrier tests in sipbench).
-- Open: whether every Kamailio pod registers (two `Contact`s for the carrier to try) or one at a time with handover.
-  It depends on how each carrier treats several contacts.
+- Credentials come from a Kubernetes Secret; the operator renders the registrations table and reloads it over
+  JSON-RPC.
+- **Registration mode is per peer**, because carriers treat several contacts for one number differently: some
+  try each one, some keep only the latest, some reject the second. `single` (the default) registers from one
+  Kamailio pod and hands the registration over when that pod drains. It works with every carrier. `perPod`
+  registers from every pod, so the carrier can fail over by itself. It's turned on per peer, once sipbench and a
+  test call against that carrier show it accepts several contacts.
+
+### 9. Per-peer behaviour (M5)
+
+Each peer (a carrier, a voice AI provider, a customer PBX) needs its own handling at the edge. A typed peer
+resource carries it, and the operator renders it into the Kamailio fleet's config. No route block is written per
+peer. Behaviours peers need in practice, and the Kamailio feature that covers each one:
+
+| Peer needs | Kamailio |
+| --- | --- |
+| Recognise the peer by its source address | `permissions` address table: address to peer tag |
+| Several signaling addresses for one peer, each with its own health checks (some peers want none) | A dispatcher set per peer, probing set per set |
+| A fixed Request-URI host (its termination hostname); numbers in E.164 | Per-peer rewrite rules (`dialplan` module) |
+| A digest challenge the edge answers itself, rather than passing it back to the caller | `uac_auth()` with credentials from a Secret |
+| REFER handled at the edge rather than passed on | Per-peer flag; FreeSWITCH places the transfer, as in sipbench today |
+| Reached on the inside network (a VPN), with no NAT | Several listening addresses; the outgoing one chosen per peer |
+| Inbound calls only after registering | Loop 8 |
+
+Changes reload over JSON-RPC, without a restart.
 
 ## sipbench: the SIP test bench
 
@@ -249,6 +274,7 @@ real trunks):
 | Codecs | G.711 µ-law and A-law, G.722 toward the backend |
 | Admission | calls beyond the limit get the fallback; OPTIONS answered |
 | Fleet (on a cluster) | a node drained mid-call keeps its calls; a node killed mid-call; rolling update with live calls |
+| Peers (planned, through Kamailio) | peer mocks in front of the proxy: one that rejects a wrong Request-URI host or a non-E.164 number, one that challenges each call, and a registrar that tries every contact, keeps only the latest, or rejects the second |
 
 See [`sipbench/README.md`](sipbench/README.md) for how to run it.
 
@@ -272,10 +298,10 @@ which version runs where.
 | --- | --- | --- |
 | M0 | Repository, plan, operator scaffold, sipbench mock backend and runner running against FreeSWITCH in Docker | done |
 | M1 | v0 operator on kind: fleet, dispatcher list, drains and rolling updates; sipbench runs against it | in progress |
-| M2 | `KamailioCluster`: managed Kamailio, dispatcher changes to every pod, outbound registrations; sipbench fleet scenarios (drain mid-call, rolling update with live calls) | planned |
+| M2 | `KamailioCluster`: managed Kamailio, dispatcher changes to every pod; sipbench fleet scenarios (drain mid-call, rolling update with live calls) | planned |
 | M3 | `SIPAddressPool` with an AWS Elastic IP provider, shared by both fleets; edge node group on EKS | planned |
 | M4 | v1 failover with fencing and call recovery | planned |
-| M5 | Typed trunk and ACL resources; reload without restart | planned |
+| M5 | Typed peer and ACL resources (loop 9), outbound registrations when a peer needs them (loop 8), sipbench peer mocks; reload without restart | planned |
 | M6 | Publish as open source, once it has carried production calls | planned |
 
 ## Development
@@ -301,7 +327,10 @@ sipbench has its own instructions in [`sipbench/README.md`](sipbench/README.md).
    already anchors media, so it only needs a routable address it can advertise (`ext-rtp-ip`). rtpengine earns its
    place when FreeSWITCH must stay on private addresses or media needs per-direction control, and it puts another
    component in the media path. It stays an option for later.
-3. **Registrations live on Kamailio** ([loop 8](#8-outbound-registrations-m2)), whose address is fixed.
+3. **Registrations live on Kamailio** ([loop 8](#8-outbound-registrations-m5-when-a-peer-needs-them)), whose
+   address is fixed, with the mode chosen per peer: one pod at a time by default, every pod once a carrier is shown
+   to accept several contacts. **Per-peer behaviour is data in one Kamailio fleet** ([loop 9](#9-per-peer-behaviour-m5));
+   a second fleet is for isolation only.
 4. **Apache 2.0 from the start** ([`LICENSE`](LICENSE)). The repository is private; whether and when to publish
    is decided separately, and the license can change before then if that decision says so.
 5. **Start with an off-the-shelf public FreeSWITCH image**: `drachtio/drachtio-freeswitch-mrf:0.9.6` (FreeSWITCH
@@ -311,9 +340,7 @@ sipbench has its own instructions in [`sipbench/README.md`](sipbench/README.md).
 
 ## Open questions
 
-1. **One registration per carrier, or one per Kamailio pod?** Depends on how each carrier treats several contacts
-   for one number.
-2. **Do peers allow-list media addresses?** If none do, FreeSWITCH nodes can keep advertising their node's own
+1. **Do peers allow-list media addresses?** If none do, FreeSWITCH nodes can keep advertising their node's own
    public address (v0), and the address pool can cover Kamailio first.
 
 ## License
