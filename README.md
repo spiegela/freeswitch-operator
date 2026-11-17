@@ -4,7 +4,8 @@ A Kubernetes operator for running a fleet of FreeSWITCH nodes as a SIP edge (an 
 **sipbench**, a SIP test bench that checks call flows against that edge before real traffic moves onto it.
 
 > **Status: early, under construction (v0).** The API is `v1alpha1` and will change. The plan below is the design we
-> are building toward; the [milestones](#milestones) describe what is in place today.
+> are building toward; the [milestones](#milestones) describe what is in place today. The
+> [sipbench report card](sipbench/report-card/README.md) shows how the edge did in the latest release's bench runs.
 
 ## Why this exists
 
@@ -352,7 +353,9 @@ real trunks):
 | Fleet (on a cluster) | a node drained mid-call keeps its calls; a node killed mid-call; rolling update with live calls |
 | Peers (planned, through Kamailio) | peer mocks in front of the proxy: one that rejects a wrong Request-URI host or a non-E.164 number, one that challenges each call, and a registrar that tries every contact, keeps only the latest, or rejects the second |
 
-See [`sipbench/README.md`](sipbench/README.md) for how to run it.
+See [`sipbench/README.md`](sipbench/README.md) for how to run it, and the
+[report card](sipbench/report-card/README.md) for the latest results: every scenario on kind and in compose, and how
+much of the conformance record the scenarios check.
 
 ## GitOps with Flux
 
@@ -418,6 +421,18 @@ needs the event socket of one particular node). M1 was also checked by hand on t
   dispatcher list at once; a new call placed meanwhile went to another node; the drain finished when the call ended.
 - **Config change:** editing a referenced ConfigMap made a new snapshot and rolled the fleet one node at a time
   (about 35 s). Pods not yet replaced never saw the edit, and the old snapshot was deleted once no pod used it.
+
+### The report card
+
+[`sipbench/report-card`](sipbench/report-card/README.md) records the latest release's bench runs: through Kamailio
+on kind, and against one FreeSWITCH in compose. After each push to `main`, the
+[report card workflow](.github/workflows/report-card.yml) runs both benches, regenerates the card and opens a pull
+request into `dev` with it. To make one locally, on a cluster that `make kind-up kind-deploy` has set up:
+
+```sh
+make report-card-run   # run both benches, save their JSON reports in sipbench/report-card, write the card
+make report-card       # rewrite the card from the saved reports (after editing the conformance record, say)
+```
 
 ## Decisions
 

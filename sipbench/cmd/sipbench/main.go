@@ -3,6 +3,7 @@
 //
 //	sipbench run [flags] [scenario files or directories...]
 //	sipbench validate [scenario files or directories...]
+//	sipbench report-card [flags]
 package main
 
 import (
@@ -39,6 +40,8 @@ func main() {
 		code, err = run(os.Args[2:])
 	case "validate":
 		err = validate(os.Args[2:])
+	case "report-card":
+		err = reportCard(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -56,6 +59,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   sipbench run [flags] [scenario files or dirs...]   run scenarios (default dir: scenarios)
   sipbench validate [scenario files or dirs...]      parse and check scenarios without running them
+  sipbench report-card [flags]                       write the report card from run reports and the record
 
 run -h lists the flags.`)
 }
@@ -120,7 +124,8 @@ func run(args []string) (int, error) {
 	caps := fs.String("caps", env("SIPBENCH_CAPS", "mock,esl,codec:pcmu,codec:pcma"),
 		"capabilities this run provides, comma separated")
 	only := fs.String("run", env("SIPBENCH_RUN", ""), "only run scenarios whose name matches this regexp")
-	jsonOut := fs.String("json", "", "write the JSON report here ('-' for stdout)")
+	jsonOut := fs.String("json", env("SIPBENCH_JSON", ""),
+		"write the JSON report here ('-' for stdout, which moves the summary to stderr)")
 	junitOut := fs.String("junit", "", "write a JUnit XML report here")
 	level := fs.String("log-level", "warn", "debug, info, warn or error")
 	waitFor := fs.Duration("wait", 30*time.Second, "how long to wait for the edge to answer OPTIONS before starting")
@@ -188,8 +193,13 @@ func run(args []string) (int, error) {
 		rep.Add(res)
 		fmt.Fprintf(os.Stderr, "%-4s %s\n", strings.ToUpper(res.Status), s.Name)
 	}
-	fmt.Println()
-	rep.WriteSummary(os.Stdout)
+	// With the JSON report on stdout the summary goes to stderr, so stdout is the report alone.
+	summary := io.Writer(os.Stdout)
+	if *jsonOut == "-" {
+		summary = os.Stderr
+	}
+	_, _ = fmt.Fprintln(summary)
+	rep.WriteSummary(summary)
 
 	if *jsonOut != "" {
 		if err := writeTo(*jsonOut, rep.WriteJSON); err != nil {

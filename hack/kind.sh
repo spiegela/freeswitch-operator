@@ -4,7 +4,8 @@
 #   hack/kind.sh up        create the cluster (deploy/kind/kind-config.yaml)
 #   hack/kind.sh deploy    build and load the images, install the operator, apply deploy/kind, wait for the fleet and
 #                          for every Kamailio to load it
-#   hack/kind.sh bench [re] run sipbench through Kamailio; an optional regexp picks scenarios by name
+#   hack/kind.sh bench [re] run sipbench through Kamailio; an optional regexp picks scenarios by name, and
+#                          SIPBENCH_REPORT=<file> saves the run's JSON report there (for the report card)
 #   hack/kind.sh status    the fleet, its members and the dispatcher list Kamailio reads
 #   hack/kind.sh down      delete the cluster
 #
@@ -168,22 +169,37 @@ status() {
 }
 
 bench() {
-  local job filter="${1:-}"
+  local job filter="${1:-}" report="${SIPBENCH_REPORT:-}"
+  local -a envs=()
   # Foreground: wait for the old runner pods too, or one still terminating would share the sipbench Service (and
   # its transfers) with the new one.
   "${KUBECTL[@]}" -n "$NS" delete job -l app.kubernetes.io/part-of=sipbench --ignore-not-found \
     --cascade=foreground --wait=true >/dev/null
-  # An optional regexp picks scenarios by name; passed as SIPBENCH_RUN so kubectl does the quoting. (set env
-  # prints nothing when it changes nothing, hence the plain cat without a filter.)
+  # An optional regexp picks scenarios by name; passed as SIPBENCH_RUN so kubectl does the quoting. With a report
+  # wanted, SIPBENCH_JSON=- has the runner print it after its summary. (set env prints nothing when it changes
+  # nothing, hence the plain cat without either.)
+  if [ -n "$filter" ]; then envs+=("SIPBENCH_RUN=$filter"); fi
+  if [ -n "$report" ]; then envs+=("SIPBENCH_JSON=-"); fi
   local manifest="$ROOT/sipbench/k8s/runner-job.yaml"
-  job=$(if [ -n "$filter" ]; then
-      "${KUBECTL[@]}" set env --local -o yaml -f "$manifest" "SIPBENCH_RUN=$filter"
+  job=$(if [ ${#envs[@]} -gt 0 ]; then
+      "${KUBECTL[@]}" set env --local -o yaml -f "$manifest" "${envs[@]}"
     else
       cat "$manifest"
     fi | "${KUBECTL[@]}" -n "$NS" create -f - -o name)
   say "running $job"
   "${KUBECTL[@]}" -n "$NS" wait "$job" --for=jsonpath='{.status.active}'=1 --timeout=120s >/dev/null 2>&1 || true
-  "${KUBECTL[@]}" -n "$NS" logs -f "$job" | grep -v -i 'ref went negative' || true
+  # The report is the last thing the runner prints, from a line holding only "{" to the end: it goes to the
+  # report file, the rest to the screen.
+  if [ -n "$report" ]; then : >"$report"; fi
+  "${KUBECTL[@]}" -n "$NS" logs -f "$job" | grep -v -i 'ref went negative' \
+    | awk -v out="$report" 'out != "" && /^\{$/ {json = 1} json {print > out; next} {print}' || true
+  if [ -n "$report" ]; then
+    if [ ! -s "$report" ]; then
+      echo "no JSON report in the runner's log" >&2
+      return 1
+    fi
+    say "report written to $report"
+  fi
   if "${KUBECTL[@]}" -n "$NS" wait "$job" --for=condition=Complete --timeout=30s >/dev/null 2>&1; then
     return 0
   fi

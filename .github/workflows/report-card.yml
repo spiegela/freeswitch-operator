@@ -1,0 +1,100 @@
+name: Report card
+
+# After each release (a push to main), run sipbench through Kamailio on kind and against one FreeSWITCH in compose,
+# regenerate sipbench/report-card from both runs, and open a pull request into dev with the result. It also runs
+# from the Actions tab. Opening the pull request needs "Allow GitHub Actions to create and approve pull requests"
+# in the repository's Actions settings.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# One card at a time; a newer release waits rather than cancelling a run halfway through.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  # Pinned, and the kind release also fixes the Kubernetes node image. Bump on purpose (with test-e2e.yml).
+  KIND_VERSION: v0.33.0
+
+jobs:
+  report-card:
+    name: Run the benches and update the report card
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write # push the report card's branch
+      pull-requests: write # open its pull request
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      # go install checks the module against the Go checksum database, so the pinned version is the one we get.
+      - name: Install kind
+        run: |
+          go install "sigs.k8s.io/kind@${KIND_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Create the cluster
+        run: make kind-up
+
+      - name: Deploy the operator, Kamailio, the FreeswitchCluster and the bench
+        run: make kind-deploy
+
+      # A failing bench still gets a card (it shows which scenarios failed); the last step fails the job.
+      - name: Run sipbench through Kamailio
+        id: kind
+        continue-on-error: true
+        run: make kind-bench SIPBENCH_REPORT=sipbench/report-card/kind.json
+
+      - name: Run sipbench in compose
+        id: compose
+        continue-on-error: true
+        run: make compose-bench SIPBENCH_REPORT=sipbench/report-card/compose.json
+
+      - name: Write the report card
+        run: make report-card
+
+      - name: Open a pull request into dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIND_OUTCOME: ${{ steps.kind.outcome }}
+          COMPOSE_OUTCOME: ${{ steps.compose.outcome }}
+        run: |
+          short="${GITHUB_SHA::7}"
+          branch="report-card/${short}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add sipbench/report-card
+          if git diff --cached --quiet; then
+            echo "The report card hasn't changed."
+            exit 0
+          fi
+          git commit -q -m "Update the sipbench report card for ${short}"
+          git push -q "https://x-access-token:${GH_TOKEN}@${GITHUB_SERVER_URL#https://}/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${branch}"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          gh pr create --base dev --head "$branch" \
+            --title "Update the sipbench report card for ${short}" \
+            --body "$(printf '%s\n\n%s\n%s\n\n%s\n' \
+              "The report card workflow ran sipbench after \`${short}\` reached main ([run](${run_url}))." \
+              "- Through Kamailio on kind: ${KIND_OUTCOME}" \
+              "- In compose: ${COMPOSE_OUTCOME}" \
+              "Only \`sipbench/report-card\` changes. See \`sipbench/report-card/README.md\` for the card.")"
+
+      - name: Fail if a bench failed
+        if: steps.kind.outcome == 'failure' || steps.compose.outcome == 'failure'
+        run: |
+          echo "A bench failed (kind: ${{ steps.kind.outcome }}, compose: ${{ steps.compose.outcome }}); the report card shows which scenarios." >&2
+          exit 1

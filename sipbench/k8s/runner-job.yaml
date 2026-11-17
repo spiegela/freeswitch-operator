@@ -23,7 +23,7 @@ spec:
         - name: sipbench
           image: sipbench:dev
           imagePullPolicy: IfNotPresent
-          args: ["run", "-json", "/tmp/report.json", "scenarios"]
+          args: ["run", "scenarios"]
           env:
             - {name: SIPBENCH_EDGE, value: "kamailio-sip:5060"}
             - {name: SIPBENCH_MOCK, value: "http://mockbackend:8080"}
@@ -31,5 +31,6 @@ spec:
             - {name: SIPBENCH_TARGET, value: "0.0.0.0:5090"}
             - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma"}
             - {name: SIPBENCH_RUN, value: ""}             # a regexp picking scenarios by name; hack/kind.sh bench sets it
+            - {name: SIPBENCH_JSON, value: ""}            # "-" prints the JSON report after the summary; hack/kind.sh bench sets it
           ports:
             - {name: target-udp, containerPort: 5090, protocol: UDP}

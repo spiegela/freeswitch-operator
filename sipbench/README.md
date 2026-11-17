@@ -53,8 +53,14 @@ directory, and [`k8s/`](k8s/) holds the mock backend, the runner's transfer Serv
 under `freeswitch/conf` to that kustomization too; `go test ./...` fails until you do. `hack/kind.sh bench <regexp>`
 runs only the scenarios whose names match.
 
-Each of `-edge`, `-mock`, `-esl`, `-esl-password`, `-target`, `-caps` and `-run` takes its default from
-`SIPBENCH_<FLAG>` (`SIPBENCH_ESL_PASSWORD` for `-esl-password`). A variable set to the empty string counts as set,
+The [report card](report-card/README.md) records the latest release's runs on kind and in compose, and how much of
+the [conformance record](conformance/README.md) the scenarios check. `sipbench report-card` writes it from the two
+runs' JSON reports; `make report-card-run` at the repository root runs both benches and writes it, and CI does the
+same after every release.
+
+Each of `-edge`, `-mock`, `-esl`, `-esl-password`, `-target`, `-caps`, `-run` and `-json` takes its default from
+`SIPBENCH_<FLAG>` (`SIPBENCH_ESL_PASSWORD` for `-esl-password`). `-json -` writes the report to stdout and the
+summary to stderr. A variable set to the empty string counts as set,
 so `SIPBENCH_ESL=""` turns the event socket off rather than falling back to `freeswitch:8021`.
 
 Set `SIPBENCH_SIP_DEBUG=true` with `-log-level debug` to log every SIP message the runner sends and receives.
