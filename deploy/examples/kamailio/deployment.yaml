@@ -25,6 +25,10 @@ spec:
     spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
+      # Keeps Kamailio from being PID 1. As PID 1 it inherits every orphaned process in the container (from a
+      # kubectl exec, say, such as busybox timeout's watcher), and when one exits Kamailio takes it for a child of
+      # its own and shuts down. With a shared namespace the pod's pause process is PID 1 and reaps them.
+      shareProcessNamespace: true
       nodeSelector:
         node-role.example.com/sip-edge: "true"
       tolerations:
