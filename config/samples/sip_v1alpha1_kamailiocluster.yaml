@@ -1,0 +1,32 @@
+apiVersion: sip.instruments.com/v1alpha1
+kind: KamailioCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: freeswitch-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: edge
+spec:
+  # One Kamailio per proxy node; each holds its node's signaling address.
+  replicas: 2
+  # Kamailio 6.0.8, multi-arch, with /bin/sh, wget and nc. Pin by digest.
+  image: ghcr.io/kamailio/kamailio-ci:6.0-alpine@sha256:b3f60a1d3f3dd0602cb750859c2ac1458ae4159d0678ab31b22f6c598f8eca9f
+  nodeSelector:
+    node-role.example.com/sip-proxy: "true"
+  tolerations:
+    - key: node-role.example.com/sip-proxy
+      operator: Exists
+      effect: NoSchedule
+  sip:
+    port: 5060
+  rpc:
+    # JSON-RPC, on each pod's own address and only with the token in the edge-jsonrpc Secret.
+    port: 5070
+  externalAddress:
+    source: NodeExternalIP
+    required: true
+  drain:
+    maxDrainSeconds: 40
+  # New calls go to the first fleet with an active node, then the next. Each must set spec.dispatcher.
+  dispatch:
+    - freeswitchCluster: edge
+  reloadDelaySeconds: 75

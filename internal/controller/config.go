@@ -21,6 +21,7 @@ const (
 	configHashAnnotation = "sip.instruments.com/config-hash"
 	// configSnapshotLabel marks the operator's immutable copies of referenced ConfigMaps.
 	configSnapshotLabel = "sip.instruments.com/config-snapshot"
+	configSnapshotValue = "true"
 	// configSourceAnnotation on a snapshot names the ConfigMap it was copied from.
 	configSourceAnnotation = "sip.instruments.com/config-source"
 )

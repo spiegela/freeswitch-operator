@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"slices"
@@ -136,25 +137,27 @@ func contentHash(s string) string {
 type DispatcherNotifier interface {
 	// SetInactive takes a destination out of rotation at once (dispatcher.set_state with "ip": inactive, probing).
 	SetInactive(ctx context.Context, setID int32, uri string) error
-	// Reload makes Kamailio re-read its dispatcher list from disk (dispatcher.reload), then checks that the set now
-	// holds exactly want (dispatcher.list). If it doesn't, the error wraps errListNotLoaded: the kubelet has not
-	// yet written the new file into that pod, and a later reload will pick it up.
-	Reload(ctx context.Context, setID int32, want []string) error
+	// Reload makes Kamailio re-read its dispatcher list from disk (dispatcher.reload), then checks that each set in
+	// want now holds exactly its URIs (dispatcher.list); sets not in want aren't checked. If one doesn't, the error
+	// wraps errListNotLoaded: the kubelet has not yet written the new file into that pod, and a later reload will
+	// pick it up.
+	Reload(ctx context.Context, want map[int32][]string) error
 }
 
 // errListNotLoaded means Kamailio reloaded but still holds another list than the one the operator wrote.
 var errListNotLoaded = errors.New("kamailio has not loaded the current dispatcher list")
 
-// NotifierFactory builds a notifier for a Kamailio JSON-RPC URL.
-type NotifierFactory func(url string) DispatcherNotifier
+// NotifierFactory builds a notifier for a Kamailio JSON-RPC URL. A non-empty token is sent as a bearer token.
+type NotifierFactory func(url, token string) DispatcherNotifier
 
 // NewJSONRPCNotifier talks to Kamailio's jsonrpcs module over HTTP (xhttp).
-func NewJSONRPCNotifier(url string) DispatcherNotifier {
-	return &jsonrpcNotifier{url: url, client: &http.Client{Timeout: 5 * time.Second}}
+func NewJSONRPCNotifier(url, token string) DispatcherNotifier {
+	return &jsonrpcNotifier{url: url, token: token, client: &http.Client{Timeout: 5 * time.Second}}
 }
 
 type jsonrpcNotifier struct {
 	url    string
+	token  string
 	client *http.Client
 	id     atomic.Int64
 }
@@ -174,22 +177,25 @@ func (n *jsonrpcNotifier) SetInactive(ctx context.Context, setID int32, uri stri
 	return n.call(ctx, "dispatcher.set_state", []any{"ip", setID, uri}, nil)
 }
 
-func (n *jsonrpcNotifier) Reload(ctx context.Context, setID int32, want []string) error {
+func (n *jsonrpcNotifier) Reload(ctx context.Context, want map[int32][]string) error {
 	if err := n.call(ctx, "dispatcher.reload", nil, nil); err != nil {
 		return err
 	}
-	have, err := n.destinations(ctx, setID)
+	have, err := n.destinations(ctx)
 	if err != nil {
 		return err
 	}
-	if !sameURIs(have, want) {
-		return fmt.Errorf("%w: set %d holds %v, want %v", errListNotLoaded, setID, have, want)
+	ids := slices.Sorted(maps.Keys(want))
+	for _, id := range ids {
+		if !sameURIs(have[id], want[id]) {
+			return fmt.Errorf("%w: set %d holds %v, want %v", errListNotLoaded, id, have[id], want[id])
+		}
 	}
 	return nil
 }
 
-// destinations lists the URIs Kamailio holds for one dispatcher set (dispatcher.list).
-func (n *jsonrpcNotifier) destinations(ctx context.Context, setID int32) ([]string, error) {
+// destinations lists the URIs Kamailio holds, by dispatcher set (dispatcher.list).
+func (n *jsonrpcNotifier) destinations(ctx context.Context) (map[int32][]string, error) {
 	var res struct {
 		Records []struct {
 			Set struct {
@@ -209,13 +215,10 @@ func (n *jsonrpcNotifier) destinations(ctx context.Context, setID int32) ([]stri
 		}
 		return nil, err
 	}
-	var out []string
+	out := map[int32][]string{}
 	for _, r := range res.Records {
-		if r.Set.ID != setID {
-			continue
-		}
 		for _, t := range r.Set.Targets {
-			out = append(out, t.Dest.URI)
+			out[r.Set.ID] = append(out[r.Set.ID], t.Dest.URI)
 		}
 	}
 	return out, nil
@@ -244,6 +247,9 @@ func (n *jsonrpcNotifier) call(ctx context.Context, method string, params []any,
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if n.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+n.token)
+	}
 	resp, err := n.client.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("kamailio %s: %w", method, err)
