@@ -63,6 +63,15 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
+.PHONY: test-sipbench
+test-sipbench: ## Vet and test sipbench (its own Go module), including the conformance record's checks.
+	cd sipbench && go vet ./... && go test ./...
+
+.PHONY: check-tidy
+check-tidy: ## Fail if go.mod or go.sum of either module needs go mod tidy.
+	go mod tidy -diff
+	cd sipbench && go mod tidy -diff
+
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
 # kubectl kuberc is disabled by default for test isolation; enable with:
@@ -113,8 +122,9 @@ kind-down: ## Delete the local edge cluster
 	KIND=$(KIND) hack/kind.sh down
 
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter
+lint: golangci-lint ## Run golangci-lint on the operator and on sipbench (its own module, same config)
 	"$(GOLANGCI_LINT)" run
+	cd sipbench && "$(GOLANGCI_LINT)" run --config ../.golangci.yml ./...
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes

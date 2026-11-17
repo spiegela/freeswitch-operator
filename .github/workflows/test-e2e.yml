@@ -6,12 +6,21 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned, and the kind release also fixes the Kubernetes node image. Bump on purpose.
+  KIND_VERSION: v0.33.0
+
 jobs:
   test-e2e:
     permissions:
       contents: read
-    name: Run on Ubuntu
+    name: Operator deploys and serves metrics
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -23,16 +32,55 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install the latest version of kind
+      # go install checks the module against the Go checksum database, so the pinned version is the one we get.
+      - name: Install kind
         run: |
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-$(go env GOARCH)
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
+          go install "sigs.k8s.io/kind@${KIND_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Verify kind installation
-        run: kind version
+      - name: Run the e2e tests
+        run: make test-e2e
 
-      - name: Running Test e2e
+  edge-on-kind:
+    permissions:
+      contents: read
+    name: Edge on kind, sipbench through Kamailio
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install kind
         run: |
-          go mod tidy
-          make test-e2e
+          go install "sigs.k8s.io/kind@${KIND_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Create the cluster
+        run: make kind-up
+
+      - name: Deploy the operator, Kamailio, the FreeswitchCluster and the bench
+        run: make kind-deploy
+
+      - name: Run sipbench
+        run: make kind-bench
+
+      - name: Show the cluster's state
+        if: failure()
+        run: |
+          k() { kubectl --context kind-freeswitch-operator "$@"; }
+          hack/kind.sh status || true
+          k get pods -A -o wide || true
+          k get events -A --sort-by=.lastTimestamp | tail -n 100 || true
+          k -n freeswitch-operator-system logs deployment/freeswitch-operator-controller-manager --tail=200 || true
+          for p in $(k -n telephony get pods -o name); do
+            echo "== $p"
+            k -n telephony logs "$p" --all-containers --tail=100 || true
+          done
