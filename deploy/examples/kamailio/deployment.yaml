@@ -1,0 +1,85 @@
+# Example Kamailio in front of a FreeswitchCluster. Kamailio runs on the host network of the edge nodes so it can
+# hold their fixed addresses; one per node.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kamailio
+  labels:
+    app.kubernetes.io/name: kamailio
+    app.kubernetes.io/component: sip-edge
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kamailio
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0          # host ports: a surge pod could never schedule beside the old one
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kamailio
+        app.kubernetes.io/component: sip-edge
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        node-role.example.com/sip-edge: "true"
+      tolerations:
+        - key: node-role.example.com/sip-edge
+          operator: Exists
+          effect: NoSchedule
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: kamailio
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: kamailio
+          # Kamailio 6.0.8, multi-arch. Pin by digest in production.
+          image: ghcr.io/kamailio/kamailio-ci:6.0-alpine@sha256:b3f60a1d3f3dd0602cb750859c2ac1458ae4159d0678ab31b22f6c598f8eca9f
+          command: ["/bin/sh", "-c"]
+          # PUBLIC_ADDR comes from the address pool once it exists (milestone M3). Until then, set it per
+          # environment or leave it out where the node's address is not translated.
+          args:
+            - |
+              set -e
+              extra=""
+              if [ -s /etc/kamailio/public-address ]; then extra="-A PUBLIC_ADDR=$(cat /etc/kamailio/public-address)"; fi
+              exec kamailio -DD -E -m 128 -M 16 -A DS_SETID=1 $extra -f /etc/kamailio/config/kamailio.cfg
+          ports:
+            - {name: sip-udp, containerPort: 5060, hostPort: 5060, protocol: UDP}
+            - {name: sip-tcp, containerPort: 5060, hostPort: 5060, protocol: TCP}
+            - {name: rpc, containerPort: 5070, hostPort: 5070, protocol: TCP}
+          readinessProbe:
+            tcpSocket: {port: 5060}
+            periodSeconds: 5
+          volumeMounts:
+            - {name: config, mountPath: /etc/kamailio/config, readOnly: true}
+            # A directory mount, so the kubelet updates the file in place. Never use subPath here.
+            - {name: dispatcher, mountPath: /etc/kamailio/dispatcher, readOnly: true}
+      volumes:
+        - name: config
+          configMap:
+            name: kamailio-config
+        - name: dispatcher
+          configMap:
+            name: edge-dispatcher   # spec.dispatcher.configMapName of the FreeswitchCluster
+            optional: true          # the operator creates it on first reconcile
+---
+# The operator's JSON-RPC target (spec.dispatcher.jsonrpcURL). With host networking each Kamailio is reached on
+# its node; a Service gives one stable name. To keep every Kamailio in step, point the operator at each one
+# (planned) or rely on the delayed reload plus Kamailio's own probing.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kamailio
+spec:
+  selector:
+    app.kubernetes.io/name: kamailio
+  ports:
+    - {name: rpc, port: 5070, targetPort: 5070, protocol: TCP}
