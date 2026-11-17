@@ -92,7 +92,7 @@ spec:
     # addressPoolRef: {name: edge-addresses}   # planned (M3)
   config:
     mountPath: /usr/local/freeswitch/conf   # v0. Point FreeSWITCH here with -conf
-    configMapRefs:                  # v0. Each ConfigMap's keys become files in its directory; a change rolls the fleet
+    configMapRefs:                  # v0. Each ConfigMap's keys become files in its directory; an edit rolls the fleet
       - {name: edge-freeswitch-conf, path: "."}
       - {name: edge-freeswitch-profiles, path: sip_profiles}
   drain:
@@ -181,9 +181,13 @@ kill a node mid-call and check the outcome. Until then a node's calls drop when 
 
 v0 assembles FreeSWITCH's configuration directory from ConfigMaps that Flux applies from git. Each reference names a
 directory under `config.mountPath` (`.` for the top, `autoload_configs`, `sip_profiles`, ...), and the operator lays
-the ConfigMaps' keys out there as one read-only projected volume, so a whole tree like FreeSWITCH's own fits. It
-hashes their contents into the pod template: any change rolls the fleet through loop 3, one drained node at a time.
-A missing ConfigMap, or two writing the same file, marks the fleet `Degraded` and leaves the running pods alone.
+the ConfigMaps' keys out there as one read-only projected volume, so a whole tree like FreeSWITCH's own fits. Pods
+never mount the ConfigMaps themselves: the kubelet would push an edit into every running pod within a minute, ahead
+of any drain. The operator copies each one into an immutable ConfigMap named by a hash of its contents
+(`<cluster>-config-<hash>`), and each revision of the pod template mounts its own copies. An edit therefore makes a
+new template, which loop 3 rolls through one drained node at a time, while pods not yet replaced keep the files they
+started with. Copies no template or pod uses any more are deleted. A missing ConfigMap, or two claiming the same
+path, marks the fleet `Degraded`, leaves the running pods alone and pauses any roll in progress.
 Later, typed resources for peers (loop 9) and ACLs, reloaded with `reloadxml` and `reloadacl` without a restart.
 
 ### 7. Kamailio as a managed resource (M2)

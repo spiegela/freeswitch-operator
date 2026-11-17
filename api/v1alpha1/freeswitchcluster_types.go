@@ -113,16 +113,18 @@ type ExternalAddressSpec struct {
 // ConfigSpec assembles FreeSWITCH's configuration directory from ConfigMaps.
 type ConfigSpec struct {
 	// mountPath is the read-only directory the configuration is assembled in. Point FreeSWITCH at it with
-	// `-conf`. It must not contain the operator's own directories (/etc/freeswitch-operator/scripts and
-	// /etc/freeswitch-operator/podinfo).
+	// `-conf`, and keep the image's entrypoint from writing to it. It must neither contain nor sit inside the
+	// operator's own directories (/etc/freeswitch-operator/scripts and /etc/freeswitch-operator/podinfo), and
+	// must not hide /tmp.
 	// +kubebuilder:default="/etc/freeswitch-operator/config"
 	// +kubebuilder:validation:Pattern=`^/[^:]*$`
 	// +optional
 	MountPath string `json:"mountPath,omitempty"`
 
 	// configMapRefs are laid out under mountPath, each in its own directory, so a tree such as
-	// autoload_configs/, sip_profiles/ and dialplan/ can be built from several ConfigMaps. A change to the
-	// referenced ConfigMaps or their contents rolls the fleet, one drained node at a time.
+	// autoload_configs/, sip_profiles/ and dialplan/ can be built from several ConfigMaps. Pods mount immutable
+	// copies the operator takes, never the ConfigMaps themselves, so an edit reaches the fleet only by rolling
+	// it, one drained node at a time. The order of the list doesn't matter.
 	// +listType=map
 	// +listMapKey=name
 	// +optional

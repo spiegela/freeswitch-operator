@@ -34,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
@@ -365,18 +366,72 @@ var _ = Describe("FreeswitchCluster controller", func() {
 				}
 			}
 		}
-		Expect(paths).To(Equal([]string{"freeswitch.xml", "sip_profiles/trunks.xml"}))
+		Expect(paths).To(Equal([]string{"sip_profiles/trunks.xml", "freeswitch.xml"}), "references in name order")
 		configHash := sts.Spec.Template.Annotations[configHashAnnotation]
 		Expect(configHash).NotTo(BeEmpty())
 		Expect(k8sClient.Get(ctx, key, &fsc)).To(Succeed())
 		Expect(meta.FindStatusCondition(fsc.Status.Conditions, "Degraded").Reason).NotTo(Equal("ConfigInvalid"))
 
-		// A content change renders a new template, which the rollout loop then works through.
+		// The pods mount the operator's immutable copies, never the user's ConfigMaps (the kubelet would push an
+		// edit of those into every running pod at once).
+		snapshotsOf := func() []string {
+			Expect(k8sClient.Get(ctx, key, &sts)).To(Succeed())
+			var names []string
+			for _, v := range sts.Spec.Template.Spec.Volumes {
+				if v.Name == "config" {
+					for _, src := range v.Projected.Sources {
+						names = append(names, src.ConfigMap.Name)
+					}
+				}
+			}
+			return names
+		}
+		first := snapshotsOf()
+		Expect(first).To(HaveLen(2))
+		for _, name := range first {
+			Expect(name).To(HavePrefix("edge-config-"))
+			var snap corev1.ConfigMap
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &snap)).To(Succeed())
+			Expect(snap.Immutable).To(HaveValue(BeTrue()))
+			Expect(metav1.IsControlledBy(&snap, &fsc)).To(BeTrue())
+		}
+		snapshotExists := func(name string) bool {
+			var snap corev1.ConfigMap
+			err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &snap)
+			return err == nil && snap.DeletionTimestamp == nil
+		}
+
+		// A content change makes a new snapshot and so a new template, which the rollout loop then works through.
 		profiles.Data["trunks.xml"] = "<profile name=\"trunks\"/>"
 		Expect(k8sClient.Update(ctx, profiles)).To(Succeed())
 		reconcileOnce(r, ns)
 		Expect(k8sClient.Get(ctx, key, &sts)).To(Succeed())
 		Expect(sts.Spec.Template.Annotations[configHashAnnotation]).NotTo(Equal(configHash))
+		second := snapshotsOf()
+		// [0] is fs-profiles, [1] fs-root.
+		Expect(second[1]).To(Equal(first[1]), "the unchanged ConfigMap keeps its snapshot")
+		Expect(second[0]).NotTo(Equal(first[0]))
+		Expect(snapshotExists(first[0])).To(BeTrue(), "kept until the StatefulSet controller has seen the new template")
+
+		// A pod still on the old revision keeps its snapshot; once no pod mounts it, it goes.
+		sts.Status.ObservedGeneration = sts.Generation
+		Expect(k8sClient.Status().Update(ctx, &sts)).To(Succeed())
+		old := fsPod(ns, "edge-0", "", "edge-old")
+		old.Spec.Volumes = []corev1.Volume{{Name: "config", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+			Sources: []corev1.VolumeProjection{{ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: first[0]}}}},
+		}}}}
+		Expect(k8sClient.Create(ctx, old)).To(Succeed())
+		reconcileOnce(r, ns)
+		Expect(snapshotExists(first[0])).To(BeTrue(), "an old pod still mounts it")
+		Expect(k8sClient.Delete(ctx, old, client.GracePeriodSeconds(0))).To(Succeed())
+		Eventually(func() bool {
+			var p corev1.Pod
+			return apierrors.IsNotFound(k8sClient.Get(ctx, podKey(old), &p))
+		}).Should(BeTrue())
+		reconcileOnce(r, ns)
+		Expect(snapshotExists(first[0])).To(BeFalse())
+		Expect(snapshotExists(second[0])).To(BeTrue())
+		Expect(snapshotExists(first[1])).To(BeTrue())
 
 		// Deleting a ConfigMap leaves the running template alone and reports it.
 		before := sts.Annotations[templateHashAnnotation]
@@ -386,6 +441,48 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(sts.Annotations[templateHashAnnotation]).To(Equal(before))
 		Expect(k8sClient.Get(ctx, key, &fsc)).To(Succeed())
 		Expect(meta.FindStatusCondition(fsc.Status.Conditions, "Ready").Reason).To(Equal("ConfigInvalid"))
+	})
+
+	It("pauses a roll while the configuration is invalid", func() {
+		ns := newNamespace(ctx)
+		Expect(k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
+			f.Spec.ExternalAddress.Source = sipv1alpha1.ExternalAddressNone
+			f.Spec.Config.ConfigMapRefs = []sipv1alpha1.ConfigMapRef{{Name: "fs-root", Path: "."}}
+		}))).To(Succeed())
+		root := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "fs-root", Namespace: ns}, Data: map[string]string{"freeswitch.xml": "<document/>"}}
+		Expect(k8sClient.Create(ctx, root)).To(Succeed())
+		r := &FreeswitchClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		key := types.NamespacedName{Namespace: ns, Name: "edge"}
+		reconcileOnce(r, ns)
+
+		// Mid-roll: one pod on the old revision, the fleet otherwise ready.
+		var sts appsv1.StatefulSet
+		Expect(k8sClient.Get(ctx, key, &sts)).To(Succeed())
+		sts.Status.Replicas = 2
+		sts.Status.CurrentRevision = "edge-old"
+		sts.Status.UpdateRevision = "edge-new"
+		Expect(k8sClient.Status().Update(ctx, &sts)).To(Succeed())
+		for _, p := range []*corev1.Pod{fsPod(ns, "edge-0", "", "edge-new"), fsPod(ns, "edge-1", "", "edge-old")} {
+			Expect(k8sClient.Create(ctx, p)).To(Succeed())
+			setPodReady(ctx, p, true)
+		}
+		gone := func(name string) bool {
+			var p corev1.Pod
+			err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &p)
+			return apierrors.IsNotFound(err) || (err == nil && p.DeletionTimestamp != nil)
+		}
+
+		Expect(k8sClient.Delete(ctx, root)).To(Succeed())
+		reconcileOnce(r, ns)
+		Expect(gone("edge-1")).To(BeFalse(), "no pod is replaced while the configuration is invalid")
+		var fsc sipv1alpha1.FreeswitchCluster
+		Expect(k8sClient.Get(ctx, key, &fsc)).To(Succeed())
+		Expect(meta.FindStatusCondition(fsc.Status.Conditions, conditionProgressing).Message).To(ContainSubstring("paused until the configuration is fixed"))
+
+		root.ResourceVersion = ""
+		Expect(k8sClient.Create(ctx, root)).To(Succeed())
+		reconcileOnce(r, ns)
+		Expect(gone("edge-1")).To(BeTrue(), "the roll resumes once the configuration is back")
 	})
 
 	It("refuses config paths that escape the mount", func() {
