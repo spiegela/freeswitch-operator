@@ -1,0 +1,665 @@
+source:
+  id: i3forum-tip-r2
+  title: Interoperability Test Plan for International Voice Services (Technical Interoperability Test Plan), Release 2.0
+  reference: https://i3forum.org/wp-content/uploads/2017/01/Technical-Interop-Test-Plan-Release-2-June-1st-2009.pdf
+  citation: >
+    Section numbers as IDs; titles and expectations paraphrased. The plan is written carrier to carrier; each
+    expect restates the case for our edge, where the carrier is the far end and the backend is the called party.
+    Where one section implies several checks, the ID adds a short suffix. The plan sets no numeric targets for
+    delay, loss, jitter or voice quality (the two carriers agree them per interconnection), so no case carries an
+    impairment map.
+
+cases:
+  # --- 1 Scope, 2 Assumptions, 5 Test strategy, 6 Acceptance -------------------------------------------------
+
+  - id: i3f-1-directions
+    ref: "1"
+    title: Every case is run in both directions
+    area: call-setup
+    component: edge
+    expect: >
+      Cases run carrier to backend and, where the edge places calls toward a carrier (transfer legs today,
+      backend-originated calls later), edge to carrier, with the same outcome both ways.
+    status: planned
+    milestone: M5
+    gap: Every scenario today is carrier to backend; only blind-transfer places a leg outward, and not to a carrier peer.
+
+  - id: i3f-1-traces
+    ref: "1"
+    title: SIP traces of each test call conform to the interconnection profile
+    area: headers
+    component: edge
+    expect: >
+      Every SIP message the edge sends to a carrier in a test call is captured and conforms to the agreed
+      interconnection profile (methods, mandatory headers, SDP), checked per scenario, not by eye.
+    status: planned
+    milestone: M5
+    gap: The runner checks outcomes, not message contents; it would need trace capture and a per-peer profile to check against.
+
+  - id: i3f-2-cli
+    ref: "2"
+    title: Caller ID is verifiable at the called end
+    area: identity
+    component: edge
+    expect: The calling number the carrier sends (From / P-Asserted-Identity) arrives at the backend unchanged.
+    status: planned
+    milestone: M5
+
+  - id: i3f-5.1
+    ref: "5.1"
+    title: Interconnection parameters agreed per peer before testing
+    area: security
+    component: edge
+    expect: >
+      Each peer's agreed parameters (signalling and media addresses, codecs, DTMF mode, OPTIONS use) are held as
+      that peer's config; a call from an address no peer config admits is refused.
+    status: planned
+    milestone: M5
+
+  - id: i3f-5.2
+    ref: "5.2"
+    title: Basic carrier call flow through the edge
+    area: call-setup
+    component: edge
+    expect: >
+      The edge sends 100 at once, relays the backend's 180/183 (with its early media when the backend sends
+      SDP), answers with 200 and SDP, carries two-way RTP after ACK, and BYE/200 ends both legs.
+    status: partial
+    scenarios: [basic-two-way]
+    gap: Answer, two-way audio and BYE are checked; 100 Trying, the 18x relay and audible ringback / early media are not.
+
+  - id: i3f-5.2-refresh
+    ref: "5.2"
+    title: Mid-call session refresh re-INVITE
+    area: timers
+    component: edge
+    expect: >
+      A re-INVITE from either side to refresh the session (before the session interval runs out) gets 200 with
+      SDP, reaches the node holding the call through Kamailio's record-route, and media continues undisturbed.
+    status: planned
+    milestone: M2
+    gap: Neither the runner nor the mock can send a re-INVITE or negotiate session timers.
+
+  - id: i3f-5.2-refer
+    ref: "5.2"
+    title: REFER and NOTIFY for transfer
+    area: transfer
+    component: edge
+    expect: >
+      A REFER from the backend is accepted with 202, progress is reported by NOTIFY, and the edge calls the
+      third party and connects the caller to it.
+    status: covered
+    scenarios: [blind-transfer]
+
+  - id: i3f-5.2-register
+    ref: "5.2"
+    title: REGISTER toward peers that require it
+    area: registration
+    component: edge
+    expect: >
+      Trunks need no registration by default; for a peer that requires it, the edge registers and keeps the
+      registration refreshed, and calls from that peer are accepted only while it holds.
+    status: planned
+    milestone: M5
+
+  - id: i3f-5.2-responses
+    ref: "5.2"
+    title: Each response class from the backend gets a defined treatment
+    area: error-handling
+    component: edge
+    expect: >
+      Final 4xx, 5xx and 6xx failures from the backend end in the fallback with a reason naming the cause; a 3xx
+      is either followed or treated as a failure, never relayed to the carrier.
+    status: partial
+    scenarios: [busy-fallback, decline-fallback]
+    gap: Only 486 and 603 are checked; no 3xx (the mock's reject can't add a Contact), 5xx or other 4xx codes.
+
+  - id: i3f-6.2-pass-all
+    ref: "6.2"
+    title: A peer goes live only after every agreed case passes
+    area: call-setup
+    component: edge
+    expect: >
+      Bringing a new peer into service runs the agreed scenario set against that peer's config, and every case
+      passes before the peer takes traffic.
+    status: planned
+    milestone: M5
+    gap: sipbench runs one global edge config; it has no notion of a per-peer acceptance run.
+
+  - id: i3f-6.2-cdrs
+    ref: "6.2"
+    title: Per-call records consistent with the carrier's
+    area: call-release
+    component: freeswitch
+    expect: >
+      Each test call leaves a call record (setup, answer and end times, duration, release cause) that matches
+      what the far end saw, so both sides' records reconcile; fallback calls show as answered.
+    status: planned
+    milestone: M5
+    gap: The plan judges pass/fail from exchanged call records; the edge's call records are not checked by any scenario.
+
+  # --- 7.1 Initial IP testing ---------------------------------------------------------------------------------
+
+  - id: i3f-7.1.1
+    ref: "7.1.1"
+    title: Reachability of the agreed addresses
+    area: transport
+    component: edge
+    expect: >
+      From each peer's network, the edge's published signalling and media addresses are reachable (ICMP where
+      agreed, otherwise SIP OPTIONS), on the real network path.
+    status: planned
+    milestone: M3
+
+  - id: i3f-7.1.2
+    ref: "7.1.2"
+    title: Round-trip delay to the peer
+    area: impairment
+    component: edge
+    expect: Round-trip time between the edge's public addresses and each peer is measured and stays within the agreed target.
+    status: planned
+    milestone: M3
+    gap: The plan gives no figure; the target is agreed per interconnection.
+
+  - id: i3f-7.1.3
+    ref: "7.1.3"
+    title: Packet loss to the peer
+    area: impairment
+    component: edge
+    expect: Packet loss on the path between the edge and each peer is measured and stays within the agreed target.
+    status: planned
+    milestone: M3
+    gap: The plan gives no figure; the target is agreed per interconnection.
+
+  - id: i3f-7.1.4
+    ref: "7.1.4"
+    title: Packet jitter to the peer
+    area: impairment
+    component: edge
+    expect: Jitter on the media path between the edge and each peer is measured and stays within the agreed target.
+    status: planned
+    milestone: M3
+    gap: The plan gives no figure; the target is agreed per interconnection.
+
+  # --- 7.2 Basic call flow -----------------------------------------------------------------------------------
+
+  - id: i3f-7.2.1
+    ref: "7.2.1"
+    title: Caller clears after answer
+    area: call-release
+    component: edge
+    expect: After the backend answers, the carrier's BYE is answered and the backend leg is released too.
+    status: covered
+    scenarios: [basic-two-way]
+
+  - id: i3f-7.2.1-tos
+    ref: "7.2.1"
+    title: DSCP marking on signalling and media
+    area: transport
+    component: edge
+    expect: >
+      SIP and RTP leaving the edge toward a carrier carry the agreed DSCP marks, and the marks survive the path
+      out of the cluster (load balancer, node networking).
+    status: planned
+    milestone: M3
+
+  - id: i3f-7.2.1-codec
+    ref: "7.2.1"
+    title: Negotiated codec matches what was offered and agreed
+    area: codec
+    component: edge
+    expect: >
+      The codec in use is one the carrier offered and the edge supports (PCMU or PCMA), it is the same on both
+      legs, and with several offered the carrier's order is respected.
+    status: partial
+    scenarios: [codec-pcmu, codec-pcma]
+    gap: Only single-codec offers are checked; preference order in a multi-codec offer is not.
+
+  - id: i3f-7.2.1-volume
+    ref: "7.2.1"
+    title: At least ten calls to several numbers
+    area: call-setup
+    component: edge
+    expect: >
+      Ten or more calls in a row, to several backend numbers, all complete with two-way audio, and on a fleet
+      they are spread across nodes.
+    status: planned
+    milestone: M2
+    gap: Each scenario places one call (admission-limit three); nothing repeats calls or reports which node took each.
+
+  - id: i3f-7.2.1-long
+    ref: "7.2.1"
+    title: Long call (over fifteen minutes)
+    area: timers
+    component: edge
+    expect: >
+      A call held for more than fifteen minutes keeps two-way audio throughout; no session, RTP or dialog timer
+      on the edge or Kamailio ends it, and both ends record the same duration.
+    status: planned
+    milestone: M2
+    gap: Scenarios run seconds long; a long call also has to span any drain or roll that happens meanwhile.
+
+  - id: i3f-7.2.2
+    ref: "7.2.2"
+    title: Caller abandons before answer
+    area: call-release
+    component: edge
+    expect: The carrier's CANCEL while the backend rings reaches the backend, and the carrier's INVITE ends with 487.
+    status: covered
+    scenarios: [cancel]
+
+  - id: i3f-7.2.3
+    ref: "7.2.3"
+    title: Called party clears after answer
+    area: call-release
+    component: edge
+    expect: The backend's BYE reaches the carrier and both legs end.
+    status: covered
+    scenarios: [backend-hangup]
+
+  - id: i3f-7.2.4
+    ref: "7.2.4"
+    title: Ring, no answer, timeout
+    area: error-handling
+    component: edge
+    expect: >
+      The backend rings past the edge's ring timeout; the edge cancels the backend leg and the caller gets the
+      fallback (tone and a NO_ANSWER reason) instead of a timeout failure.
+    status: covered
+    scenarios: [no-answer-fallback]
+
+  - id: i3f-7.2.5
+    ref: "7.2.5"
+    title: Busy, then the caller releases
+    area: error-handling
+    component: edge
+    expect: >
+      A busy backend (486) gets the caller the fallback instead of the busy; if the caller hangs up during the
+      fallback, the edge answers the BYE and frees the call.
+    status: partial
+    scenarios: [busy-fallback]
+    gap: The scenario lets the edge hang up after the fallback; the caller releasing during it is not checked.
+
+  - id: i3f-7.2.6
+    ref: "7.2.6"
+    title: No route to the destination
+    area: error-handling
+    component: proxy
+    expect: >
+      A call the edge can't route (no FreeSWITCH node in dispatch, or a number not provisioned for that peer) is
+      refused at once with a final response the carrier can reroute on (e.g. 503 or 404 with a Reason), not left to time out.
+    status: planned
+    milestone: M2
+    gap: >
+      With no node active Kamailio answers 503 at once, and when every node answers 503 the carrier now gets that
+      503 too (it got 500 before); neither carries a Reason yet. No scenario empties the dispatch set; per-peer
+      number provisioning arrives with M5.
+
+  - id: i3f-7.2.7
+    ref: "7.2.7"
+    title: Number not in service on the far side
+    area: error-handling
+    component: edge
+    expect: >
+      A 404 (unallocated number) from the backend gets the defined treatment, today the fallback with a reason
+      naming the cause; whether such causes should instead go back to the carrier is an open choice.
+    status: planned
+    milestone: M2
+    gap: The mock can already reject with 404; there is no scenario for it.
+
+  - id: i3f-7.2.8-g3
+    ref: "7.2.8"
+    title: G3 fax call through the edge
+    area: fax
+    component: edge
+    expect: A G3 fax from the carrier completes through the edge (G.711 pass-through or T.38, as agreed with the peer).
+    status: planned
+    milestone: M5
+    gap: Depends on whether any peer carries fax, an open question for the team; sipbench has no fax/T.38 support.
+
+  - id: i3f-7.2.8-superg3
+    ref: "7.2.8"
+    title: Super G3 fax call through the edge
+    area: fax
+    component: edge
+    expect: A Super G3 (V.34) fax completes, or falls back to G3 speed cleanly, through the edge.
+    status: planned
+    milestone: M5
+    gap: Depends on whether any peer carries fax, an open question for the team; sipbench has no fax/T.38 support.
+
+  - id: i3f-7.2.9
+    ref: "7.2.9"
+    title: Modem call through the edge
+    area: fax
+    component: edge
+    expect: >
+      A voiceband modem call passes on G.711 with nothing that breaks modems (no silence suppression, echo
+      cancelling or transcoding) and trains up end to end.
+    status: planned
+    milestone: M5
+    gap: Depends on whether any peer carries fax or modem traffic, an open question for the team; sipbench can't place modem calls.
+
+  - id: i3f-7.2.10
+    ref: "7.2.10"
+    title: DTMF before answer to a prompt, G.729
+    area: dtmf
+    component: edge
+    expect: >
+      If a peer needs G.729, digits sent as telephone-events while the backend plays early media reach the
+      backend intact. Until then a G.729-only offer is refused with 488, not bridged.
+    status: planned
+    milestone: M5
+    gap: The edge offers PCMU/PCMA only (G.722 later); G.729 support is undecided.
+
+  - id: i3f-7.2.11
+    ref: "7.2.11"
+    title: DTMF after answer, caller to called, G.729
+    area: dtmf
+    component: edge
+    expect: If a peer needs G.729, telephone-events from the carrier reach the backend with the same digits.
+    status: planned
+    milestone: M5
+    gap: The edge offers PCMU/PCMA only; G.729 support is undecided.
+
+  - id: i3f-7.2.12
+    ref: "7.2.12"
+    title: DTMF after answer, called to caller, G.729
+    area: dtmf
+    component: edge
+    expect: If a peer needs G.729, telephone-events from the backend reach the carrier with the same digits.
+    status: planned
+    milestone: M5
+    gap: The edge offers PCMU/PCMA only; G.729 support is undecided.
+
+  - id: i3f-7.2.13
+    ref: "7.2.13"
+    title: DTMF before answer to a prompt, G.711
+    area: dtmf
+    component: edge
+    expect: >
+      While the backend plays a prompt as early media (183 with SDP), digits the carrier sends as
+      telephone-events reach the backend before it answers.
+    status: planned
+    milestone: M2
+    gap: The mock can play early media, but the runner sends digits only after answer.
+
+  - id: i3f-7.2.14
+    ref: "7.2.14"
+    title: DTMF after answer, caller to called, G.711
+    area: dtmf
+    component: edge
+    expect: Telephone-events from the carrier reach the backend with the same digits in the same order.
+    status: covered
+    scenarios: [dtmf-both-ways]
+
+  - id: i3f-7.2.15
+    ref: "7.2.15"
+    title: DTMF after answer, called to caller, G.711
+    area: dtmf
+    component: edge
+    expect: Telephone-events from the backend reach the carrier with the same digits in the same order.
+    status: covered
+    scenarios: [dtmf-both-ways]
+
+  - id: i3f-7.2.16
+    ref: "7.2.16"
+    title: Carrier's OPTIONS pings to the edge
+    area: keepalive
+    component: edge
+    expect: >
+      OPTIONS from a carrier get 200 while the edge can take calls, and 503 when it can't (fleet full, every node
+      draining or down), so the carrier routes elsewhere. Kamailio answers these itself, whatever host they
+      name: 200 with Allow, or 503 when no node is active (both verified by hand).
+    status: partial
+    scenarios: [options]
+    gap: No scenario automates the 503 case yet.
+
+  - id: i3f-7.2.16-outbound
+    ref: "7.2.16"
+    title: The edge's OPTIONS pings to each carrier
+    area: keepalive
+    component: proxy
+    expect: >
+      Where a peer agrees to it, the edge pings that peer with OPTIONS and stops sending it calls (transfers,
+      outbound) while it doesn't answer, resuming when it does.
+    status: planned
+    milestone: M5
+    gap: Kamailio probes FreeSWITCH nodes today, not carrier peers; needs a peer mock that can stop answering.
+
+  # 7.2 note: optional SS7/ISUP tests the parties may agree
+
+  - id: i3f-7.2-note-mtp3
+    ref: "7.2 (note)"
+    title: SS7 MTP level 3 signalling tests
+    area: transport
+    component: edge
+    expect: Not tested; the edge has no SS7 links.
+    status: not-applicable
+    reason: SS7 link-layer testing applies to TDM gateways; the edge is SIP-only.
+
+  - id: i3f-7.2-note-overlap
+    ref: "7.2 (note)"
+    title: En bloc and overlap dialling
+    area: call-setup
+    component: edge
+    expect: Peers send the complete number in one INVITE; the edge doesn't take overlap dialling.
+    status: not-applicable
+    reason: An ISUP-level test; overlap signalling over SIP is not offered to peers.
+
+  - id: i3f-7.2-note-continuity
+    ref: "7.2 (note)"
+    title: Voice channel continuity check
+    area: media
+    component: edge
+    expect: Not tested; there are no TDM circuits to check.
+    status: not-applicable
+    reason: Continuity testing checks TDM circuits; media paths here are RTP, checked by the audio scenarios.
+
+  - id: i3f-7.2-note-category
+    ref: "7.2 (note)"
+    title: Calls with an operator or language calling-party category
+    area: identity
+    component: edge
+    expect: Not tested; the edge doesn't act on calling-party category.
+    status: not-applicable
+    reason: An ISUP parameter for operator services; no peer or backend behaviour depends on it.
+
+  - id: i3f-7.2-note-code-bc
+    ref: "7.2 (note)"
+    title: Calls with code 11 and code 12 digits
+    area: call-setup
+    component: edge
+    expect: Not tested; the edge doesn't route on operator-code digits.
+    status: not-applicable
+    reason: TDM operator-access numbering; peers deliver plain numbers in the Request-URI.
+
+  - id: i3f-7.2-note-cause-remote
+    ref: "7.2 (note)"
+    title: Release causes from the far side carried correctly
+    area: error-handling
+    component: edge
+    expect: >
+      A cause the backend gives is not lost: failures become the fallback with a reason naming the cause, and a
+      release after answer carries a matching Reason (Q.850) on the BYE to the carrier.
+    status: partial
+    scenarios: [busy-fallback, decline-fallback, no-answer-fallback]
+    gap: X-Fallback-Reason is checked for 486, 603 and no answer; Reason headers on BYE and CANCEL are not.
+
+  - id: i3f-7.2-note-cause-local
+    ref: "7.2 (note)"
+    title: Release causes the edge generates itself
+    area: error-handling
+    component: edge
+    expect: >
+      When the edge itself refuses (congestion at the session limit, no route, unallocated number) it sends the
+      matching SIP code with a Reason (Q.850) the carrier can map, e.g. 503 for congestion.
+    status: partial
+    scenarios: [admission-limit]
+    gap: >
+      Only the 503 at the session limit is checked (and not behind Kamailio, which now passes a fleet-wide 503 on
+      as 503 rather than 500); no Reason header, no-route or unallocated cases.
+
+  - id: i3f-7.2-note-cpn
+    ref: "7.2 (note)"
+    title: Calling number format and nature of address kept
+    area: identity
+    component: edge
+    expect: The calling number's format (international with +, national) reaches the backend as the carrier sent it.
+    status: planned
+    milestone: M5
+    gap: Same check as 7.5.1, listed among the ISUP items too.
+
+  # --- 7.3 Voice quality (targets agreed per interconnection) ------------------------------------------------
+
+  - id: i3f-7.3.1
+    ref: "7.3.1"
+    title: Idle channel noise
+    area: media
+    component: edge
+    expect: >
+      With both ends silent, the noise level each end receives through the edge stays below the agreed limit;
+      the edge adds no hiss, comfort-noise bursts or clicks.
+    status: planned
+    milestone: M3
+    gap: The runner detects tones, it doesn't measure levels.
+
+  - id: i3f-7.3.2
+    ref: "7.3.2"
+    title: Echo
+    area: media
+    component: edge
+    expect: >
+      Audio a caller sends doesn't come back to it (with a silent backend, the caller's tone is not heard back
+      above the agreed echo-return limit); the edge introduces no echo.
+    status: planned
+    milestone: M3
+    gap: No scenario asserts the caller's own tone is absent; a level-based check needs measurement the runner lacks.
+
+  - id: i3f-7.3.3
+    ref: "7.3.3"
+    title: Average speech level
+    area: media
+    component: edge
+    expect: Audio passes the edge without gain change; a known-level signal arrives at the other end within the agreed tolerance.
+    status: planned
+    milestone: M3
+    gap: The runner detects tones, it doesn't measure levels.
+
+  - id: i3f-7.3.4
+    ref: "7.3.4"
+    title: Speech loss (connection integrity)
+    area: media
+    component: edge
+    expect: >
+      A continuous signal through the edge shows no dropouts, clipping or interruptions beyond the agreed limit
+      over the call.
+    status: planned
+    milestone: M3
+    gap: Tones count as heard after 200 ms; gaps in an otherwise heard tone are not detected.
+
+  - id: i3f-7.3.5
+    ref: "7.3.5"
+    title: MOS / PESQ
+    area: media
+    component: edge
+    expect: >
+      Reference speech sent through the edge, per codec, scores at or above the agreed MOS when the received
+      audio is compared to the original (PESQ).
+    status: planned
+    milestone: M3
+    gap: The runner has no speech playback or PESQ scoring.
+
+  - id: i3f-7.3.6
+    ref: "7.3.6"
+    title: Post-gateway ringing delay
+    area: call-setup
+    component: edge
+    expect: >
+      The time from the carrier's INVITE to the first 180/183 back is measured; the edge's own share (beyond the
+      backend's ringing delay) stays within the agreed target, under load too.
+    status: planned
+    milestone: M3
+    gap: The runner doesn't timestamp provisional responses.
+
+  # --- 7.4 Fax quality ---------------------------------------------------------------------------------------
+
+  - id: i3f-7.4.1
+    ref: "7.4.1"
+    title: Fax image quality
+    area: fax
+    component: edge
+    expect: A test page faxed through the edge arrives without visible degradation (no lost or corrupted lines).
+    status: planned
+    milestone: M5
+    gap: Depends on whether any peer carries fax, an open question for the team; sipbench has no fax/T.38 support.
+
+  - id: i3f-7.4.2
+    ref: "7.4.2"
+    title: G3 fax throughput
+    area: fax
+    component: edge
+    expect: A G3 fax through the edge holds an acceptable transmission rate without retrains or fallbacks to lower speeds.
+    status: planned
+    milestone: M5
+    gap: Depends on whether any peer carries fax, an open question for the team; sipbench has no fax/T.38 support.
+
+  # --- 7.5 Mobile services -----------------------------------------------------------------------------------
+
+  - id: i3f-7.5
+    ref: "7.5"
+    title: Redirection signalling passed on
+    area: headers
+    component: edge
+    expect: >
+      Diversion or History-Info on a call from a carrier reach the backend unchanged, so it sees the originally
+      called number; a transfer leg the edge places carries who referred it.
+    status: planned
+    milestone: M5
+    gap: header-passthrough checks only X- headers.
+
+  - id: i3f-7.5.1
+    ref: "7.5.1"
+    title: Calling number format and nature of address kept
+    area: identity
+    component: edge
+    expect: >
+      The calling number reaches the backend in the format the carrier sent (E.164 with +, national, or as the
+      peer's config says to normalise it), with privacy settings honoured.
+    status: planned
+    milestone: M5
+
+  - id: i3f-7.5.2
+    ref: "7.5.2"
+    title: Roaming mobile in country A answers a call from carrier B
+    area: identity
+    component: edge
+    expect: Not tested here; caller ID delivery to our backend is checked by 7.5.1.
+    status: not-applicable
+    reason: Delivery to a roaming handset is a mobile network function; the edge terminates on the backend, not mobiles.
+
+  - id: i3f-7.5.3
+    ref: "7.5.3"
+    title: Roaming mobile in country B answers a call from carrier A
+    area: identity
+    component: edge
+    expect: Not tested here; caller ID delivery to our backend is checked by 7.5.1.
+    status: not-applicable
+    reason: Delivery to a roaming handset is a mobile network function; the edge terminates on the backend, not mobiles.
+
+  - id: i3f-7.5.4
+    ref: "7.5.4"
+    title: Roaming mobile in country A busy or unanswered, call goes to voicemail
+    area: call-setup
+    component: edge
+    expect: Not tested here; the edge's busy/no-answer treatment is the fallback (7.2.4, 7.2.5).
+    status: not-applicable
+    reason: Forwarding a roamer's call to voicemail is a mobile network function; the edge has no voicemail.
+
+  - id: i3f-7.5.5
+    ref: "7.5.5"
+    title: Roaming mobile in country B busy or unanswered, call goes to voicemail
+    area: call-setup
+    component: edge
+    expect: Not tested here; the edge's busy/no-answer treatment is the fallback (7.2.4, 7.2.5).
+    status: not-applicable
+    reason: Forwarding a roamer's call to voicemail is a mobile network function; the edge has no voicemail.

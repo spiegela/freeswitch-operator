@@ -1,0 +1,573 @@
+source:
+  id: rfc4475
+  title: RFC 4475, Session Initiation Protocol (SIP) Torture Test Messages
+  reference: https://www.rfc-editor.org/rfc/rfc4475
+  citation: >
+    Section numbers as IDs; titles and expectations are our paraphrase, read against Kamailio's role as the first
+    SIP parser on the edge. No message text is copied here. The verdicts were cross-checked with sipkit's
+    rfc4475_expectations.json (https://github.com/BenPaoBaMingWangXing/sipkit, Apache-2.0), whose extracted vectors
+    a later change may vendor under that licence.
+
+# Every case needs sipbench to send the torture message byte for byte, over UDP and over TCP, and to watch three
+# things: Kamailio's answer (or silence), that Kamailio is still up afterwards, and what reached the FreeSWITCH node
+# or the mock backend. sipgo builds and normalises its own messages, so none of this runs yet.
+cases:
+  # Valid messages (3.1.1)
+  - id: rfc4475-3.1.1.1
+    ref: "3.1.1.1"
+    title: Short tortuous INVITE (folding, odd spacing and case, unknown headers and parameters)
+    area: parsing
+    component: proxy
+    expect: >
+      Kamailio parses it as well formed (no 400), relays it to a FreeSWITCH node, and passes the unknown header
+      fields (the oddly valued one included) and unknown parameters through unchanged; the call proceeds.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.1.2
+    ref: "3.1.1.2"
+    title: Unknown method and the widest legal character ranges
+    area: parsing
+    component: proxy
+    expect: >
+      Parsed without error. As a new request from a peer (no To tag) it goes to a FreeSWITCH node, whose 501 with
+      Allow comes back; the method, branch, Call-ID and quoted strings are relayed byte for byte.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.1.3
+    ref: "3.1.1.3"
+    title: Legal % escaping in URIs
+    area: parsing
+    component: proxy
+    expect: >
+      Parsed as well formed and relayed with every escape as received: the escaped sips URI inside the
+      Request-URI user part is neither unescaped nor treated as a URI, and % outside escapable places isn't
+      decoded.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.1.4
+    ref: "3.1.1.4"
+    title: Escaped nulls in URI user parts (REGISTER)
+    area: parsing
+    component: proxy
+    expect: >
+      Parsed as well formed; nothing truncates the user part at the escaped null (logs, dispatcher hashing,
+      relayed copy). The edge is no registrar, so the REGISTER is handled like any peer REGISTER (today sent to a
+      node, which refuses it), never answered 400 for its syntax.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.1.5
+    ref: "3.1.1.5"
+    title: "% where it is not an escape (method that only looks like REGISTER)"
+    area: parsing
+    component: proxy
+    expect: >
+      Parsed as well formed; Kamailio treats the method as unknown, not as REGISTER, and sees two Contact values,
+      not three. As a new request it goes to a node, and the caller gets the node's 501.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.1.6
+    ref: "3.1.1.6"
+    title: No whitespace between display name and <
+    area: parsing
+    component: proxy
+    expect: Accepted as well formed (a known grammar bug); the OPTIONS goes to a node and its 200 comes back.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.1.7
+    ref: "3.1.1.7"
+    title: Very long header values and many parameters
+    area: parsing
+    component: proxy
+    expect: >
+      Accepted and relayed with every long value intact (display name, parameters, Call-ID); nothing truncated,
+      no crash or buffer error.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.1.8
+    ref: "3.1.1.8"
+    title: Extra octets after the message in a UDP datagram
+    area: parsing
+    component: proxy
+    expect: >
+      Kamailio handles the REGISTER at the front of the datagram and ignores the trailing octets: no INVITE is
+      processed, and a relayed REGISTER carries none of them.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP) in sipbench.
+
+  - id: rfc4475-3.1.1.9
+    ref: "3.1.1.9"
+    title: Semicolon parameters inside the Request-URI user part
+    area: parsing
+    component: proxy
+    expect: >
+      Accepted; the whole user;par=... string (with its escaped @) is the user part, not a URI parameter, and is
+      relayed unchanged.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.1.10
+    ref: "3.1.1.10"
+    title: Known and unknown transports in Via
+    area: parsing
+    component: proxy
+    expect: >
+      Accepted; the unknown transports in lower Via values don't matter, and the response goes back over the top
+      Via's transport.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.1.11
+    ref: "3.1.1.11"
+    title: Multipart MIME body with binary parts (MESSAGE)
+    area: parsing
+    component: proxy
+    expect: >
+      Framed by Content-Length despite the nulls in the binary part; relayed to a node with the body byte for byte
+      (the node's answer to MESSAGE comes back). The RFC's printed Content-Length is 14 octets short of its body,
+      so over UDP the tail is dropped as trailing octets; the vector must account for that.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.1.12
+    ref: "3.1.1.12"
+    title: Unusual reason phrase in a 200
+    area: parsing
+    component: proxy
+    expect: >
+      Sent by a node in answer to a relayed request, the 200 is accepted and relayed upstream with its reason
+      phrase (UTF-8 included) unchanged.
+    status: planned
+    milestone: M2
+    gap: >
+      Needs a raw-message sender, and a sipbench node stand-in behind Kamailio to send the response.
+
+  - id: rfc4475-3.1.1.13
+    ref: "3.1.1.13"
+    title: Empty reason phrase
+    area: parsing
+    component: proxy
+    expect: >
+      Sent by a node as a provisional to a relayed INVITE, it is accepted (stops Kamailio's INVITE
+      retransmissions) and, being a 100, not relayed upstream.
+    status: planned
+    milestone: M2
+    gap: >
+      Needs a raw-message sender, and a sipbench node stand-in behind Kamailio to send the response.
+
+  # Invalid messages (3.1.2)
+  - id: rfc4475-3.1.2.1
+    ref: "3.1.2.1"
+    title: Extraneous separators in Via and Contact
+    area: parsing
+    component: proxy
+    expect: Kamailio answers 400 (or drops it); nothing reaches FreeSWITCH and Kamailio stays up.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.2
+    ref: "3.1.2.2"
+    title: Content-Length larger than the body
+    area: parsing
+    component: proxy
+    expect: >
+      Over UDP Kamailio answers 400. Over TCP it waits for the rest, then closes the connection when none comes;
+      nothing is relayed either way.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.3
+    ref: "3.1.2.3"
+    title: Negative Content-Length
+    area: parsing
+    component: proxy
+    expect: >
+      Over UDP an error response (400) and the rest of the datagram discarded; over TCP the connection closed.
+      Never relayed, no crash. The same for a non-numeric Content-Length.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.4
+    ref: "3.1.2.4"
+    title: Request scalar fields out of range (CSeq, Max-Forwards, Expires)
+    area: parsing
+    component: proxy
+    expect: Kamailio answers 400 for the CSeq overflow and relays nothing.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.5
+    ref: "3.1.2.5"
+    title: Response scalar fields out of range (a 503)
+    area: parsing
+    component: proxy
+    expect: >
+      Sent by a node, the response is discarded: not relayed upstream and not acted on as a 503 (no dispatcher
+      failover is triggered by it).
+    status: planned
+    milestone: M2
+    gap: >
+      Needs a raw-message sender, and a sipbench node stand-in behind Kamailio to send the response.
+
+  - id: rfc4475-3.1.2.6
+    ref: "3.1.2.6"
+    title: Unterminated quoted string in a display name
+    area: parsing
+    component: proxy
+    expect: 400 from Kamailio (or, if it infers the quote, a relayed copy that is well formed); no crash.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.7
+    ref: "3.1.2.7"
+    title: Request-URI enclosed in <>
+    area: parsing
+    component: proxy
+    expect: 400 from Kamailio; if it is liberal and relays, the brackets are gone from the relayed Request-URI.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.8
+    ref: "3.1.2.8"
+    title: Whitespace inside the Request-URI
+    area: parsing
+    component: proxy
+    expect: 400 from Kamailio; nothing relayed.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.9
+    ref: "3.1.2.9"
+    title: Several spaces between request-line elements
+    area: parsing
+    component: proxy
+    expect: 400 from Kamailio, or relayed with single spaces in the request line.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.10
+    ref: "3.1.2.10"
+    title: Trailing spaces at the end of the request line
+    area: parsing
+    component: proxy
+    expect: 400 from Kamailio, or relayed without the trailing spaces.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.11
+    ref: "3.1.2.11"
+    title: Escaped headers in the Request-URI
+    area: parsing
+    component: proxy
+    expect: >
+      400 from Kamailio, or relayed with the escaped headers removed from the Request-URI; they never become real
+      header fields in the relayed request.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.12
+    ref: "3.1.2.12"
+    title: Date header with a non-GMT time zone
+    area: parsing
+    component: proxy
+    expect: >
+      Kamailio doesn't use Date, so it shouldn't refuse the INVITE for it: relayed with Date unchanged (a 400 is
+      tolerable); no crash.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.13
+    ref: "3.1.2.13"
+    title: Contact URI with headers not enclosed in <> (REGISTER)
+    area: parsing
+    component: proxy
+    expect: 400 from Kamailio (inferring the brackets is allowed here); a malformed Contact is never relayed.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.14
+    ref: "3.1.2.14"
+    title: Spaces inside an addr-spec
+    area: parsing
+    component: proxy
+    expect: Kamailio's parser doesn't break; 400, or relayed with the spaces dropped.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.15
+    ref: "3.1.2.15"
+    title: Unquoted display names with non-token characters
+    area: parsing
+    component: proxy
+    expect: 400 from Kamailio; if it is liberal and relays, the relayed From and To are well formed.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.16
+    ref: "3.1.2.16"
+    title: Unknown SIP version
+    area: parsing
+    component: proxy
+    expect: Kamailio answers 505 Version Not Supported and relays nothing.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.17
+    ref: "3.1.2.17"
+    title: Request-line method differs from CSeq method
+    area: parsing
+    component: proxy
+    expect: Kamailio answers 400 and relays nothing.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.18
+    ref: "3.1.2.18"
+    title: Unknown method with a mismatched CSeq method
+    area: parsing
+    component: proxy
+    expect: Kamailio answers 501 (preferred at a proxy) or 400, and relays nothing.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.1.2.19
+    ref: "3.1.2.19"
+    title: Response code above 699
+    area: parsing
+    component: proxy
+    expect: Sent by a node, the response is dropped silently and Kamailio stays up; the transaction carries on.
+    status: planned
+    milestone: M2
+    gap: >
+      Needs a raw-message sender, and a sipbench node stand-in behind Kamailio to send the response.
+
+  # Transaction layer (3.2)
+  - id: rfc4475-3.2.1
+    ref: "3.2.1"
+    title: z9hG4bK branch with nothing after the cookie
+    area: parsing
+    component: proxy
+    expect: >
+      Kamailio's parser doesn't break; it answers 400 (statelessly is best) or falls back to RFC 2543 matching and
+      handles the OPTIONS normally.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  # Application layer (3.3)
+  - id: rfc4475-3.3.1
+    ref: "3.3.1"
+    title: Missing Call-ID, From and To
+    area: parsing
+    component: proxy
+    expect: Kamailio doesn't break and answers 400; nothing reaches FreeSWITCH.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.2
+    ref: "3.3.2"
+    title: Unknown scheme in the Request-URI
+    area: parsing
+    component: proxy
+    expect: >
+      Parsed as well formed; Kamailio answers 416 and doesn't fall back to routing on the To header.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.3
+    ref: "3.3.3"
+    title: Registered but atypical scheme in the Request-URI
+    area: parsing
+    component: proxy
+    expect: Parsed as well formed; Kamailio answers 416 (it never routes this scheme).
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.4
+    ref: "3.3.4"
+    title: Non-SIP schemes in To, From and Contact (REGISTER)
+    area: parsing
+    component: proxy
+    expect: >
+      Parsed without error; as a proxy Kamailio treats it like any REGISTER from a peer (no 400 for the To
+      scheme, which is a registrar's objection). The edge has no registrar, so it ends refused by the node.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.5
+    ref: "3.3.5"
+    title: Unsupported Proxy-Require and Require
+    area: parsing
+    component: proxy
+    expect: >
+      Kamailio answers 420 with Unsupported listing the Proxy-Require options, and nothing reaches a node. The
+      example config now runs the Proxy-Require sanity check (verified by hand: 420 with Unsupported naming the
+      extension); no scenario checks it yet.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.6
+    ref: "3.3.6"
+    title: Body of unknown Content-Type
+    area: parsing
+    component: proxy
+    expect: >
+      Kamailio relays the INVITE like any other; the node (an endpoint here) answers 415, which reaches the caller.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.7
+    ref: "3.3.7"
+    title: Authorization with an unknown scheme (REGISTER)
+    area: parsing
+    component: proxy
+    expect: >
+      Parsed as well formed; handled like any peer REGISTER, and if relayed the Authorization header goes through
+      unmodified. Never a 400.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.8
+    ref: "3.3.8"
+    title: Several values in single-valued headers
+    area: parsing
+    component: proxy
+    expect: Kamailio doesn't break and answers 400; nothing relayed.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.9
+    ref: "3.3.9"
+    title: Conflicting Content-Length values
+    area: parsing
+    component: proxy
+    expect: >
+      Over UDP an error response (400) and the rest of the datagram discarded; over TCP the connection closed.
+      Nothing relayed.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.10
+    ref: "3.3.10"
+    title: 200 whose second Via names the broadcast address
+    area: security
+    component: proxy
+    expect: >
+      Parsed without error and dropped: Kamailio never forwards a response to 255.255.255.255, whether it matches a
+      transaction or not.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench, and a capture to show nothing went to the broadcast address.
+
+  - id: rfc4475-3.3.11
+    ref: "3.3.11"
+    title: Max-Forwards of zero
+    area: parsing
+    component: proxy
+    expect: Legal message; Kamailio doesn't relay it and answers 483.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.12
+    ref: "3.3.12"
+    title: Contact parameter on a REGISTER
+    area: parsing
+    component: proxy
+    expect: >
+      Parsed as well formed; the unknown parameter stays a Contact parameter (outside the URI) in anything
+      Kamailio relays. Edge has no registrar; handled like any peer REGISTER.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.13
+    ref: "3.3.13"
+    title: URI parameter in a REGISTER Contact
+    area: parsing
+    component: proxy
+    expect: >
+      Parsed as well formed; the unknown parameter stays inside the Contact URI in anything Kamailio relays. Edge
+      has no registrar; handled like any peer REGISTER.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.14
+    ref: "3.3.14"
+    title: Escaped Route header in a REGISTER Contact URI
+    area: parsing
+    component: proxy
+    expect: >
+      Parsed as well formed; the escaped Route stays escaped inside the Contact URI and Kamailio never routes on
+      it. Edge has no registrar; handled like any peer REGISTER.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  - id: rfc4475-3.3.15
+    ref: "3.3.15"
+    title: Accept that rules out SDP on an INVITE
+    area: parsing
+    component: proxy
+    expect: >
+      Kamailio relays it like any INVITE; the node answers 406 (with a Warning) or 400, which reaches the caller.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.
+
+  # Backward compatibility (3.4)
+  - id: rfc4475-3.4.1
+    ref: "3.4.1"
+    title: RFC 2543-style INVITE (no branch, no From tag, no Content-Length, no Max-Forwards)
+    area: parsing
+    component: proxy
+    expect: >
+      Accepted: Kamailio matches the transaction by RFC 2543 rules, adds Max-Forwards: 70, takes the body to the end
+      of the UDP datagram, and relays it; the call completes and later requests in it match.
+    status: planned
+    milestone: M2
+    gap: Needs a raw-message sender (UDP and TCP) in sipbench.

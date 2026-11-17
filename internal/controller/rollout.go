@@ -1,7 +1,8 @@
 package controller
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -87,7 +88,7 @@ func nextPodToReplace(pods []corev1.Pod, updateRevision string, desired int32) r
 		return d
 	}
 	// Prefer an outdated pod that is not ready. Otherwise every other pod must be ready.
-	sort.Slice(outdated, func(i, j int) bool { return ordinal(outdated[i]) > ordinal(outdated[j]) })
+	slices.SortFunc(outdated, func(a, b *corev1.Pod) int { return cmp.Compare(ordinal(b), ordinal(a)) })
 	for _, p := range outdated {
 		if !podReady(p) {
 			d.Replace = p

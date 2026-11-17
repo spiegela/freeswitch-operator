@@ -33,6 +33,9 @@ const (
 
 	// DispatcherHashAnnotation records the content hash of a rendered dispatcher list on its ConfigMap.
 	DispatcherHashAnnotation = "sip.instruments.com/dispatcher-hash"
+	// DispatcherUpdatedAtAnnotation records when the dispatcher list's content last changed (RFC 3339), written in
+	// the same update as the list, so the reload delay is measured from the change itself.
+	DispatcherUpdatedAtAnnotation = "sip.instruments.com/dispatcher-updated-at"
 )
 
 // ExternalAddressSource says where a FreeSWITCH pod's public address comes from.
@@ -107,13 +110,38 @@ type ExternalAddressSpec struct {
 	Required *bool `json:"required,omitempty"`
 }
 
-// ConfigSpec mounts FreeSWITCH configuration.
+// ConfigSpec assembles FreeSWITCH's configuration directory from ConfigMaps.
 type ConfigSpec struct {
-	// configMapRefs are mounted read-only at /etc/freeswitch-operator/config/<name>. A change to the
-	// referenced names rolls the fleet; a change to their contents is picked up by the image's own config
-	// loading (reloadxml) or the next roll.
+	// mountPath is the read-only directory the configuration is assembled in. Point FreeSWITCH at it with
+	// `-conf`, and keep the image's entrypoint from writing to it. It must neither contain nor sit inside the
+	// operator's own directories (/etc/freeswitch-operator/scripts and /etc/freeswitch-operator/podinfo), and
+	// must not hide /tmp.
+	// +kubebuilder:default="/etc/freeswitch-operator/config"
+	// +kubebuilder:validation:Pattern=`^/[^:]*$`
 	// +optional
-	ConfigMapRefs []corev1.LocalObjectReference `json:"configMapRefs,omitempty"`
+	MountPath string `json:"mountPath,omitempty"`
+
+	// configMapRefs are laid out under mountPath, each in its own directory, so a tree such as
+	// autoload_configs/, sip_profiles/ and dialplan/ can be built from several ConfigMaps. Pods mount immutable
+	// copies the operator takes, never the ConfigMaps themselves, so an edit reaches the fleet only by rolling
+	// it, one drained node at a time. The order of the list doesn't matter.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	ConfigMapRefs []ConfigMapRef `json:"configMapRefs,omitempty"`
+}
+
+// ConfigMapRef places one ConfigMap's keys, as files, in a directory under spec.config.mountPath.
+type ConfigMapRef struct {
+	// name of a ConfigMap in the cluster's namespace.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// path is the directory under mountPath that receives the ConfigMap's keys: "." for mountPath itself,
+	// or a relative path such as "autoload_configs". Defaults to the ConfigMap's name.
+	// +kubebuilder:validation:Pattern=`^(\.|[A-Za-z0-9_-][A-Za-z0-9_.-]*(/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*)$`
+	// +optional
+	Path string `json:"path,omitempty"`
 }
 
 // DrainSpec bounds how long a node waits for its calls to finish before it stops.
@@ -148,12 +176,17 @@ type DispatcherSpec struct {
 
 	// jsonrpcURL, when set, is Kamailio's JSON-RPC endpoint (jsonrpcs over xhttp). The operator uses it to
 	// take a leaving node out at once (dispatcher.set_state) and to reload the list once the kubelet has
-	// written the new file (dispatcher.reload).
+	// written the new file (dispatcher.reload). When the host names a Service in this cluster ("name",
+	// "name.namespace" or "name.namespace.svc[.<cluster domain>]"), each call goes to every ready pod behind it,
+	// on the target port of the Service port the URL names, so that every Kamailio hears of each change; any
+	// other URL is called as given.
 	// +optional
 	JSONRPCURL string `json:"jsonrpcURL,omitempty"`
 
 	// reloadDelaySeconds is how long after writing the ConfigMap the operator waits before asking Kamailio to
-	// reload, so the kubelet has synced the mounted file.
+	// reload, so the kubelet has synced the mounted file. After each reload the operator checks (dispatcher.list)
+	// that the Kamailio holds the list it wrote, and reloads again every 10 seconds until it does, so a kubelet
+	// slower than this delay costs time but never leaves a Kamailio on the old list.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:default=75
 	// +optional

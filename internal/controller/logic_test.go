@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -166,7 +168,7 @@ func testCluster() *sipv1alpha1.FreeswitchCluster {
 		ObjectMeta: metav1.ObjectMeta{Name: "edge", Namespace: "telephony"},
 		Spec: sipv1alpha1.FreeswitchClusterSpec{
 			Image:  "example/freeswitch:1",
-			Config: sipv1alpha1.ConfigSpec{ConfigMapRefs: []corev1.LocalObjectReference{{Name: "edge-config"}}},
+			Config: sipv1alpha1.ConfigSpec{ConfigMapRefs: []sipv1alpha1.ConfigMapRef{{Name: "edge-config"}}},
 		},
 	}
 }
@@ -190,7 +192,7 @@ func TestResolveDefaults(t *testing.T) {
 func TestBuildStatefulSet(t *testing.T) {
 	fsc := testCluster()
 	fsc.Spec.Drain.MaxDrainSeconds = 600
-	sts := buildStatefulSet(fsc)
+	sts := buildStatefulSet(fsc, testLayout(t, fsc))
 	spec := sts.Spec.Template.Spec
 
 	if !spec.HostNetwork || spec.DNSPolicy != corev1.DNSClusterFirstWithHostNet {
@@ -213,8 +215,14 @@ func TestBuildStatefulSet(t *testing.T) {
 	if c.ReadinessProbe == nil || !strings.HasSuffix(c.ReadinessProbe.Exec.Command[1], readyScriptName) {
 		t.Fatal("readiness must run the ready script")
 	}
+	if c.StartupProbe == nil || !strings.HasSuffix(c.StartupProbe.Exec.Command[1], startupScriptName) {
+		t.Fatal("startup must run the startup script")
+	}
+	if got := c.StartupProbe.PeriodSeconds * c.StartupProbe.FailureThreshold; got != startupGraceSeconds {
+		t.Fatalf("startup window %ds, want %ds", got, startupGraceSeconds)
+	}
 	if c.LivenessProbe != nil {
-		t.Fatal("no liveness probe in v0")
+		t.Fatal("no liveness probe: a false positive drops every call on the node")
 	}
 	env := map[string]string{}
 	for _, e := range c.Env {
@@ -227,7 +235,7 @@ func TestBuildStatefulSet(t *testing.T) {
 	for _, m := range c.VolumeMounts {
 		mounts[m.MountPath] = m.Name
 	}
-	for _, path := range []string{scriptsDir, podInfoDir, configDir + "/edge-config"} {
+	for _, path := range []string{scriptsDir, podInfoDir, configDir} {
 		if _, ok := mounts[path]; !ok {
 			t.Errorf("missing mount %s", path)
 		}
@@ -235,13 +243,13 @@ func TestBuildStatefulSet(t *testing.T) {
 }
 
 func TestTemplateHashChangesWithImage(t *testing.T) {
-	a := buildStatefulSet(testCluster())
+	a := buildStatefulSet(testCluster(), testLayout(t, testCluster()))
 	fsc := testCluster()
 	fsc.Spec.Image = "example/freeswitch:2"
-	b := buildStatefulSet(fsc)
+	b := buildStatefulSet(fsc, testLayout(t, fsc))
 	ha, _ := templateHash(&a.Spec.Template)
 	hb, _ := templateHash(&b.Spec.Template)
-	ha2, _ := templateHash(&buildStatefulSet(testCluster()).Spec.Template)
+	ha2, _ := templateHash(&buildStatefulSet(testCluster(), testLayout(t, testCluster())).Spec.Template)
 	if ha == hb || ha != ha2 {
 		t.Fatalf("hash: %s %s %s", ha, hb, ha2)
 	}
@@ -254,46 +262,100 @@ func TestScriptsReferenceSharedPaths(t *testing.T) {
 	if !strings.Contains(readyScript, externalAddrFile) {
 		t.Fatal("ready script must check the external address file")
 	}
+	if !strings.Contains(readyScript, startupScriptName) || !strings.Contains(buildScriptsConfigMap(testCluster()).Data[startupScriptName], "sofia status") {
+		t.Fatal("ready script must run the startup checks, shipped beside it")
+	}
 	if !strings.Contains(drainScript, "fsctl pause inbound") || !strings.Contains(drainScript, "show calls count") {
 		t.Fatal("drain script must pause inbound calls and wait on the call count")
 	}
 }
 
-func TestJSONRPCNotifier(t *testing.T) {
-	var got []map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		var req map[string]any
-		_ = json.Unmarshal(body, &req)
-		got = append(got, req)
-		if req["method"] == "dispatcher.reload" && len(got) > 2 {
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","error":{"code":500,"message":"boom"},"id":1}`))
+// fakeKamailio answers like Kamailio's jsonrpcs: dispatcher.reload copies the file on disk into memory, and
+// dispatcher.list shows memory, or HTTP 500 "No Destination Sets" when it holds none.
+type fakeKamailio struct {
+	calls  []map[string]any
+	onDisk map[int][]string
+	loaded map[int][]string
+	fail   string // a JSON-RPC error message to answer every call with
+}
+
+func (k *fakeKamailio) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	var req map[string]any
+	_ = json.Unmarshal(body, &req)
+	k.calls = append(k.calls, req)
+	rpcErr := func(msg string) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","error":{"code":500,"message":%q},"id":1}`, msg)
+	}
+	if k.fail != "" {
+		rpcErr(k.fail)
+		return
+	}
+	switch req["method"] {
+	case "dispatcher.reload":
+		k.loaded = k.onDisk
+	case "dispatcher.list":
+		if len(k.loaded) == 0 {
+			rpcErr("No Destination Sets")
 			return
 		}
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":"ok","id":1}`))
-	}))
-	defer srv.Close()
+		var records []any
+		for id, uris := range k.loaded {
+			var targets []any
+			for _, u := range uris {
+				targets = append(targets, map[string]any{"DEST": map[string]any{"URI": u, "FLAGS": "AP", "PRIORITY": 0}})
+			}
+			records = append(records, map[string]any{"SET": map[string]any{"ID": id, "TARGETS": targets}})
+		}
+		out, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "result": map[string]any{"NRSETS": len(records), "RECORDS": records}, "id": 1})
+		_, _ = w.Write(out)
+		return
+	}
+	_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":"ok","id":1}`))
+}
 
+func TestJSONRPCNotifier(t *testing.T) {
+	k := &fakeKamailio{}
+	srv := httptest.NewServer(k)
+	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	n := NewJSONRPCNotifier(srv.URL)
+
 	if err := n.SetInactive(ctx, 1, "sip:10.0.0.1:5060"); err != nil {
 		t.Fatal(err)
 	}
-	if err := n.Reload(ctx); err != nil {
-		t.Fatal(err)
+	if k.calls[0]["method"] != "dispatcher.set_state" {
+		t.Fatalf("first call %v", k.calls[0])
 	}
-	if err := n.Reload(ctx); err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("expected a JSON-RPC error, got %v", err)
-	}
-	if got[0]["method"] != "dispatcher.set_state" {
-		t.Fatalf("first call %v", got[0])
-	}
-	params := got[0]["params"].([]any)
+	params := k.calls[0]["params"].([]any)
 	if params[0] != "ip" || params[1] != float64(1) || params[2] != "sip:10.0.0.1:5060" {
 		t.Fatalf("set_state params %v", params)
 	}
-	if got[1]["method"] != "dispatcher.reload" {
-		t.Fatalf("second call %v", got[1])
+
+	want := []string{"sip:10.0.0.2:5060", "sip:10.0.0.1:5060"}
+	if err := n.Reload(ctx, 1, want); !errors.Is(err, errListNotLoaded) {
+		t.Fatalf("the kubelet hasn't written the file yet, so Kamailio holds nothing: want errListNotLoaded, got %v", err)
+	}
+	if err := n.Reload(ctx, 1, nil); err != nil {
+		t.Fatalf("an empty list loaded is an empty list: %v", err)
+	}
+
+	k.onDisk = map[int][]string{1: {"sip:10.0.0.1:5060", "sip:10.0.0.2:5060"}, 2: {"sip:10.9.9.9:5060"}}
+	if err := n.Reload(ctx, 1, want); err != nil {
+		t.Fatalf("set 1 holds the same URIs in another order, and other sets don't count: %v", err)
+	}
+	if got := k.calls[len(k.calls)-2]["method"]; got != "dispatcher.reload" {
+		t.Fatalf("reload before list, got %v", got)
+	}
+	if err := n.Reload(ctx, 1, want[:1]); !errors.Is(err, errListNotLoaded) {
+		t.Fatalf("one destination too many: want errListNotLoaded, got %v", err)
+	}
+
+	k.fail = "boom"
+	err := n.Reload(ctx, 1, want)
+	if err == nil || !strings.Contains(err.Error(), "kamailio dispatcher.reload: 500 boom") || errors.Is(err, errListNotLoaded) {
+		t.Fatalf("expected the JSON-RPC error, got %v", err)
 	}
 }

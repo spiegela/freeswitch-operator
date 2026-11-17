@@ -46,6 +46,25 @@ docker compose run --rm integration     # go test -tags integration: every scena
 docker compose down
 ```
 
+On a cluster, behind Kamailio and a `FreeswitchCluster`: `make kind-up kind-deploy kind-bench` from the repository
+root (see "The edge on kind" in the top-level README). The same configuration and scenarios run there:
+[`freeswitch/kustomization.yaml`](freeswitch/kustomization.yaml) turns `freeswitch/conf` into one ConfigMap per
+directory, and [`k8s/`](k8s/) holds the mock backend, the runner's transfer Service and the runner Job. Add a file
+under `freeswitch/conf` to that kustomization too; `go test ./...` fails until you do. `hack/kind.sh bench <regexp>`
+runs only the scenarios whose names match.
+
+The [report card](report-card/README.md) records the latest release's runs on kind and in compose, and how much of
+the [conformance record](conformance/README.md) the scenarios check. `sipbench report-card` writes it from the two
+runs' JSON reports; `make report-card-run` at the repository root runs both benches and writes it, and CI does the
+same after every release.
+
+Each of `-edge`, `-mock`, `-esl`, `-esl-password`, `-target`, `-caps`, `-run` and `-json` takes its default from
+`SIPBENCH_<FLAG>` (`SIPBENCH_ESL_PASSWORD` for `-esl-password`). `-json -` writes the report to stdout and the
+summary to stderr. A variable set to the empty string counts as set,
+so `SIPBENCH_ESL=""` turns the event socket off rather than falling back to `freeswitch:8021`.
+
+Set `SIPBENCH_SIP_DEBUG=true` with `-log-level debug` to log every SIP message the runner sends and receives.
+
 ## Results
 
 All scenarios on FreeSWITCH 1.10.10 (`drachtio/drachtio-freeswitch-mrf:0.9.6`, arm64), three consecutive runs:
@@ -68,6 +87,10 @@ All scenarios on FreeSWITCH 1.10.10 (`drachtio/drachtio-freeswitch-mrf:0.9.6`, a
 | codec-g722 | codecs | **skip**: needs `codec:g722`; neither this FreeSWITCH image nor the runner has G.722 |
 | admission-limit | admission | pass |
 | options | health | pass |
+
+On kind, through Kamailio: the same, except that `admission-limit` skips. It changes one FreeSWITCH node's
+limit over the event socket, and through a proxy the runner can't know which node takes the call. `options` is
+then answered by Kamailio.
 
 ## Bench conventions
 
@@ -192,12 +215,14 @@ A minimal SBC, deliberately small enough to read in one sitting:
   new INVITEs get 503. Each bridged call uses two sessions.
 - **Calls from the backend** (`backend` context) are refused with 403 until outbound routing is designed.
 - **Variables** come from the environment at start through `X-PRE-PROCESS cmd="exec-set"` (`bin/env.sh`):
-  `BACKEND_HOST`, `TRANSFER_HOST`, `UNREACHABLE_HOST`, `RING_TIMEOUT`, `FALLBACK_TONE_HZ`, `FALLBACK_TONE_MS`.
+  `BACKEND_HOST`, `TRANSFER_HOST`, `UNREACHABLE_HOST`, `RING_TIMEOUT`, `FALLBACK_TONE_HZ`, `FALLBACK_TONE_MS`,
+  `ESL_LISTEN_IP`.
 - **External address.** `ext-sip-ip`/`ext-rtp-ip` on `trunks` come from
   `/etc/freeswitch-operator/podinfo/external-address` (override the path with `FS_EXTERNAL_ADDRESS_FILE`), or this
-  host's address when the file is absent (`bin/external-address.sh`).
-- **Event socket** on 8021 (password `ClueCon`, limited to private ranges by the `bench` ACL). It is for the
-  bench only: change both before exposing it anywhere.
+  host's first IPv4 address when the file is absent (`bin/external-address.sh`; dual-stack hosts may list IPv6 first).
+- **Event socket** on 8021 (password `ClueCon`, limited to private ranges by the `bench` ACL), on all addresses
+  by default for the compose runner. On a cluster set `ESL_LISTEN_IP=127.0.0.1`: `fs_cli` and the operator's ready
+  and drain scripts reach it there. Change the password before exposing it anywhere.
 
 ### Image
 
@@ -206,6 +231,12 @@ FreeSWITCH 1.10.10 that runs natively on arm64. The image's own entrypoint rewri
 the binary directly against `freeswitch/conf`. The alternatives were worse: the common community image is
 amd64-only, and SignalWire's official packages need an account token to download. The image has no G.722 module,
 hence the G.722 skip.
+
+## Conformance record
+
+[`conformance/`](conformance/) records, case by case, what the edge should do according to published test plans
+and standards (an i3 Forum interop plan, ETSI TS 102 027-2, RFC 4475) plus our own cases and impairment
+profiles, and which scenario checks each one. A new scenario needs an entry there; `go test ./...` checks that.
 
 ## Known gaps
 
@@ -218,6 +249,8 @@ hence the G.722 skip.
 - UDP only; no TLS/SRTP scenarios yet.
 - The runner's caller drops early media and can't send re-INVITEs (hold/unhold).
 - `sipgo` logs a harmless `UDP ref went negative` warning when the OPTIONS client closes.
+- Each scenario starts by clearing the mock backend's call records, so two runners sharing one mock backend
+  clear each other's. Run one at a time until records are kept per run (M2).
 
 ## Layout
 
@@ -231,7 +264,9 @@ internal/tone       tone generator and Goertzel detector
 internal/scenario   scenario files
 internal/mock       mock config and HTTP API
 internal/esl        minimal FreeSWITCH event socket client
-freeswitch/conf     the edge configuration
+freeswitch/conf     the edge configuration (freeswitch/kustomization.yaml: the same as ConfigMaps)
 backends/mock.yaml  the mock's starting routes
 scenarios/          the scenarios
+conformance/        the conformance record: cases per source and the scenarios that check them
+k8s/                the bench on a cluster: mock backend, transfer Service, runner Job
 ```

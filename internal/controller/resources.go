@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -20,6 +21,11 @@ const (
 	// drainGraceMargin is added to maxDrainSeconds for the pod's termination grace period, so the preStop drain
 	// always finishes before the kubelet's SIGKILL.
 	drainGraceMargin int64 = 30
+
+	// startupGraceSeconds is how long a starting FreeSWITCH has to come up with its SIP profile before the
+	// kubelet restarts it.
+	startupGraceSeconds int32 = 120
+	startupProbePeriod  int32 = 5
 )
 
 // settings is a FreeswitchClusterSpec with every default applied. The API server applies the same defaults from
@@ -122,8 +128,9 @@ func buildScriptsConfigMap(fsc *sipv1alpha1.FreeswitchCluster) *corev1.ConfigMap
 			Labels:    commonLabels(fsc),
 		},
 		Data: map[string]string{
-			drainScriptName: drainScript,
-			readyScriptName: readyScript,
+			drainScriptName:   drainScript,
+			readyScriptName:   readyScript,
+			startupScriptName: startupScript,
 		},
 	}
 }
@@ -164,11 +171,12 @@ func buildPDB(fsc *sipv1alpha1.FreeswitchCluster) *policyv1.PodDisruptionBudget 
 	}
 }
 
-func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster) *appsv1.StatefulSet {
+// buildStatefulSet renders the fleet's StatefulSet, with conf (from layoutConfig) as its configuration directory.
+func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *appsv1.StatefulSet {
 	cfg := resolve(fsc)
 	labels := commonLabels(fsc)
 
-	env := []corev1.EnvVar{
+	env := slices.Concat([]corev1.EnvVar{
 		{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
 		{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
 		{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}},
@@ -178,8 +186,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster) *appsv1.StatefulSet {
 		{Name: "FS_EXTERNAL_ADDRESS_FILE", Value: externalAddrFile},
 		{Name: "FS_MAX_DRAIN_SECONDS", Value: strconv.FormatInt(cfg.maxDrainSeconds, 10)},
 		{Name: "FS_REQUIRE_EXTERNAL_ADDRESS", Value: strconv.FormatBool(cfg.requireAddress)},
-	}
-	env = append(env, fsc.Spec.Env...)
+	}, fsc.Spec.Env)
 
 	volumes := []corev1.Volume{
 		{
@@ -204,13 +211,14 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster) *appsv1.StatefulSet {
 		{Name: "operator-scripts", MountPath: scriptsDir, ReadOnly: true},
 		{Name: "podinfo", MountPath: podInfoDir, ReadOnly: true},
 	}
-	for i, ref := range fsc.Spec.Config.ConfigMapRefs {
-		vol := fmt.Sprintf("config-%d", i)
+	var templateAnnotations map[string]string
+	if len(conf.sources) > 0 {
 		volumes = append(volumes, corev1.Volume{
-			Name:         vol,
-			VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: ref}},
+			Name:         "config",
+			VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: conf.sources}},
 		})
-		mounts = append(mounts, corev1.VolumeMount{Name: vol, MountPath: configDir + "/" + ref.Name, ReadOnly: true})
+		mounts = append(mounts, corev1.VolumeMount{Name: "config", MountPath: conf.mountPath, ReadOnly: true})
+		templateAnnotations = map[string]string{configHashAnnotation: conf.hash}
 	}
 
 	container := corev1.Container{
@@ -229,16 +237,27 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster) *appsv1.StatefulSet {
 			{Name: "sip-tcp", Protocol: corev1.ProtocolTCP, ContainerPort: cfg.sipPort, HostPort: cfg.sipPort},
 		},
 		VolumeMounts: mounts,
+		// Startup: FreeSWITCH up with a SIP profile on the SIP port, within startupGraceSeconds. A config that
+		// leaves no profile running keeps the new pod restarting and never ready, so a roll stops at that node.
+		StartupProbe: &corev1.Probe{
+			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + startupScriptName}}},
+			PeriodSeconds:    startupProbePeriod,
+			TimeoutSeconds:   3,
+			FailureThreshold: startupGraceSeconds / startupProbePeriod,
+			SuccessThreshold: 1,
+		},
 		ReadinessProbe: &corev1.Probe{
-			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/bin/sh", scriptsDir + "/" + readyScriptName}}},
+			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + readyScriptName}}},
 			PeriodSeconds:    5,
 			TimeoutSeconds:   3,
 			FailureThreshold: 1,
 			SuccessThreshold: 1,
 		},
-		// No liveness probe in v0: a false positive kills every call on the node. Crashes restart the container.
+		// No liveness probe: a failure restarts the container and drops every call on the node, and fs_cli can
+		// be slow under load, so a false positive at peak would do more harm than the hang it guards against.
+		// A crash needs no probe: the process exits and the container restarts.
 		Lifecycle: &corev1.Lifecycle{
-			PreStop: &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{"/bin/sh", scriptsDir + "/" + drainScriptName}}},
+			PreStop: &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + drainScriptName}}},
 		},
 	}
 
@@ -273,7 +292,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster) *appsv1.StatefulSet {
 			// The operator replaces pods itself, one at a time, only when the rest of the fleet is ready.
 			UpdateStrategy: appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: templateAnnotations},
 				Spec:       podSpec,
 			},
 		},

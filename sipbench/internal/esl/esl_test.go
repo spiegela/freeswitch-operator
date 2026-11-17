@@ -16,7 +16,7 @@ func fakeSwitch(t *testing.T, password string, replies map[string]string) string
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -24,9 +24,9 @@ func fakeSwitch(t *testing.T, password string, replies map[string]string) string
 				return
 			}
 			go func(conn net.Conn) {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				r := bufio.NewReader(conn)
-				fmt.Fprint(conn, "Content-Type: auth/request\n\n")
+				_, _ = fmt.Fprint(conn, "Content-Type: auth/request\n\n")
 				readCmd := func() string {
 					var lines []string
 					for {
@@ -42,19 +42,19 @@ func fakeSwitch(t *testing.T, password string, replies map[string]string) string
 					}
 				}
 				if readCmd() != "auth "+password {
-					fmt.Fprint(conn, "Content-Type: command/reply\nReply-Text: -ERR invalid\n\n")
+					_, _ = fmt.Fprint(conn, "Content-Type: command/reply\nReply-Text: -ERR invalid\n\n")
 					return
 				}
-				fmt.Fprint(conn, "Content-Type: command/reply\nReply-Text: +OK accepted\n\n")
+				_, _ = fmt.Fprint(conn, "Content-Type: command/reply\nReply-Text: +OK accepted\n\n")
 				for {
 					cmd := readCmd()
 					if cmd == "" {
 						return
 					}
 					// An unrelated event first, as a real switch may send.
-					fmt.Fprint(conn, "Content-Type: text/disconnect-notice\nContent-Length: 3\n\nbye")
+					_, _ = fmt.Fprint(conn, "Content-Type: text/disconnect-notice\nContent-Length: 3\n\nbye")
 					body := replies[strings.TrimPrefix(cmd, "api ")]
-					fmt.Fprintf(conn, "Content-Type: api/response\nContent-Length: %d\n\n%s", len(body), body)
+					_, _ = fmt.Fprintf(conn, "Content-Type: api/response\nContent-Length: %d\n\n%s", len(body), body)
 				}
 			}(conn)
 		}
@@ -74,7 +74,7 @@ func TestAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	out, err := c.API("fsctl max_sessions 4", time.Second)
 	if err != nil || out != "+OK max sessions: 4" {
 		t.Fatalf("got %q, %v", out, err)

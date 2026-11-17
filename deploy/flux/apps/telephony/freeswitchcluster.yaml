@@ -10,6 +10,10 @@ spec:
   replicas: 3
   # Any image with freeswitch, fs_cli and /bin/sh. Build and pin your own for production.
   image: registry.example.com/freeswitch:1.10.12-1
+  # The config below is mounted read-only: run freeswitch against it directly, past any entrypoint that edits
+  # its config before starting (many public images do).
+  command: ["/usr/local/freeswitch/bin/freeswitch"]
+  args: ["-nonat", "-nf", "-nc", "-conf", "/usr/local/freeswitch/conf", "-log", "/tmp", "-db", "/tmp"]
   nodeSelector:
     node-role.example.com/sip-edge: "true"
   tolerations:
@@ -26,8 +30,13 @@ spec:
     source: NodeExternalIP
     required: true
   config:
+    # The directory FreeSWITCH reads (-conf). Each ConfigMap's keys become files in its own directory under it.
+    mountPath: /usr/local/freeswitch/conf
     configMapRefs:
-      - name: edge-freeswitch-config
+      - {name: edge-freeswitch-conf, path: "."}                  # freeswitch.xml, vars.xml
+      - {name: edge-freeswitch-autoload, path: autoload_configs}
+      - {name: edge-freeswitch-dialplan, path: dialplan}
+      - {name: edge-freeswitch-profiles, path: sip_profiles}
   drain:
     maxDrainSeconds: 7200
   dispatcher:
@@ -35,5 +44,5 @@ spec:
     configMapName: edge-dispatcher
     transport: udp
     # Optional: Kamailio's JSON-RPC endpoint (jsonrpcs over xhttp) for immediate removal and reloads.
-    jsonrpcURL: http://kamailio.telephony.svc:5060/RPC
+    jsonrpcURL: http://kamailio.telephony.svc:5070/RPC
     reloadDelaySeconds: 75

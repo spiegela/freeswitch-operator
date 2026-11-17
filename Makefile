@@ -63,6 +63,15 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
+.PHONY: test-sipbench
+test-sipbench: ## Vet and test sipbench (its own Go module), including the conformance record's checks.
+	cd sipbench && go vet ./... && go test ./...
+
+.PHONY: check-tidy
+check-tidy: ## Fail if go.mod or go.sum of either module needs go mod tidy.
+	go mod tidy -diff
+	cd sipbench && go mod tidy -diff
+
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
 # kubectl kuberc is disabled by default for test isolation; enable with:
@@ -94,9 +103,59 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+##@ The edge on kind (hack/kind.sh)
+
+.PHONY: kind-up
+kind-up: ## Create the local edge cluster: two proxy nodes, three edge nodes
+	KIND=$(KIND) hack/kind.sh up
+
+.PHONY: kind-deploy
+kind-deploy: kustomize ## Build and load the images, install the operator, deploy Kamailio, FreeSWITCH and the bench
+	KIND=$(KIND) hack/kind.sh deploy
+
+.PHONY: kind-bench
+kind-bench: ## Run sipbench through Kamailio against the FreeswitchCluster (SIPBENCH_REPORT=<file> saves the JSON report)
+	KIND=$(KIND) SIPBENCH_REPORT="$(SIPBENCH_REPORT)" hack/kind.sh bench
+
+.PHONY: kind-down
+kind-down: ## Delete the local edge cluster
+	KIND=$(KIND) hack/kind.sh down
+
+##@ sipbench report card
+
+REPORT_CARD_DIR ?= sipbench/report-card
+
+.PHONY: compose-bench
+compose-bench: ## Run sipbench against one FreeSWITCH in docker compose (SIPBENCH_REPORT=<file> saves the JSON report)
+	cd sipbench && { \
+	  docker compose up -d --build || exit 1; \
+	  status=0; \
+	  if [ -n "$(SIPBENCH_REPORT)" ]; then \
+	    docker compose run --rm -T --use-aliases sipbench run -json - scenarios >"$(abspath $(SIPBENCH_REPORT))" || status=$$?; \
+	  else \
+	    docker compose run --rm --use-aliases sipbench run scenarios || status=$$?; \
+	  fi; \
+	  docker compose down; \
+	  exit $$status; }
+
+.PHONY: report-card
+report-card: ## Write the report card from the kind and compose reports saved in REPORT_CARD_DIR
+	cd sipbench && go run ./cmd/sipbench report-card -kind $(abspath $(REPORT_CARD_DIR))/kind.json \
+	  -compose $(abspath $(REPORT_CARD_DIR))/compose.json -commit "$$(git rev-parse --short HEAD)" \
+	  -out $(abspath $(REPORT_CARD_DIR))
+
+.PHONY: report-card-run
+report-card-run: ## Run both benches, save their reports and write the report card (after kind-up and kind-deploy)
+	@status=0; \
+	$(MAKE) kind-bench SIPBENCH_REPORT=$(REPORT_CARD_DIR)/kind.json || status=1; \
+	$(MAKE) compose-bench SIPBENCH_REPORT=$(REPORT_CARD_DIR)/compose.json || status=1; \
+	$(MAKE) report-card || exit 1; \
+	exit $$status
+
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter
+lint: golangci-lint ## Run golangci-lint on the operator and on sipbench (its own module, same config)
 	"$(GOLANGCI_LINT)" run
+	cd sipbench && "$(GOLANGCI_LINT)" run --config ../.golangci.yml ./...
 
 .PHONY: lint-fix
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes

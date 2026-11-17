@@ -1,0 +1,17 @@
+order,scenario,area,kind_status,kind_seconds,kind_note,compose_status,compose_note,description
+1,basic-two-way,basic,pass,3.2,,pass,,"The far end calls in, the edge bridges to the backend, and audio flows both ways: the backend hears the caller's 600 Hz and the caller hears the backend's 1000 Hz. The caller hangs up."
+2,backend-hangup,basic,pass,2.7,,pass,,The backend ends the call; the BYE reaches the far end.
+3,cancel,basic,pass,2.5,,pass,,The far end gives up while the backend is ringing; the CANCEL reaches the backend.
+4,busy-fallback,failures,pass,3.6,,pass,,"The backend answers 486. The edge does not pass the failure back: it answers with the fallback, which in the bench is a 1400 Hz tone and an X-Fallback-Reason response header, then hangs up."
+5,decline-fallback,failures,pass,3.6,,pass,,The backend declines with 603; the caller gets the fallback.
+6,no-answer-fallback,failures,pass,9.2,,pass,,The backend rings past the edge's ring timeout (6 s in the bench); the caller gets the fallback.
+7,unreachable-fallback,failures,pass,9.0,,pass,,"The backend address doesn't respond at all (the edge routes user ""unreachable"" to a TEST-NET address); the caller gets the fallback once the ring timeout passes."
+8,header-passthrough,headers,pass,1.6,,pass,,X- headers from the far end reach the backend unchanged.
+9,blind-transfer,transfers,pass,7.7,,pass,,"The backend asks for a blind transfer with a REFER. The edge ends the REFER itself (202, NOTIFY, releases the backend) and places the transfer to the runner's target, carrying the caller's X- headers. The caller hears the backend, then the target; the target hears the caller."
+10,dtmf-both-ways,dtmf,pass,5.2,,pass,,RFC 2833 digits pass through the edge in both directions.
+11,codec-pcmu,codecs,pass,2.2,,pass,,A far end offering only PCMU gets PCMU end to end.
+12,codec-pcma,codecs,pass,2.2,,pass,,A far end offering only PCMA gets PCMA end to end.
+13,codec-g722,codecs,skip,,needs codec:g722,skip,needs codec:g722,A far end offering only G.722 gets G.722. Skipped unless the run declares codec:g722: the bench's FreeSWITCH image has no G.722 module and the runner has no G.722 codec yet.
+14,admission-limit,admission,skip,,needs esl,pass,,"With the edge's session limit lowered to 4 (two bridged calls), a third concurrent call is refused with 503 and never reaches the backend. The limit is restored afterwards."
+15,options,health,pass,0.5,,pass,,The edge answers OPTIONS with 200 while it has capacity (what a SIP proxy's dispatcher probes).
+16,echo,basic,pass,3.2,,pass,,The backend echoes the caller's audio; the caller hears its own 600 Hz back through the edge.

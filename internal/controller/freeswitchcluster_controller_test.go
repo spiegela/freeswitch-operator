@@ -30,9 +30,12 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
@@ -42,6 +45,8 @@ type fakeNotifier struct {
 	mu       sync.Mutex
 	inactive []string
 	reloads  int
+	loaded   []string // the list the last reload asked for
+	stale    int      // reloads still to come that find the old file, as before the kubelet syncs it
 }
 
 func (f *fakeNotifier) SetInactive(_ context.Context, setID int32, uri string) error {
@@ -51,10 +56,15 @@ func (f *fakeNotifier) SetInactive(_ context.Context, setID int32, uri string) e
 	return nil
 }
 
-func (f *fakeNotifier) Reload(context.Context) error {
+func (f *fakeNotifier) Reload(_ context.Context, _ int32, want []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reloads++
+	if f.stale > 0 {
+		f.stale--
+		return fmt.Errorf("%w: test", errListNotLoaded)
+	}
+	f.loaded = want
 	return nil
 }
 
@@ -247,6 +257,107 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "kamailio-dispatcher"}, &cm)).To(Succeed())
 		Expect(cm.Data[dispatcherListKey]).NotTo(ContainSubstring("10.0.1.20"))
 		Expect(notifier.reloads).To(Equal(1), "the reload waits for the kubelet to sync the file")
+
+		By("a status write lost after the list changed still ends in a reload of the new list")
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
+		changed := fsc.Status.DispatcherHash
+		Expect(changed).To(Equal(cm.Annotations[sipv1alpha1.DispatcherHashAnnotation]))
+		// Roll the status back to before the change, as if that update had hit a conflict.
+		fsc.Status.DispatcherHash = fsc.Status.DispatcherReloadedHash
+		Expect(k8sClient.Status().Update(ctx, &fsc)).To(Succeed())
+		reconcileOnce(r, ns)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
+		Expect(fsc.Status.DispatcherHash).To(Equal(changed), "the status mirrors the ConfigMap")
+		Expect(notifier.reloads).To(Equal(1), "still inside the delay, measured from the change itself")
+		now = now.Add(61 * time.Second)
+		reconcileOnce(r, ns)
+		Expect(notifier.reloads).To(Equal(2))
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
+		Expect(fsc.Status.DispatcherReloadedHash).To(Equal(changed))
+	})
+
+	It("tells every ready Kamailio behind the JSON-RPC Service, not just the one the Service picks", func() {
+		ns := newNamespace(ctx)
+		kns := newNamespace(ctx)
+		// Kamailio in its own namespace; the Service port (5070) maps to a different target port (5071).
+		Expect(k8sClient.Create(ctx, &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "kamailio", Namespace: kns},
+			Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{
+				{Name: "sip", Port: 5060, Protocol: corev1.ProtocolUDP},
+				{Name: "rpc", Port: 5070, TargetPort: intstr.FromInt32(5071), Protocol: corev1.ProtocolTCP},
+			}},
+		})).To(Succeed())
+		Expect(k8sClient.Create(ctx, &discoveryv1.EndpointSlice{
+			ObjectMeta:  metav1.ObjectMeta{Name: "kamailio-xyz", Namespace: kns, Labels: map[string]string{discoveryv1.LabelServiceName: "kamailio"}},
+			AddressType: discoveryv1.AddressTypeIPv4,
+			Ports:       []discoveryv1.EndpointPort{{Name: ptr.To("sip"), Port: ptr.To[int32](5060)}, {Name: ptr.To("rpc"), Port: ptr.To[int32](5071)}},
+			Endpoints: []discoveryv1.Endpoint{
+				{Addresses: []string{"10.0.2.1"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)}},
+				{Addresses: []string{"10.0.2.2"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)}},
+				{Addresses: []string{"10.0.2.3"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(false)}},
+			},
+		})).To(Succeed())
+		Expect(k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
+			f.Spec.Dispatcher = &sipv1alpha1.DispatcherSpec{
+				ConfigMapName: "kamailio-dispatcher", SetID: 1, ReloadDelaySeconds: 60,
+				JSONRPCURL: fmt.Sprintf("http://kamailio.%s.svc.cluster.local:5070/RPC", kns),
+			}
+		}))).To(Succeed())
+		slice := &discoveryv1.EndpointSlice{
+			ObjectMeta:  metav1.ObjectMeta{Name: "edge-abcde", Namespace: ns, Labels: map[string]string{discoveryv1.LabelServiceName: "edge"}},
+			AddressType: discoveryv1.AddressTypeIPv4,
+			Endpoints: []discoveryv1.Endpoint{
+				{Addresses: []string{"10.0.1.10"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "edge-0"}},
+				{Addresses: []string{"10.0.1.20"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "edge-1"}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, slice)).To(Succeed())
+
+		notifiers := map[string]*fakeNotifier{}
+		now := time.Now()
+		r := &FreeswitchClusterReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			NewNotifier: func(url string) DispatcherNotifier {
+				if notifiers[url] == nil {
+					notifiers[url] = &fakeNotifier{}
+				}
+				return notifiers[url]
+			},
+			Now: func() time.Time { return now },
+		}
+		// The second Kamailio's kubelet is slow: its first reload still finds the old file.
+		notifiers["http://10.0.2.2:5071/RPC"] = &fakeNotifier{stale: 1}
+		reconcileOnce(r, ns)
+		now = now.Add(61 * time.Second)
+		res := reconcileOnce(r, ns)
+		Expect(notifiers).To(HaveLen(2), "one notifier per ready Kamailio, none for the unready one")
+		for _, url := range []string{"http://10.0.2.1:5071/RPC", "http://10.0.2.2:5071/RPC"} {
+			Expect(notifiers[url].reloads).To(Equal(1), url)
+		}
+		var fsc sipv1alpha1.FreeswitchCluster
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
+		Expect(fsc.Status.DispatcherReloadedHash).NotTo(Equal(fsc.Status.DispatcherHash), "not done until every Kamailio has the list")
+		Expect(res.RequeueAfter).To(Equal(10*time.Second), "reload again soon")
+
+		By("the next reload finds the file and the reload is done")
+		res = reconcileOnce(r, ns)
+		for _, url := range []string{"http://10.0.2.1:5071/RPC", "http://10.0.2.2:5071/RPC"} {
+			Expect(notifiers[url].reloads).To(Equal(2), url)
+			Expect(notifiers[url].loaded).To(ConsistOf("sip:10.0.1.10:5060", "sip:10.0.1.20:5060"), url)
+		}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
+		Expect(fsc.Status.DispatcherReloadedHash).To(Equal(fsc.Status.DispatcherHash))
+
+		By("a leaving node is marked inactive on every Kamailio")
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge-abcde"}, slice)).To(Succeed())
+		slice.Endpoints[1].Conditions.Ready = ptr.To(false)
+		slice.Endpoints[1].Conditions.Terminating = ptr.To(true)
+		Expect(k8sClient.Update(ctx, slice)).To(Succeed())
+		reconcileOnce(r, ns)
+		for url, n := range notifiers {
+			Expect(n.inactive).To(Equal([]string{"1 sip:10.0.1.20:5060"}), url)
+		}
 	})
 
 	It("replaces one outdated pod at a time, only when the rest of the fleet is ready", func() {
@@ -303,6 +414,177 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		setPodReady(ctx, p, true)
 		reconcileOnce(r, ns)
 		Expect(gone("edge-0")).To(BeTrue())
+	})
+
+	It("waits for its ConfigMaps, lays them out as a tree, and rolls when their contents change", func() {
+		ns := newNamespace(ctx)
+		Expect(k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
+			f.Spec.Config = sipv1alpha1.ConfigSpec{
+				MountPath: "/usr/local/freeswitch/conf",
+				ConfigMapRefs: []sipv1alpha1.ConfigMapRef{
+					{Name: "fs-root", Path: "."},
+					{Name: "fs-profiles", Path: "sip_profiles"},
+				},
+			}
+		}))).To(Succeed())
+		r := &FreeswitchClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		key := types.NamespacedName{Namespace: ns, Name: "edge"}
+
+		// Nothing to run yet: no StatefulSet, and the status says why.
+		reconcileOnce(r, ns)
+		var sts appsv1.StatefulSet
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, key, &sts))).To(BeTrue())
+		var fsc sipv1alpha1.FreeswitchCluster
+		Expect(k8sClient.Get(ctx, key, &fsc)).To(Succeed())
+		degraded := meta.FindStatusCondition(fsc.Status.Conditions, "Degraded")
+		Expect(degraded).NotTo(BeNil())
+		Expect(degraded.Reason).To(Equal("ConfigInvalid"))
+		Expect(degraded.Message).To(ContainSubstring("not found"))
+
+		root := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "fs-root", Namespace: ns}, Data: map[string]string{"freeswitch.xml": "<document/>"}}
+		profiles := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "fs-profiles", Namespace: ns}, Data: map[string]string{"trunks.xml": "<profile/>"}}
+		Expect(k8sClient.Create(ctx, root)).To(Succeed())
+		Expect(k8sClient.Create(ctx, profiles)).To(Succeed())
+
+		reconcileOnce(r, ns)
+		Expect(k8sClient.Get(ctx, key, &sts)).To(Succeed())
+		var paths []string
+		for _, v := range sts.Spec.Template.Spec.Volumes {
+			if v.Name == "config" {
+				for _, src := range v.Projected.Sources {
+					for _, it := range src.ConfigMap.Items {
+						paths = append(paths, it.Path)
+					}
+				}
+			}
+		}
+		Expect(paths).To(Equal([]string{"sip_profiles/trunks.xml", "freeswitch.xml"}), "references in name order")
+		configHash := sts.Spec.Template.Annotations[configHashAnnotation]
+		Expect(configHash).NotTo(BeEmpty())
+		Expect(k8sClient.Get(ctx, key, &fsc)).To(Succeed())
+		Expect(meta.FindStatusCondition(fsc.Status.Conditions, "Degraded").Reason).NotTo(Equal("ConfigInvalid"))
+
+		// The pods mount the operator's immutable copies, never the user's ConfigMaps (the kubelet would push an
+		// edit of those into every running pod at once).
+		snapshotsOf := func() []string {
+			Expect(k8sClient.Get(ctx, key, &sts)).To(Succeed())
+			var names []string
+			for _, v := range sts.Spec.Template.Spec.Volumes {
+				if v.Name == "config" {
+					for _, src := range v.Projected.Sources {
+						names = append(names, src.ConfigMap.Name)
+					}
+				}
+			}
+			return names
+		}
+		first := snapshotsOf()
+		Expect(first).To(HaveLen(2))
+		for _, name := range first {
+			Expect(name).To(HavePrefix("edge-config-"))
+			var snap corev1.ConfigMap
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &snap)).To(Succeed())
+			Expect(snap.Immutable).To(HaveValue(BeTrue()))
+			Expect(metav1.IsControlledBy(&snap, &fsc)).To(BeTrue())
+		}
+		snapshotExists := func(name string) bool {
+			var snap corev1.ConfigMap
+			err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &snap)
+			return err == nil && snap.DeletionTimestamp == nil
+		}
+
+		// A content change makes a new snapshot and so a new template, which the rollout loop then works through.
+		profiles.Data["trunks.xml"] = "<profile name=\"trunks\"/>"
+		Expect(k8sClient.Update(ctx, profiles)).To(Succeed())
+		reconcileOnce(r, ns)
+		Expect(k8sClient.Get(ctx, key, &sts)).To(Succeed())
+		Expect(sts.Spec.Template.Annotations[configHashAnnotation]).NotTo(Equal(configHash))
+		second := snapshotsOf()
+		// [0] is fs-profiles, [1] fs-root.
+		Expect(second[1]).To(Equal(first[1]), "the unchanged ConfigMap keeps its snapshot")
+		Expect(second[0]).NotTo(Equal(first[0]))
+		Expect(snapshotExists(first[0])).To(BeTrue(), "kept until the StatefulSet controller has seen the new template")
+
+		// A pod still on the old revision keeps its snapshot; once no pod mounts it, it goes.
+		sts.Status.ObservedGeneration = sts.Generation
+		Expect(k8sClient.Status().Update(ctx, &sts)).To(Succeed())
+		old := fsPod(ns, "edge-0", "", "edge-old")
+		old.Spec.Volumes = []corev1.Volume{{Name: "config", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+			Sources: []corev1.VolumeProjection{{ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: first[0]}}}},
+		}}}}
+		Expect(k8sClient.Create(ctx, old)).To(Succeed())
+		reconcileOnce(r, ns)
+		Expect(snapshotExists(first[0])).To(BeTrue(), "an old pod still mounts it")
+		Expect(k8sClient.Delete(ctx, old, client.GracePeriodSeconds(0))).To(Succeed())
+		Eventually(func() bool {
+			var p corev1.Pod
+			return apierrors.IsNotFound(k8sClient.Get(ctx, podKey(old), &p))
+		}).Should(BeTrue())
+		reconcileOnce(r, ns)
+		Expect(snapshotExists(first[0])).To(BeFalse())
+		Expect(snapshotExists(second[0])).To(BeTrue())
+		Expect(snapshotExists(first[1])).To(BeTrue())
+
+		// Deleting a ConfigMap leaves the running template alone and reports it.
+		before := sts.Annotations[templateHashAnnotation]
+		Expect(k8sClient.Delete(ctx, root)).To(Succeed())
+		reconcileOnce(r, ns)
+		Expect(k8sClient.Get(ctx, key, &sts)).To(Succeed())
+		Expect(sts.Annotations[templateHashAnnotation]).To(Equal(before))
+		Expect(k8sClient.Get(ctx, key, &fsc)).To(Succeed())
+		Expect(meta.FindStatusCondition(fsc.Status.Conditions, "Ready").Reason).To(Equal("ConfigInvalid"))
+	})
+
+	It("pauses a roll while the configuration is invalid", func() {
+		ns := newNamespace(ctx)
+		Expect(k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
+			f.Spec.ExternalAddress.Source = sipv1alpha1.ExternalAddressNone
+			f.Spec.Config.ConfigMapRefs = []sipv1alpha1.ConfigMapRef{{Name: "fs-root", Path: "."}}
+		}))).To(Succeed())
+		root := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "fs-root", Namespace: ns}, Data: map[string]string{"freeswitch.xml": "<document/>"}}
+		Expect(k8sClient.Create(ctx, root)).To(Succeed())
+		r := &FreeswitchClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		key := types.NamespacedName{Namespace: ns, Name: "edge"}
+		reconcileOnce(r, ns)
+
+		// Mid-roll: one pod on the old revision, the fleet otherwise ready.
+		var sts appsv1.StatefulSet
+		Expect(k8sClient.Get(ctx, key, &sts)).To(Succeed())
+		sts.Status.Replicas = 2
+		sts.Status.CurrentRevision = "edge-old"
+		sts.Status.UpdateRevision = "edge-new"
+		Expect(k8sClient.Status().Update(ctx, &sts)).To(Succeed())
+		for _, p := range []*corev1.Pod{fsPod(ns, "edge-0", "", "edge-new"), fsPod(ns, "edge-1", "", "edge-old")} {
+			Expect(k8sClient.Create(ctx, p)).To(Succeed())
+			setPodReady(ctx, p, true)
+		}
+		gone := func(name string) bool {
+			var p corev1.Pod
+			err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &p)
+			return apierrors.IsNotFound(err) || (err == nil && p.DeletionTimestamp != nil)
+		}
+
+		Expect(k8sClient.Delete(ctx, root)).To(Succeed())
+		reconcileOnce(r, ns)
+		Expect(gone("edge-1")).To(BeFalse(), "no pod is replaced while the configuration is invalid")
+		var fsc sipv1alpha1.FreeswitchCluster
+		Expect(k8sClient.Get(ctx, key, &fsc)).To(Succeed())
+		Expect(meta.FindStatusCondition(fsc.Status.Conditions, conditionProgressing).Message).To(ContainSubstring("paused until the configuration is fixed"))
+
+		root.ResourceVersion = ""
+		Expect(k8sClient.Create(ctx, root)).To(Succeed())
+		reconcileOnce(r, ns)
+		Expect(gone("edge-1")).To(BeTrue(), "the roll resumes once the configuration is back")
+	})
+
+	It("refuses config paths that escape the mount", func() {
+		ns := newNamespace(ctx)
+		for _, bad := range []string{"../etc", "a/../../b", "/abs", ".hidden"} {
+			err := k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
+				f.Spec.Config.ConfigMapRefs = []sipv1alpha1.ConfigMapRef{{Name: "x", Path: bad}}
+			}))
+			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "path %q: %v", bad, err)
+		}
 	})
 })
 

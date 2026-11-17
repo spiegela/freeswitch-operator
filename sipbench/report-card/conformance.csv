@@ -1,0 +1,253 @@
+source_order,source,id,area,component,status,milestone,title
+1,sipbench scenarios,sb-basic-two-way,call-setup,edge,covered,,Inbound call bridged to the backend with two-way audio
+1,sipbench scenarios,sb-backend-hangup,call-release,edge,covered,,Backend ends the call
+1,sipbench scenarios,sb-cancel,call-release,edge,covered,,Caller abandons while the backend rings
+1,sipbench scenarios,sb-busy-fallback,error-handling,edge,covered,,"Backend busy (486) gets the fallback, not the failure"
+1,sipbench scenarios,sb-decline-fallback,error-handling,edge,covered,,Backend declines (603) gets the fallback
+1,sipbench scenarios,sb-no-answer-fallback,error-handling,edge,covered,,Backend rings past the ring timeout gets the fallback
+1,sipbench scenarios,sb-unreachable-fallback,error-handling,edge,covered,,Backend unreachable gets the fallback
+1,sipbench scenarios,sb-header-passthrough,headers,edge,covered,,X- headers reach the backend
+1,sipbench scenarios,sb-blind-transfer,transfer,edge,covered,,Backend's blind transfer (REFER) is carried out by the edge
+1,sipbench scenarios,sb-dtmf-both-ways,dtmf,edge,covered,,RFC 2833 DTMF in both directions
+1,sipbench scenarios,sb-codec-pcmu,codec,edge,covered,,PCMU-only offer
+1,sipbench scenarios,sb-codec-pcma,codec,edge,covered,,PCMA-only offer
+1,sipbench scenarios,sb-codec-g722,codec,edge,partial,,G.722-only offer
+1,sipbench scenarios,sb-admission-limit,capacity,freeswitch,partial,,Calls beyond the session limit are refused with 503
+1,sipbench scenarios,sb-options,keepalive,edge,covered,,OPTIONS answered while there is capacity
+1,sipbench scenarios,sb-echo,media,edge,covered,,Media path round trip
+1,sipbench scenarios,sb-drain-mid-call,resilience,operator,planned,M2,Node drained with a live call
+1,sipbench scenarios,sb-rolling-update-live-call,resilience,operator,planned,M2,Rolling update with a live call
+1,sipbench scenarios,sb-bad-config-stops-roll,resilience,operator,planned,M2,A config without a SIP profile on the SIP port stops the roll at one node
+2,i3 Forum interop plan R2,i3f-1-directions,call-setup,edge,planned,M5,Every case is run in both directions
+2,i3 Forum interop plan R2,i3f-1-traces,headers,edge,planned,M5,SIP traces of each test call conform to the interconnection profile
+2,i3 Forum interop plan R2,i3f-2-cli,identity,edge,planned,M5,Caller ID is verifiable at the called end
+2,i3 Forum interop plan R2,i3f-5.1,security,edge,planned,M5,Interconnection parameters agreed per peer before testing
+2,i3 Forum interop plan R2,i3f-5.2,call-setup,edge,partial,,Basic carrier call flow through the edge
+2,i3 Forum interop plan R2,i3f-5.2-refresh,timers,edge,planned,M2,Mid-call session refresh re-INVITE
+2,i3 Forum interop plan R2,i3f-5.2-refer,transfer,edge,covered,,REFER and NOTIFY for transfer
+2,i3 Forum interop plan R2,i3f-5.2-register,registration,edge,planned,M5,REGISTER toward peers that require it
+2,i3 Forum interop plan R2,i3f-5.2-responses,error-handling,edge,partial,,Each response class from the backend gets a defined treatment
+2,i3 Forum interop plan R2,i3f-6.2-pass-all,call-setup,edge,planned,M5,A peer goes live only after every agreed case passes
+2,i3 Forum interop plan R2,i3f-6.2-cdrs,call-release,freeswitch,planned,M5,Per-call records consistent with the carrier's
+2,i3 Forum interop plan R2,i3f-7.1.1,transport,edge,planned,M3,Reachability of the agreed addresses
+2,i3 Forum interop plan R2,i3f-7.1.2,impairment,edge,planned,M3,Round-trip delay to the peer
+2,i3 Forum interop plan R2,i3f-7.1.3,impairment,edge,planned,M3,Packet loss to the peer
+2,i3 Forum interop plan R2,i3f-7.1.4,impairment,edge,planned,M3,Packet jitter to the peer
+2,i3 Forum interop plan R2,i3f-7.2.1,call-release,edge,covered,,Caller clears after answer
+2,i3 Forum interop plan R2,i3f-7.2.1-tos,transport,edge,planned,M3,DSCP marking on signalling and media
+2,i3 Forum interop plan R2,i3f-7.2.1-codec,codec,edge,partial,,Negotiated codec matches what was offered and agreed
+2,i3 Forum interop plan R2,i3f-7.2.1-volume,call-setup,edge,planned,M2,At least ten calls to several numbers
+2,i3 Forum interop plan R2,i3f-7.2.1-long,timers,edge,planned,M2,Long call (over fifteen minutes)
+2,i3 Forum interop plan R2,i3f-7.2.2,call-release,edge,covered,,Caller abandons before answer
+2,i3 Forum interop plan R2,i3f-7.2.3,call-release,edge,covered,,Called party clears after answer
+2,i3 Forum interop plan R2,i3f-7.2.4,error-handling,edge,covered,,"Ring, no answer, timeout"
+2,i3 Forum interop plan R2,i3f-7.2.5,error-handling,edge,partial,,"Busy, then the caller releases"
+2,i3 Forum interop plan R2,i3f-7.2.6,error-handling,proxy,planned,M2,No route to the destination
+2,i3 Forum interop plan R2,i3f-7.2.7,error-handling,edge,planned,M2,Number not in service on the far side
+2,i3 Forum interop plan R2,i3f-7.2.8-g3,fax,edge,planned,M5,G3 fax call through the edge
+2,i3 Forum interop plan R2,i3f-7.2.8-superg3,fax,edge,planned,M5,Super G3 fax call through the edge
+2,i3 Forum interop plan R2,i3f-7.2.9,fax,edge,planned,M5,Modem call through the edge
+2,i3 Forum interop plan R2,i3f-7.2.10,dtmf,edge,planned,M5,"DTMF before answer to a prompt, G.729"
+2,i3 Forum interop plan R2,i3f-7.2.11,dtmf,edge,planned,M5,"DTMF after answer, caller to called, G.729"
+2,i3 Forum interop plan R2,i3f-7.2.12,dtmf,edge,planned,M5,"DTMF after answer, called to caller, G.729"
+2,i3 Forum interop plan R2,i3f-7.2.13,dtmf,edge,planned,M2,"DTMF before answer to a prompt, G.711"
+2,i3 Forum interop plan R2,i3f-7.2.14,dtmf,edge,covered,,"DTMF after answer, caller to called, G.711"
+2,i3 Forum interop plan R2,i3f-7.2.15,dtmf,edge,covered,,"DTMF after answer, called to caller, G.711"
+2,i3 Forum interop plan R2,i3f-7.2.16,keepalive,edge,partial,,Carrier's OPTIONS pings to the edge
+2,i3 Forum interop plan R2,i3f-7.2.16-outbound,keepalive,proxy,planned,M5,The edge's OPTIONS pings to each carrier
+2,i3 Forum interop plan R2,i3f-7.2-note-mtp3,transport,edge,not-applicable,,SS7 MTP level 3 signalling tests
+2,i3 Forum interop plan R2,i3f-7.2-note-overlap,call-setup,edge,not-applicable,,En bloc and overlap dialling
+2,i3 Forum interop plan R2,i3f-7.2-note-continuity,media,edge,not-applicable,,Voice channel continuity check
+2,i3 Forum interop plan R2,i3f-7.2-note-category,identity,edge,not-applicable,,Calls with an operator or language calling-party category
+2,i3 Forum interop plan R2,i3f-7.2-note-code-bc,call-setup,edge,not-applicable,,Calls with code 11 and code 12 digits
+2,i3 Forum interop plan R2,i3f-7.2-note-cause-remote,error-handling,edge,partial,,Release causes from the far side carried correctly
+2,i3 Forum interop plan R2,i3f-7.2-note-cause-local,error-handling,edge,partial,,Release causes the edge generates itself
+2,i3 Forum interop plan R2,i3f-7.2-note-cpn,identity,edge,planned,M5,Calling number format and nature of address kept
+2,i3 Forum interop plan R2,i3f-7.3.1,media,edge,planned,M3,Idle channel noise
+2,i3 Forum interop plan R2,i3f-7.3.2,media,edge,planned,M3,Echo
+2,i3 Forum interop plan R2,i3f-7.3.3,media,edge,planned,M3,Average speech level
+2,i3 Forum interop plan R2,i3f-7.3.4,media,edge,planned,M3,Speech loss (connection integrity)
+2,i3 Forum interop plan R2,i3f-7.3.5,media,edge,planned,M3,MOS / PESQ
+2,i3 Forum interop plan R2,i3f-7.3.6,call-setup,edge,planned,M3,Post-gateway ringing delay
+2,i3 Forum interop plan R2,i3f-7.4.1,fax,edge,planned,M5,Fax image quality
+2,i3 Forum interop plan R2,i3f-7.4.2,fax,edge,planned,M5,G3 fax throughput
+2,i3 Forum interop plan R2,i3f-7.5,headers,edge,planned,M5,Redirection signalling passed on
+2,i3 Forum interop plan R2,i3f-7.5.1,identity,edge,planned,M5,Calling number format and nature of address kept
+2,i3 Forum interop plan R2,i3f-7.5.2,identity,edge,not-applicable,,Roaming mobile in country A answers a call from carrier B
+2,i3 Forum interop plan R2,i3f-7.5.3,identity,edge,not-applicable,,Roaming mobile in country B answers a call from carrier A
+2,i3 Forum interop plan R2,i3f-7.5.4,call-setup,edge,not-applicable,,"Roaming mobile in country A busy or unanswered, call goes to voicemail"
+2,i3 Forum interop plan R2,i3f-7.5.5,call-setup,edge,not-applicable,,"Roaming mobile in country B busy or unanswered, call goes to voicemail"
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_001,error-handling,proxy,planned,M2,"INVITE, CANCEL or BYE with a Request-URI scheme the proxy doesn't know is refused with 416"
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_002,error-handling,proxy,planned,M2,Max-Forwards of zero is refused with 483
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_003,error-handling,proxy,planned,M2,Proxy-Require naming an extension the proxy lacks is refused with 420
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_004,headers,proxy,planned,M2,A maddr in the Request-URI naming the proxy itself is stripped before relaying
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_020,call-release,proxy,partial,,In-dialog ACK and BYE with the proxy's own Route on top are relayed onward
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_005,call-setup,proxy,planned,M2,Route headers on a dialog-creating INVITE
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_027,call-setup,proxy,planned,M2,In-dialog strict routing and loose routing to a further hop
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_006,call-setup,proxy,planned,M2,Requests for a target the proxy isn't responsible for
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_008,error-handling,edge,planned,M2,"No target for the request ends in a final failure, not silence"
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_011,headers,proxy,planned,M2,"Max-Forwards decremented on relay, and inserted when missing"
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_018,headers,proxy,planned,M2,Proxy adds its own Via on top and keeps the rest in order
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_035,call-release,proxy,planned,M2,CANCEL that matches no transaction
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_029,error-handling,proxy,planned,M2,"In-dialog request carrying no Route for the proxy, or naming no dialog"
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_I_001,headers,proxy,planned,M2,Parameters not allowed in a Request-URI are removed before relaying
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RS_V_001,call-setup,proxy,planned,M2,Responses that match no transaction
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RS_V_005,call-setup,proxy,partial,,Responses to a relayed INVITE are passed back upstream
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RS_V_016,resilience,proxy,planned,M2,"A node's 503 to an INVITE fails over, and the last one goes upstream as 503"
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_TR_CL_V_001,call-release,proxy,partial,,CANCEL for an INVITE being answered is passed to the pending branch
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_TR_CL_V_003,call-release,proxy,planned,M2,CANCEL arriving before the node has sent anything provisional
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_TR_CL_V_006,call-setup,proxy,planned,M2,Proxy acknowledges a node's 3xx-6xx itself
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_TR_CL_V_010,timers,proxy,planned,M2,"INVITE retransmission toward a node, and giving up on it"
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_TR_CL_TI_012,timers,proxy,planned,M2,Relayed BYE retransmission and timeout
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_TR_SE_V_001,call-setup,proxy,planned,M2,Proxy answers an INVITE with 100 Trying at once
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_TR_SE_V_006,timers,proxy,planned,M2,Retransmitted INVITE or BYE gets the last response again
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_TR_SE_V_020,call-release,proxy,planned,M2,CANCEL matched by RFC 2543 rules
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_TR_SE_V_024,timers,proxy,planned,M2,Proxy's server side of a failed INVITE
+3,ETSI TS 102 027-2,etsi-SIP_QC_PR_V_001,keepalive,proxy,partial,,OPTIONS to the proxy itself is answered 200
+3,ETSI TS 102 027-2,etsi-SIP_QC_PR_V_006,keepalive,proxy,planned,M2,Proxy's OPTIONS answer describes its capabilities
+3,ETSI TS 102 027-2,etsi-SIP_MG_PR_V_001,parsing,proxy,planned,M2,Unusual but legal URI syntax is relayed untouched
+3,ETSI TS 102 027-2,etsi-SIP_MG_PR_V_006,headers,proxy,partial,,Header fields the proxy doesn't use are relayed unchanged
+3,ETSI TS 102 027-2,etsi-SIP_MG_PR_V_007,parsing,proxy,planned,M2,"Lexical variants (case, folding, compact forms) are accepted and relayed"
+3,ETSI TS 102 027-2,etsi-SIP_MG_PR_V_012,parsing,proxy,planned,M2,Odd 2xx status code or reason phrase is relayed
+3,ETSI TS 102 027-2,etsi-SIP_MG_PR_V_015,parsing,proxy,planned,M2,Message size and Content-Length framing
+3,ETSI TS 102 027-2,etsi-SIP_MG_PR_I_005,parsing,proxy,planned,M2,INVITE without Call-ID is refused with 400
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_067,call-setup,proxy,not-applicable,,Parallel forking and response selection across forked branches
+3,ETSI TS 102 027-2,etsi-SIP_CC_PR_TR_CL_V_012,security,proxy,not-applicable,,Proxy digest challenge (407) for INVITE and OPTIONS
+3,ETSI TS 102 027-2,etsi-SIP_CC_OE_CE_V_001,headers,freeswitch,planned,M2,The INVITE FreeSWITCH sends to the backend is well formed
+3,ETSI TS 102 027-2,etsi-SIP_CC_OE_CE_V_009,call-setup,freeswitch,planned,M2,Provisional responses and the ACK to the backend's 2xx
+3,ETSI TS 102 027-2,etsi-SIP_CC_OE_CE_V_024,error-handling,freeswitch,planned,M2,ACK to the backend's 3xx-6xx
+3,ETSI TS 102 027-2,etsi-SIP_CC_OE_CE_V_029,call-setup,freeswitch,planned,M5,"Following redirects (301, 305) from the far side"
+3,ETSI TS 102 027-2,etsi-SIP_CC_OE_CE_V_044,call-setup,freeswitch,planned,M2,Offer/answer and body headers on the backend leg
+3,ETSI TS 102 027-2,etsi-SIP_CC_OE_CE_V_050,security,freeswitch,planned,M5,FreeSWITCH answers a peer's digest challenge
+3,ETSI TS 102 027-2,etsi-SIP_CC_OE_CE_TI_001,timers,freeswitch,planned,M2,"INVITE retransmission toward the backend, and Timer B"
+3,ETSI TS 102 027-2,etsi-SIP_CC_OE_CR_V_001,call-release,freeswitch,partial,,FreeSWITCH releases the backend leg with BYE
+3,ETSI TS 102 027-2,etsi-SIP_CC_OE_CR_V_010,call-release,freeswitch,planned,M2,FreeSWITCH cancels the ringing backend leg
+3,ETSI TS 102 027-2,etsi-SIP_CC_OE_CR_TI_001,timers,freeswitch,planned,M2,BYE retransmission toward the backend and Timer F
+3,ETSI TS 102 027-2,etsi-SIP_QC_OE_V_001,keepalive,freeswitch,planned,M5,FreeSWITCH's OPTIONS pings to peers
+3,ETSI TS 102 027-2,etsi-SIP_MG_OE_V_001,parsing,freeswitch,planned,M2,FreeSWITCH tolerates unusual syntax from the backend
+3,ETSI TS 102 027-2,etsi-SIP_MG_OE_V_015,parsing,freeswitch,planned,M2,Size and Content-Length framing of the backend's 2xx
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CE_V_001,call-setup,freeswitch,covered,,"FreeSWITCH answers an INVITE with an SDP offer, answer in the 2xx"
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CE_V_002,error-handling,freeswitch,planned,M2,"INVITEs FreeSWITCH refuses, with the right code"
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CE_V_004,headers,freeswitch,planned,M2,FreeSWITCH's responses to an INVITE are well formed
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CE_V_006,call-setup,freeswitch,planned,M2,"Late offer, an INVITE without SDP, gets the offer in the 2xx"
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CE_V_022,timers,freeswitch,planned,M2,Retransmitted and merged INVITEs
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CE_V_032,timers,freeswitch,planned,M2,FreeSWITCH's server side of a refused INVITE
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CE_TI_009,timers,freeswitch,planned,M2,Lost ACK to the 2xx
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CR_V_001,call-release,freeswitch,partial,,BYE from the far end in a confirmed call is answered 200
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CR_V_002,call-release,freeswitch,planned,M2,BYE edge cases at FreeSWITCH
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CR_V_010,call-release,freeswitch,partial,,FreeSWITCH releases the far end with BYE
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CR_V_015,call-release,freeswitch,partial,,"CANCEL while ringing gets 200, and the INVITE 487"
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CR_V_017,call-release,freeswitch,planned,M2,CANCEL matching at FreeSWITCH
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_SM_V_001,call-setup,freeswitch,planned,M2,Re-INVITE in an established call
+3,ETSI TS 102 027-2,etsi-SIP_QC_TE_V_001,keepalive,freeswitch,covered,,FreeSWITCH answers OPTIONS with 200
+3,ETSI TS 102 027-2,etsi-SIP_QC_TE_V_002,keepalive,freeswitch,planned,M2,FreeSWITCH's OPTIONS answer is well formed and describes its capabilities
+3,ETSI TS 102 027-2,etsi-SIP_MG_TE_V_001,parsing,edge,planned,M2,FreeSWITCH answers INVITEs with unusual but acceptable syntax
+3,ETSI TS 102 027-2,etsi-SIP_MG_TE_V_006,error-handling,freeswitch,planned,M2,Unsupported method gets 405 with Allow
+3,ETSI TS 102 027-2,etsi-SIP_MG_TE_V_014,parsing,edge,planned,M2,"INVITE size, framing and missing Call-ID at the edge"
+3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CE_V_034,security,freeswitch,not-applicable,,UAS digest challenge (401) for INVITE and OPTIONS
+3,ETSI TS 102 027-2,etsi-SIP_RG_RT_V_001,registration,freeswitch,planned,M5,"FreeSWITCH registers to a carrier, refreshes and unregisters"
+3,ETSI TS 102 027-2,etsi-SIP_RG_RT_V_007,registration,freeswitch,planned,M5,FreeSWITCH answers a registrar's digest challenge
+3,ETSI TS 102 027-2,etsi-SIP_RG_RT_TI_001,timers,freeswitch,planned,M5,REGISTER retransmission and timeout
+3,ETSI TS 102 027-2,etsi-SIP_MG_RT_V_001,registration,freeswitch,planned,M5,FreeSWITCH accepts a registrar's unusual 2xx
+3,ETSI TS 102 027-2,etsi-SIP_RG_RT_V_005,registration,freeswitch,not-applicable,,"Multicast registration, binding queries and contact preferences"
+3,ETSI TS 102 027-2,etsi-SIP_RG_RR_V_001,registration,proxy,not-applicable,,Registrar behaviour
+3,ETSI TS 102 027-2,etsi-SIP_MG_RR_V_001,parsing,proxy,not-applicable,,Registrar message handling
+3,ETSI TS 102 027-2,etsi-SIP_CC_RD_CE_V_001,call-setup,proxy,not-applicable,,Redirect server call handling
+3,ETSI TS 102 027-2,etsi-SIP_MG_RD_V_001,parsing,proxy,not-applicable,,Redirect server message handling
+3,ETSI TS 102 027-2,etsi-SIP_RG_RT_V_006,call-setup,edge,not-applicable,,Purposes marked void
+4,RFC 4475 torture messages,rfc4475-3.1.1.1,parsing,proxy,planned,M2,"Short tortuous INVITE (folding, odd spacing and case, unknown headers and parameters)"
+4,RFC 4475 torture messages,rfc4475-3.1.1.2,parsing,proxy,planned,M2,Unknown method and the widest legal character ranges
+4,RFC 4475 torture messages,rfc4475-3.1.1.3,parsing,proxy,planned,M2,Legal % escaping in URIs
+4,RFC 4475 torture messages,rfc4475-3.1.1.4,parsing,proxy,planned,M2,Escaped nulls in URI user parts (REGISTER)
+4,RFC 4475 torture messages,rfc4475-3.1.1.5,parsing,proxy,planned,M2,% where it is not an escape (method that only looks like REGISTER)
+4,RFC 4475 torture messages,rfc4475-3.1.1.6,parsing,proxy,planned,M2,No whitespace between display name and <
+4,RFC 4475 torture messages,rfc4475-3.1.1.7,parsing,proxy,planned,M2,Very long header values and many parameters
+4,RFC 4475 torture messages,rfc4475-3.1.1.8,parsing,proxy,planned,M2,Extra octets after the message in a UDP datagram
+4,RFC 4475 torture messages,rfc4475-3.1.1.9,parsing,proxy,planned,M2,Semicolon parameters inside the Request-URI user part
+4,RFC 4475 torture messages,rfc4475-3.1.1.10,parsing,proxy,planned,M2,Known and unknown transports in Via
+4,RFC 4475 torture messages,rfc4475-3.1.1.11,parsing,proxy,planned,M2,Multipart MIME body with binary parts (MESSAGE)
+4,RFC 4475 torture messages,rfc4475-3.1.1.12,parsing,proxy,planned,M2,Unusual reason phrase in a 200
+4,RFC 4475 torture messages,rfc4475-3.1.1.13,parsing,proxy,planned,M2,Empty reason phrase
+4,RFC 4475 torture messages,rfc4475-3.1.2.1,parsing,proxy,planned,M2,Extraneous separators in Via and Contact
+4,RFC 4475 torture messages,rfc4475-3.1.2.2,parsing,proxy,planned,M2,Content-Length larger than the body
+4,RFC 4475 torture messages,rfc4475-3.1.2.3,parsing,proxy,planned,M2,Negative Content-Length
+4,RFC 4475 torture messages,rfc4475-3.1.2.4,parsing,proxy,planned,M2,"Request scalar fields out of range (CSeq, Max-Forwards, Expires)"
+4,RFC 4475 torture messages,rfc4475-3.1.2.5,parsing,proxy,planned,M2,Response scalar fields out of range (a 503)
+4,RFC 4475 torture messages,rfc4475-3.1.2.6,parsing,proxy,planned,M2,Unterminated quoted string in a display name
+4,RFC 4475 torture messages,rfc4475-3.1.2.7,parsing,proxy,planned,M2,Request-URI enclosed in <>
+4,RFC 4475 torture messages,rfc4475-3.1.2.8,parsing,proxy,planned,M2,Whitespace inside the Request-URI
+4,RFC 4475 torture messages,rfc4475-3.1.2.9,parsing,proxy,planned,M2,Several spaces between request-line elements
+4,RFC 4475 torture messages,rfc4475-3.1.2.10,parsing,proxy,planned,M2,Trailing spaces at the end of the request line
+4,RFC 4475 torture messages,rfc4475-3.1.2.11,parsing,proxy,planned,M2,Escaped headers in the Request-URI
+4,RFC 4475 torture messages,rfc4475-3.1.2.12,parsing,proxy,planned,M2,Date header with a non-GMT time zone
+4,RFC 4475 torture messages,rfc4475-3.1.2.13,parsing,proxy,planned,M2,Contact URI with headers not enclosed in <> (REGISTER)
+4,RFC 4475 torture messages,rfc4475-3.1.2.14,parsing,proxy,planned,M2,Spaces inside an addr-spec
+4,RFC 4475 torture messages,rfc4475-3.1.2.15,parsing,proxy,planned,M2,Unquoted display names with non-token characters
+4,RFC 4475 torture messages,rfc4475-3.1.2.16,parsing,proxy,planned,M2,Unknown SIP version
+4,RFC 4475 torture messages,rfc4475-3.1.2.17,parsing,proxy,planned,M2,Request-line method differs from CSeq method
+4,RFC 4475 torture messages,rfc4475-3.1.2.18,parsing,proxy,planned,M2,Unknown method with a mismatched CSeq method
+4,RFC 4475 torture messages,rfc4475-3.1.2.19,parsing,proxy,planned,M2,Response code above 699
+4,RFC 4475 torture messages,rfc4475-3.2.1,parsing,proxy,planned,M2,z9hG4bK branch with nothing after the cookie
+4,RFC 4475 torture messages,rfc4475-3.3.1,parsing,proxy,planned,M2,"Missing Call-ID, From and To"
+4,RFC 4475 torture messages,rfc4475-3.3.2,parsing,proxy,planned,M2,Unknown scheme in the Request-URI
+4,RFC 4475 torture messages,rfc4475-3.3.3,parsing,proxy,planned,M2,Registered but atypical scheme in the Request-URI
+4,RFC 4475 torture messages,rfc4475-3.3.4,parsing,proxy,planned,M2,"Non-SIP schemes in To, From and Contact (REGISTER)"
+4,RFC 4475 torture messages,rfc4475-3.3.5,parsing,proxy,planned,M2,Unsupported Proxy-Require and Require
+4,RFC 4475 torture messages,rfc4475-3.3.6,parsing,proxy,planned,M2,Body of unknown Content-Type
+4,RFC 4475 torture messages,rfc4475-3.3.7,parsing,proxy,planned,M2,Authorization with an unknown scheme (REGISTER)
+4,RFC 4475 torture messages,rfc4475-3.3.8,parsing,proxy,planned,M2,Several values in single-valued headers
+4,RFC 4475 torture messages,rfc4475-3.3.9,parsing,proxy,planned,M2,Conflicting Content-Length values
+4,RFC 4475 torture messages,rfc4475-3.3.10,security,proxy,planned,M2,200 whose second Via names the broadcast address
+4,RFC 4475 torture messages,rfc4475-3.3.11,parsing,proxy,planned,M2,Max-Forwards of zero
+4,RFC 4475 torture messages,rfc4475-3.3.12,parsing,proxy,planned,M2,Contact parameter on a REGISTER
+4,RFC 4475 torture messages,rfc4475-3.3.13,parsing,proxy,planned,M2,URI parameter in a REGISTER Contact
+4,RFC 4475 torture messages,rfc4475-3.3.14,parsing,proxy,planned,M2,Escaped Route header in a REGISTER Contact URI
+4,RFC 4475 torture messages,rfc4475-3.3.15,parsing,proxy,planned,M2,Accept that rules out SDP on an INVITE
+4,RFC 4475 torture messages,rfc4475-3.4.1,parsing,proxy,planned,M2,"RFC 2543-style INVITE (no branch, no From tag, no Content-Length, no Max-Forwards)"
+5,Network impairment,imp-sig-invite-lost,impairment,proxy,planned,M2,The carrier's first INVITE is lost on the way in
+5,Network impairment,imp-sig-provisional-lost,impairment,proxy,planned,M2,The edge's 100 and 180 are lost on the way out
+5,Network impairment,imp-sig-200-lost,impairment,freeswitch,planned,M2,The 200 to the INVITE is lost on the way out
+5,Network impairment,imp-sig-ack-lost-once,impairment,freeswitch,planned,M2,The caller's ACK is lost once
+5,Network impairment,imp-sig-ack-never,timers,freeswitch,planned,M2,No ACK ever reaches the edge
+5,Network impairment,imp-sig-bye-lost-in,impairment,edge,planned,M2,The caller's BYE is lost once on the way in
+5,Network impairment,imp-sig-bye-lost-out,impairment,freeswitch,planned,M2,The edge's BYE toward the caller is lost once
+5,Network impairment,imp-sig-bye-never,timers,freeswitch,planned,M2,"The caller's BYE never arrives, and its media stops"
+5,Network impairment,imp-sig-loss-random,impairment,edge,planned,M2,Random SIP loss on the carrier side
+5,Network impairment,imp-sig-delay-over-t1,impairment,proxy,planned,M2,Signalling round trip longer than T1
+5,Network impairment,imp-sig-bye-before-ack,impairment,freeswitch,planned,M2,The caller's BYE overtakes its ACK
+5,Network impairment,imp-sig-cancel-crosses-200,impairment,edge,planned,M2,CANCEL crosses the 200 on a delayed path
+5,Network impairment,imp-node-invite-lost,impairment,proxy,planned,M2,Kamailio's INVITE to the chosen node is lost once
+5,Network impairment,imp-node-unreachable,resilience,proxy,planned,M2,The chosen node is unreachable; Kamailio fails over
+5,Network impairment,imp-node-slow,resilience,proxy,planned,M2,The chosen node is slow but answers inside fr_timer
+5,Network impairment,imp-node-slow-past-fr-timer,resilience,proxy,planned,M2,The chosen node answers after fr_timer has failed it over
+5,Network impairment,imp-node-dark-after-100,timers,proxy,planned,M2,"The node sends 100, then nothing"
+5,Network impairment,imp-node-sig-loss,impairment,proxy,planned,M2,Random SIP loss between Kamailio and the nodes
+5,Network impairment,imp-node-probe-loss,keepalive,proxy,planned,M2,Probe loss does not flap a healthy node
+5,Network impairment,imp-node-cut-mid-call,resilience,edge,planned,M2,Kamailio loses a node mid-call; the call's media does not
+5,Network impairment,imp-media-baseline,media,freeswitch,planned,M2,What the edge itself adds on a clean network
+5,Network impairment,imp-media-y1541-class0,impairment,edge,planned,M2,Audio on a network at the class 0 limits
+5,Network impairment,imp-media-lte,impairment,edge,planned,M2,Audio on a typical mobile caller's path
+5,Network impairment,imp-media-lte-bad,impairment,edge,planned,M2,Audio on a poor mobile path with bursty loss
+5,Network impairment,imp-media-loss-random,impairment,edge,planned,M2,Random media loss at 3% and 5%
+5,Network impairment,imp-media-jitter,impairment,freeswitch,planned,M2,"Jitter passes through, not amplified"
+5,Network impairment,imp-media-delay,impairment,edge,planned,M2,Long one-way delay
+5,Network impairment,imp-media-reorder,impairment,freeswitch,planned,M2,Reordered media
+5,Network impairment,imp-media-duplicate,impairment,freeswitch,planned,M2,Duplicated media
+5,Network impairment,imp-media-asymmetric,impairment,edge,planned,M2,Loss in one direction only
+5,Network impairment,imp-dtmf-loss,dtmf,edge,planned,M2,"RFC 4733 digits survive media loss, once each"
+5,Network impairment,imp-dtmf-end-lost,dtmf,edge,planned,M2,All end packets of one digit lost
+5,Network impairment,imp-dtmf-duplicate-reorder,dtmf,edge,planned,M2,Duplicated and reordered event packets
+5,Network impairment,imp-oneway-inbound-dead,impairment,freeswitch,planned,M2,The caller's media never arrives
+5,Network impairment,imp-oneway-outbound-dead,impairment,freeswitch,planned,M2,The edge's media never reaches the caller
+5,Network impairment,imp-blackhole-short,impairment,edge,planned,M2,Everything to the caller is cut for 2 s mid-call
+5,Network impairment,imp-blackhole-long,impairment,edge,planned,M2,The carrier link goes dark for good mid-call
+5,Network impairment,imp-backend-media-loss,impairment,freeswitch,planned,M2,Impaired media between the edge and the backend
+5,Network impairment,imp-backend-sig-loss,impairment,freeswitch,planned,M2,Lost 200 and BYE between the edge and the backend
+5,Network impairment,imp-real-public-address-media,impairment,edge,planned,M3,No one-way audio behind the public address pool
+5,Network impairment,imp-real-load-lte,impairment,freeswitch,planned,M3,Media quality at load on the real edge
+5,Network impairment,imp-real-fragmented-invite,impairment,proxy,planned,M3,Large INVITEs on a lossy path with a real MTU
+5,Network impairment,imp-real-proxy-node-cross-zone,impairment,proxy,planned,M3,Kamailio and a node in different availability zones
+5,Network impairment,imp-node-lost-mid-call-recovery,resilience,operator,planned,M4,A node goes dark mid-call and the call is recovered
+5,Network impairment,imp-node-partition-fencing,resilience,operator,planned,M4,A node cut off from the control plane is fenced before its calls move
+5,Network impairment,imp-peer-hold-vs-rtp-timeout,timers,freeswitch,planned,M5,A held call is not killed by the RTP timeout
+5,Network impairment,imp-peer-session-refresh-lost,timers,edge,planned,M5,Session-timer refreshes under loss

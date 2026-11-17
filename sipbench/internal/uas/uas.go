@@ -6,7 +6,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -82,9 +83,7 @@ func (l *live) snapshot() Call {
 	defer l.mu.Unlock()
 	c := l.call
 	c.Headers = make(map[string]string, len(l.call.Headers))
-	for k, v := range l.call.Headers {
-		c.Headers[k] = v
-	}
+	maps.Copy(c.Headers, l.call.Headers)
 	c.TonesHeard = append([]float64{}, l.call.TonesHeard...)
 	c.Errors = append([]string(nil), l.call.Errors...)
 	if l.call.Refer != nil {
@@ -135,7 +134,9 @@ type Options struct {
 }
 
 // Handle answers d by running steps, recording everything into store. It returns when the call has ended.
-func Handle(d *diago.DialogServerSession, route string, steps []script.Step, store *Store, opts Options) {
+func Handle( //nolint:gocyclo // one dispatch over every script step; splitting it scatters the call flow
+	d *diago.DialogServerSession, route string, steps []script.Step, store *Store, opts Options,
+) {
 	if opts.Hold <= 0 {
 		opts.Hold = 60 * time.Second
 	}
@@ -346,6 +347,6 @@ func SortedHeaderNames(h map[string]string) []string {
 	for k := range h {
 		out = append(out, k)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }

@@ -5,5 +5,6 @@ f="${FS_EXTERNAL_ADDRESS_FILE:-/etc/freeswitch-operator/podinfo/external-address
 if [ -s "$f" ]; then
   tr -d ' \t\r\n' < "$f"
 else
-  hostname -i 2>/dev/null | awk '{print $1}'
+  # The first IPv4 address, else the first of any: dual-stack hosts (kind nodes among them) may list IPv6 first.
+  hostname -i 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i !~ /:/) {print $i; exit}; print $1}'
 fi

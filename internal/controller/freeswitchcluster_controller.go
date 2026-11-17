@@ -21,8 +21,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -34,6 +37,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -47,6 +51,7 @@ import (
 const (
 	templateHashAnnotation = "sip.instruments.com/template-hash"
 	podNodeNameField       = "spec.nodeName"
+	configMapRefField      = "spec.config.configMapRefs.name"
 
 	conditionAvailable   = "Available"
 	conditionProgressing = "Progressing"
@@ -63,6 +68,8 @@ type FreeswitchClusterReconciler struct {
 	NewNotifier NotifierFactory
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+
+	configHashes configHasher
 }
 
 // +kubebuilder:rbac:groups=sip.instruments.com,resources=freeswitchclusters,verbs=get;list;watch;create;update;patch;delete
@@ -101,9 +108,27 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := r.ensurePDB(ctx, &fsc); err != nil {
 		return ctrl.Result{}, err
 	}
-	sts, err := r.ensureStatefulSet(ctx, &fsc)
-	if err != nil {
-		return ctrl.Result{}, err
+	// A missing or conflicting ConfigMap is the user's to fix: report it, and keep the running fleet as it is,
+	// with its template unchanged and any roll in progress paused.
+	conf, confErr := r.loadConfig(ctx, &fsc)
+	sts := &appsv1.StatefulSet{}
+	if confErr != nil {
+		var ce *configError
+		if !errors.As(confErr, &ce) {
+			return ctrl.Result{}, confErr
+		}
+		log.Info("configuration not usable; leaving the StatefulSet as it is", "reason", ce.msg)
+		if err := r.Get(ctx, types.NamespacedName{Namespace: fsc.Namespace, Name: statefulSetName(&fsc)}, sts); client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
+		}
+	} else {
+		if err := r.ensureConfigSnapshots(ctx, &fsc, conf); err != nil {
+			return ctrl.Result{}, err
+		}
+		var err error
+		if sts, err = r.ensureStatefulSet(ctx, &fsc, conf); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	var podList corev1.PodList
@@ -111,14 +136,26 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 	pods := podList.Items
-	sort.Slice(pods, func(i, j int) bool { return pods[i].Name < pods[j].Name })
+	slices.SortFunc(pods, func(a, b corev1.Pod) int { return strings.Compare(a.Name, b.Name) })
 
 	if err := r.syncExternalAddresses(ctx, cfg, pods); err != nil {
 		return ctrl.Result{}, err
 	}
 
+	if confErr == nil {
+		if err := r.pruneConfigSnapshots(ctx, &fsc, conf, sts, pods); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	var requeue time.Duration
 	decision := nextPodToReplace(pods, sts.Status.UpdateRevision, cfg.replicas)
+	if confErr != nil && decision.Outdated > 0 {
+		// The template being rolled to may mount what is now missing; don't trade a working node for one that
+		// can't start.
+		decision.Replace = nil
+		decision.Waiting = "paused until the configuration is fixed"
+	}
 	if decision.Replace != nil {
 		p := decision.Replace
 		log.Info("replacing pod for rolling update", "pod", p.Name, "revision", podRevision(p), "updateRevision", sts.Status.UpdateRevision)
@@ -139,6 +176,11 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	r.fillStatus(&fsc, cfg, sts, pods, decision, status)
+	if confErr != nil {
+		gen := fsc.Generation
+		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionDegraded, Status: metav1.ConditionTrue, Reason: "ConfigInvalid", Message: confErr.Error(), ObservedGeneration: gen})
+		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionReady, Status: metav1.ConditionFalse, Reason: "ConfigInvalid", Message: confErr.Error(), ObservedGeneration: gen})
+	}
 	if !equalStatus(&fsc.Status, status) {
 		fsc.Status = *status
 		if err := r.Status().Update(ctx, &fsc); err != nil {
@@ -201,8 +243,8 @@ func (r *FreeswitchClusterReconciler) ensurePDB(ctx context.Context, fsc *sipv1a
 
 // ensureStatefulSet writes the StatefulSet. The pod template is replaced only when the operator's rendering of it
 // changes (tracked by a hash annotation), so API-server defaulting never causes an update loop.
-func (r *FreeswitchClusterReconciler) ensureStatefulSet(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster) (*appsv1.StatefulSet, error) {
-	want := buildStatefulSet(fsc)
+func (r *FreeswitchClusterReconciler) ensureStatefulSet(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) (*appsv1.StatefulSet, error) {
+	want := buildStatefulSet(fsc, conf)
 	hash, err := templateHash(&want.Spec.Template)
 	if err != nil {
 		return nil, err
@@ -228,6 +270,92 @@ func (r *FreeswitchClusterReconciler) ensureStatefulSet(ctx context.Context, fsc
 		return controllerutil.SetControllerReference(fsc, sts, r.Scheme)
 	})
 	return sts, err
+}
+
+// loadConfig reads the referenced ConfigMaps and lays them out (see layoutConfig). A missing ConfigMap is a
+// *configError, not a failed reconcile; the ConfigMap watch brings the cluster back when it appears.
+func (r *FreeswitchClusterReconciler) loadConfig(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster) (configLayout, error) {
+	cms := map[string]*corev1.ConfigMap{}
+	for _, ref := range fsc.Spec.Config.ConfigMapRefs {
+		var cm corev1.ConfigMap
+		if err := r.Get(ctx, types.NamespacedName{Namespace: fsc.Namespace, Name: ref.Name}, &cm); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return configLayout{}, err
+		}
+		cms[ref.Name] = &cm
+	}
+	return layoutConfig(fsc, cms, r.configHashes.hash)
+}
+
+// ensureConfigSnapshots creates the immutable copies the template is about to mount. A snapshot's name is its
+// contents' hash, so one that already exists already holds the right files.
+func (r *FreeswitchClusterReconciler) ensureConfigSnapshots(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) error {
+	for _, snap := range conf.snapshots {
+		var existing corev1.ConfigMap
+		err := r.Get(ctx, types.NamespacedName{Namespace: fsc.Namespace, Name: snap.name}, &existing)
+		if err == nil {
+			if existing.DeletionTimestamp != nil {
+				return fmt.Errorf("config snapshot %s is being deleted; will recreate it", snap.name)
+			}
+			continue
+		}
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		labels := commonLabels(fsc)
+		labels[configSnapshotLabel] = "true"
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        snap.name,
+				Namespace:   fsc.Namespace,
+				Labels:      labels,
+				Annotations: map[string]string{configSourceAnnotation: snap.source},
+			},
+			Immutable:  ptr.To(true),
+			Data:       snap.data,
+			BinaryData: snap.binaryData,
+		}
+		if err := controllerutil.SetControllerReference(fsc, cm, r.Scheme); err != nil {
+			return err
+		}
+		if err := r.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// pruneConfigSnapshots deletes the snapshots that neither the current template nor any pod mounts. It waits until
+// the StatefulSet controller has seen the current template, so no pod can still be created from an older one.
+func (r *FreeswitchClusterReconciler) pruneConfigSnapshots(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, conf configLayout, sts *appsv1.StatefulSet, pods []corev1.Pod) error {
+	if sts.CreationTimestamp.IsZero() || sts.Status.ObservedGeneration < sts.Generation {
+		return nil
+	}
+	keep := map[string]bool{}
+	for _, snap := range conf.snapshots {
+		keep[snap.name] = true
+	}
+	for i := range pods {
+		podConfigSnapshots(&pods[i], keep)
+	}
+	var list corev1.ConfigMapList
+	if err := r.List(ctx, &list, client.InNamespace(fsc.Namespace), client.MatchingLabels{sipv1alpha1.ClusterLabel: fsc.Name, configSnapshotLabel: "true"}); err != nil {
+		return err
+	}
+	for i := range list.Items {
+		cm := &list.Items[i]
+		if keep[cm.Name] || cm.DeletionTimestamp != nil || !metav1.IsControlledBy(cm, fsc) {
+			continue
+		}
+		uid := cm.UID
+		if err := r.Delete(ctx, cm, client.Preconditions{UID: &uid}); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		logf.FromContext(ctx).Info("deleted unused config snapshot", "configMap", cm.Name)
+	}
+	return nil
 }
 
 func templateHash(t *corev1.PodTemplateSpec) (string, error) {
@@ -287,11 +415,11 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 	log := logf.FromContext(ctx)
 	d := cfg.dispatcher
 
-	var slices discoveryv1.EndpointSliceList
-	if err := r.List(ctx, &slices, client.InNamespace(fsc.Namespace), client.MatchingLabels{discoveryv1.LabelServiceName: serviceName(fsc)}); err != nil {
+	var endpointSlices discoveryv1.EndpointSliceList
+	if err := r.List(ctx, &endpointSlices, client.InNamespace(fsc.Namespace), client.MatchingLabels{discoveryv1.LabelServiceName: serviceName(fsc)}); err != nil {
 		return 0, err
 	}
-	dests := readyDestinations(slices.Items, cfg.sipPort, string(cfg.dispatcherProto))
+	dests := readyDestinations(endpointSlices.Items, cfg.sipPort, string(cfg.dispatcherProto))
 	content := renderDispatcherList(cfg.dispatcherSetID, dests)
 	hash := contentHash(content)
 
@@ -303,23 +431,28 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 		return 0, err
 	}
 
-	var notifier DispatcherNotifier
-	if d.JSONRPCURL != "" && r.NewNotifier != nil {
-		notifier = r.NewNotifier(d.JSONRPCURL)
+	// One call per ready Kamailio pod when the URL names a Service; see dispatcherNotifier. Failing to find them is
+	// handled like a failed call: logged, and the reload retried.
+	notifier, notifierErr := r.dispatcherNotifier(ctx, fsc.Namespace, d.JSONRPCURL)
+	if notifierErr != nil {
+		log.Error(notifierErr, "could not find the Kamailio pods to notify", "jsonrpcURL", d.JSONRPCURL)
 	}
 
-	if previous != content {
+	// The ConfigMap is the record of what changed when: the list, its hash and the change time go in one update,
+	// and the status only mirrors them. A status write lost to a conflict then can't hide a change that still
+	// needs a reload (the next reconcile would see an up-to-date ConfigMap and nothing to do).
+	if previous != content || cm.Annotations[sipv1alpha1.DispatcherUpdatedAtAnnotation] == "" {
+		changedAt := r.now().UTC().Format(time.RFC3339Nano)
 		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
 			if cm.Labels == nil {
 				cm.Labels = map[string]string{}
 			}
-			for k, v := range commonLabels(fsc) {
-				cm.Labels[k] = v
-			}
+			maps.Copy(cm.Labels, commonLabels(fsc))
 			if cm.Annotations == nil {
 				cm.Annotations = map[string]string{}
 			}
 			cm.Annotations[sipv1alpha1.DispatcherHashAnnotation] = hash
+			cm.Annotations[sipv1alpha1.DispatcherUpdatedAtAnnotation] = changedAt
 			if cm.Data == nil {
 				cm.Data = map[string]string{}
 			}
@@ -329,9 +462,6 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 		if err != nil {
 			return 0, err
 		}
-		now := metav1.NewTime(r.now())
-		status.DispatcherHash = hash
-		status.DispatcherUpdatedAt = &now
 		log.Info("dispatcher list updated", "destinations", len(dests), "hash", hash)
 
 		if notifier != nil {
@@ -342,11 +472,15 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 				}
 			}
 		}
-	} else if status.DispatcherHash == "" {
-		status.DispatcherHash = hash
+	}
+	status.DispatcherHash = hash
+	status.DispatcherUpdatedAt = nil
+	if t, err := time.Parse(time.RFC3339Nano, cm.Annotations[sipv1alpha1.DispatcherUpdatedAtAnnotation]); err == nil {
+		at := metav1.NewTime(t)
+		status.DispatcherUpdatedAt = &at
 	}
 
-	if notifier == nil || status.DispatcherReloadedHash == status.DispatcherHash {
+	if (notifier == nil && notifierErr == nil) || status.DispatcherReloadedHash == status.DispatcherHash {
 		return 0, nil
 	}
 	delay := time.Duration(cfg.reloadDelaySecs) * time.Second
@@ -355,12 +489,35 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 			return wait, nil
 		}
 	}
-	if err := notifier.Reload(ctx); err != nil {
+	if notifierErr != nil {
+		return 30 * time.Second, nil
+	}
+	// The reload is done only once every Kamailio holds the list just written: reloadDelaySeconds is a guess at
+	// how long the kubelet takes to update the mounted file, and a reload before that re-reads the old one.
+	if err := notifier.Reload(ctx, cfg.dispatcherSetID, parseDispatcherURIs(content, cfg.dispatcherSetID)); err != nil {
+		if onlyListNotLoaded(err) {
+			log.Info("Kamailio has not loaded the new dispatcher list yet; will reload again", "detail", err.Error())
+			return 10 * time.Second, nil
+		}
 		log.Error(err, "could not reload Kamailio dispatcher list; will retry")
 		return 30 * time.Second, nil
 	}
 	status.DispatcherReloadedHash = status.DispatcherHash
 	return 0, nil
+}
+
+// onlyListNotLoaded reports whether err, or every error joined in it, is errListNotLoaded: Kamailio answered, but
+// its file was not updated yet.
+func onlyListNotLoaded(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range joined.Unwrap() {
+			if !onlyListNotLoaded(e) {
+				return false
+			}
+		}
+		return true
+	}
+	return errors.Is(err, errListNotLoaded)
 }
 
 func (r *FreeswitchClusterReconciler) fillStatus(fsc *sipv1alpha1.FreeswitchCluster, cfg settings, sts *appsv1.StatefulSet, pods []corev1.Pod, decision rolloutDecision, status *sipv1alpha1.FreeswitchClusterStatus) {
@@ -438,6 +595,30 @@ func (r *FreeswitchClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	if err := mgr.GetFieldIndexer().IndexField(ctx, &sipv1alpha1.FreeswitchCluster{}, configMapRefField, func(o client.Object) []string {
+		fsc := o.(*sipv1alpha1.FreeswitchCluster)
+		names := make([]string, 0, len(fsc.Spec.Config.ConfigMapRefs))
+		for _, ref := range fsc.Spec.Config.ConfigMapRefs {
+			names = append(names, ref.Name)
+		}
+		return names
+	}); err != nil {
+		return err
+	}
+
+	// A referenced ConfigMap's change (or its creation, when a cluster waits for it) reaches every cluster using it.
+	configToClusters := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
+		var list sipv1alpha1.FreeswitchClusterList
+		if err := r.List(ctx, &list, client.InNamespace(o.GetNamespace()), client.MatchingFields{configMapRefField: o.GetName()}); err != nil {
+			return nil
+		}
+		out := make([]reconcile.Request, 0, len(list.Items))
+		for _, fsc := range list.Items {
+			out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: fsc.Namespace, Name: fsc.Name}})
+		}
+		return out
+	})
+
 	podToCluster := handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
 		name := o.GetLabels()[sipv1alpha1.ClusterLabel]
 		if name == "" {
@@ -486,6 +667,7 @@ func (r *FreeswitchClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.Pod{}, podToCluster).
 		Watches(&discoveryv1.EndpointSlice{}, sliceToCluster).
 		Watches(&corev1.Node{}, nodeToClusters).
+		Watches(&corev1.ConfigMap{}, configToClusters).
 		Named("freeswitchcluster").
 		Complete(r)
 }

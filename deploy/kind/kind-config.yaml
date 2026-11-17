@@ -1,0 +1,22 @@
+# A local edge: two proxy nodes for Kamailio and three tainted edge nodes for FreeSWITCH, one pod per node on the
+# host network, as on the real edge node groups. Everything else (the operator, the bench) runs on the proxy nodes.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: freeswitch-operator
+nodes:
+  - role: control-plane
+  - role: worker
+    labels: {node-role.example.com/sip-proxy: "true"}
+  - role: worker
+    labels: {node-role.example.com/sip-proxy: "true"}
+  - &edge
+    role: worker
+    labels: {node-role.example.com/sip-edge: "true"}
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          taints:
+            - {key: node-role.example.com/sip-edge, value: "true", effect: NoSchedule}
+  - *edge
+  - *edge

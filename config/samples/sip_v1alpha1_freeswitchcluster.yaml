@@ -11,6 +11,10 @@ spec:
   # Any image with freeswitch, fs_cli and /bin/sh. This public image (FreeSWITCH 1.10.10, amd64 and arm64)
   # is the one sipbench tests against; build and pin your own once you need something it lacks.
   image: drachtio/drachtio-freeswitch-mrf:0.9.6@sha256:cb81acc1112990ca33693374f1de7443d44cf9c95e6ae6c02ba1edcee4b68bba
+  # The config below is mounted read-only, and this image's entrypoint edits its config (sed -i) before starting,
+  # so it would exit at once. Run the binary against the assembled config instead.
+  command: ["/usr/local/freeswitch/bin/freeswitch"]
+  args: ["-nonat", "-nf", "-nc", "-conf", "/usr/local/freeswitch/conf", "-log", "/tmp", "-db", "/tmp"]
   nodeSelector:
     node-role.example.com/sip-edge: "true"
   tolerations:
@@ -27,8 +31,13 @@ spec:
     source: NodeExternalIP
     required: true
   config:
+    # The directory FreeSWITCH reads (-conf). Each ConfigMap's keys become files in its own directory under it.
+    mountPath: /usr/local/freeswitch/conf
     configMapRefs:
-      - name: edge-freeswitch-config
+      - {name: edge-freeswitch-conf, path: "."}                  # freeswitch.xml, vars.xml
+      - {name: edge-freeswitch-autoload, path: autoload_configs}
+      - {name: edge-freeswitch-dialplan, path: dialplan}
+      - {name: edge-freeswitch-profiles, path: sip_profiles}
   drain:
     maxDrainSeconds: 7200
   dispatcher:
@@ -36,5 +45,5 @@ spec:
     configMapName: edge-dispatcher
     transport: udp
     # Optional: Kamailio's JSON-RPC endpoint (jsonrpcs over xhttp) for immediate removal and reloads.
-    jsonrpcURL: http://kamailio.telephony.svc:5060/RPC
+    jsonrpcURL: http://kamailio.telephony.svc:5070/RPC
     reloadDelaySeconds: 75

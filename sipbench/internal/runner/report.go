@@ -24,9 +24,9 @@ type Report struct {
 func (r *Report) Add(res Result) {
 	r.Results = append(r.Results, res)
 	switch res.Status {
-	case "pass":
+	case statusPass:
 		r.Pass++
-	case "skip":
+	case statusSkip:
 		r.Skip++
 	default:
 		r.Fail++
@@ -36,16 +36,16 @@ func (r *Report) Add(res Result) {
 // WriteSummary writes a human summary.
 func (r *Report) WriteSummary(w io.Writer) {
 	for _, res := range r.Results {
-		fmt.Fprintf(w, "%-4s  %-32s %6.1fs", strings.ToUpper(res.Status), res.Name, res.Duration.Seconds())
+		_, _ = fmt.Fprintf(w, "%-4s  %-32s %6.1fs", strings.ToUpper(res.Status), res.Name, res.Duration.Seconds())
 		if res.Reason != "" {
-			fmt.Fprintf(w, "  (%s)", res.Reason)
+			_, _ = fmt.Fprintf(w, "  (%s)", res.Reason)
 		}
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
 		for _, f := range res.Failures {
-			fmt.Fprintf(w, "        - %s\n", f)
+			_, _ = fmt.Fprintf(w, "        - %s\n", f)
 		}
 	}
-	fmt.Fprintf(w, "\n%d passed, %d failed, %d skipped\n", r.Pass, r.Fail, r.Skip)
+	_, _ = fmt.Fprintf(w, "\n%d passed, %d failed, %d skipped\n", r.Pass, r.Fail, r.Skip)
 }
 
 // WriteJSON writes the full report.
@@ -89,9 +89,9 @@ func (r *Report) WriteJUnit(w io.Writer) error {
 		c := junitCase{Name: res.Name, Classname: "sipbench." + area, Time: res.Duration.Seconds()}
 		s.Time += c.Time
 		switch res.Status {
-		case "skip":
+		case statusSkip:
 			c.Skipped = &junitMessage{Message: res.Reason}
-		case "pass":
+		case statusPass:
 		default:
 			msg := res.Reason
 			if msg == "" && len(res.Failures) > 0 {

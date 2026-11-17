@@ -29,11 +29,12 @@ func freeUDPPort(t *testing.T) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	return c.LocalAddr().(*net.UDPAddr).Port
 }
 
 func testLog(t *testing.T) *slog.Logger {
+	t.Helper()
 	if os.Getenv("SIPBENCH_TEST_LOG") != "" {
 		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}

@@ -70,26 +70,40 @@ spec:
                 properties:
                   configMapRefs:
                     description: |-
-                      configMapRefs are mounted read-only at /etc/freeswitch-operator/config/<name>. A change to the
-                      referenced names rolls the fleet; a change to their contents is picked up by the image's own config
-                      loading (reloadxml) or the next roll.
+                      configMapRefs are laid out under mountPath, each in its own directory, so a tree such as
+                      autoload_configs/, sip_profiles/ and dialplan/ can be built from several ConfigMaps. Pods mount immutable
+                      copies the operator takes, never the ConfigMaps themselves, so an edit reaches the fleet only by rolling
+                      it, one drained node at a time. The order of the list doesn't matter.
                     items:
-                      description: |-
-                        LocalObjectReference contains enough information to let you locate the
-                        referenced object inside the same namespace.
+                      description: ConfigMapRef places one ConfigMap's keys, as files,
+                        in a directory under spec.config.mountPath.
                       properties:
                         name:
-                          default: ""
-                          description: |-
-                            Name of the referent.
-                            This field is effectively required, but due to backwards compatibility is
-                            allowed to be empty. Instances of this type with an empty value here are
-                            almost certainly wrong.
-                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          description: name of a ConfigMap in the cluster's namespace.
+                          minLength: 1
                           type: string
+                        path:
+                          description: |-
+                            path is the directory under mountPath that receives the ConfigMap's keys: "." for mountPath itself,
+                            or a relative path such as "autoload_configs". Defaults to the ConfigMap's name.
+                          pattern: ^(\.|[A-Za-z0-9_-][A-Za-z0-9_.-]*(/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*)$
+                          type: string
+                      required:
+                      - name
                       type: object
-                      x-kubernetes-map-type: atomic
                     type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  mountPath:
+                    default: /etc/freeswitch-operator/config
+                    description: |-
+                      mountPath is the read-only directory the configuration is assembled in. Point FreeSWITCH at it with
+                      `-conf`, and keep the image's entrypoint from writing to it. It must neither contain nor sit inside the
+                      operator's own directories (/etc/freeswitch-operator/scripts and /etc/freeswitch-operator/podinfo), and
+                      must not hide /tmp.
+                    pattern: ^/[^:]*$
+                    type: string
                 type: object
               dispatcher:
                 description: dispatcher, when set, makes the operator maintain a Kamailio
@@ -105,13 +119,18 @@ spec:
                     description: |-
                       jsonrpcURL, when set, is Kamailio's JSON-RPC endpoint (jsonrpcs over xhttp). The operator uses it to
                       take a leaving node out at once (dispatcher.set_state) and to reload the list once the kubelet has
-                      written the new file (dispatcher.reload).
+                      written the new file (dispatcher.reload). When the host names a Service in this cluster ("name",
+                      "name.namespace" or "name.namespace.svc[.<cluster domain>]"), each call goes to every ready pod behind it,
+                      on the target port of the Service port the URL names, so that every Kamailio hears of each change; any
+                      other URL is called as given.
                     type: string
                   reloadDelaySeconds:
                     default: 75
                     description: |-
                       reloadDelaySeconds is how long after writing the ConfigMap the operator waits before asking Kamailio to
-                      reload, so the kubelet has synced the mounted file.
+                      reload, so the kubelet has synced the mounted file. After each reload the operator checks (dispatcher.list)
+                      that the Kamailio holds the list it wrote, and reloads again every 10 seconds until it does, so a kubelet
+                      slower than this delay costs time but never leaves a Kamailio on the old list.
                     format: int32
                     minimum: 0
                     type: integer
