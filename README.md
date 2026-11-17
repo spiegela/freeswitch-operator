@@ -50,15 +50,18 @@ flowchart LR
   K1 & K2 -->|dispatcher| F1 & F2 & F3
   C & P <-.->|RTP to fixed addresses| F1 & F2 & F3
   F1 & F2 & F3 --> B
-  OP -.->|pods, service, dispatcher list,<br/>addresses, drains| Edge
+  OP -.->|both fleets, dispatcher list, registrations,<br/>addresses, drains| Edge
 ```
 
-- **Kamailio** holds the fixed signaling addresses and spreads new calls across FreeSWITCH nodes with its
-  dispatcher module. It sees every node through the operator.
+- **Kamailio** holds the fixed signaling addresses, registers to carriers that need it, and spreads new calls
+  across FreeSWITCH nodes with its dispatcher module. The operator runs it as a managed resource
+  ([`KamailioCluster`](#7-kamailio-as-a-managed-resource-m2)).
 - **FreeSWITCH** ends every trunk, anchors media and applies per-trunk policy (transfers, codecs, headers). Each
-  node runs on the host network, one per node, with its RTP range open in the node's security group.
-- **The operator** owns the FreeSWITCH pods and everything around them: the headless service, the dispatcher list,
-  each node's public address, drains, rolling updates, and (from v1) failover.
+  node runs on the host network, one per node, with its RTP range open in the node's security group, and advertises
+  its own fixed public address for media. No media relay sits in front of it; rtpengine beside Kamailio stays an
+  option for later (see [Decisions](#decisions)).
+- **The operator** owns both fleets and everything around them: the headless services, the dispatcher list,
+  outbound registrations, each node's public address, drains, rolling updates, and (from v1) failover.
 - **Behind the edge**, FreeSWITCH bridges calls to a SIP target. In the bench that is sipbench's mock backend; later
   it is LiveKit SIP, and through it the agent runtime.
 
@@ -139,11 +142,6 @@ watches them and:
 2. if `dispatcher.jsonrpcURL` is set, calls Kamailio's JSON-RPC: `dispatcher.set_state` to take a draining node out
    immediately, then `dispatcher.reload` once the new list is on disk.
 
-Why not DNS discovery alone: DNS adds lag (TTL plus Kamailio's re-resolve interval), and a single headless-service
-name is a single dispatcher destination rather than one per pod. Why not a Reloader annotation: that does a rolling
-restart of Kamailio, which drops in-flight transactions to absorb a membership change. A mounted ConfigMap reaches
-the file within about a minute (never use `subPath`; it never updates), and the reload is a runtime call.
-
 Kamailio's own OPTIONS probing (`ds_ping_interval`) stays on as a backstop, and FreeSWITCH answers new calls with
 `503` while paused, so dispatcher fails over on a `503` during the gap between "not ready" and "Kamailio knows".
 
@@ -181,6 +179,35 @@ kill a node mid-call and check the outcome. Until then a node's calls drop when 
 
 v0 mounts ConfigMaps (dial plan, ACLs, profiles) that Flux applies from git, and a change rolls the fleet through
 loop 3. Later, typed resources for trunks and ACLs, reloaded with `reloadxml` and `reloadacl` without a restart.
+
+### 7. Kamailio as a managed resource (M2)
+
+A `KamailioCluster` runs the proxy fleet the same way a `FreeswitchCluster` runs the media fleet: one pod per edge
+node on the host network, a fixed public address each, and the operator in charge of its config. It names the
+`FreeswitchCluster`s it dispatches to, one dispatcher set each.
+
+- **Config:** the operator renders `kamailio.cfg` from a template (dispatcher routing with failover on `503` or no
+  answer, JSON-RPC on an internal port, as in [`deploy/examples/kamailio`](deploy/examples/kamailio/)), plus the
+  dispatcher list and the registrations table.
+- **Membership changes reach every Kamailio pod.** The operator calls each pod's JSON-RPC directly, rather than
+  one Service name that reaches only one of them.
+- **Updates and drains:** Kamailio holds transactions, not calls, so a drain is short: stop taking new requests,
+  let transactions finish, hand registrations over (loop 8), stop.
+- The example in `deploy/examples/kamailio` becomes the template once this lands; until then, it is how v0 is run.
+
+### 8. Outbound registrations (M2)
+
+Some carriers send inbound calls only to an address that has registered for the number, with a username and
+password. The registration names one address (its `Contact`), so it belongs on the proxy, whose address is fixed,
+not on a FreeSWITCH node that can drain or die.
+- Kamailio's `uac` module registers for each configured number and re-registers before expiry; the carrier then
+  sends calls to Kamailio, which dispatches them like any other.
+- Credentials come from a Kubernetes Secret; the operator renders the registrations table from a typed list and
+  reloads it over JSON-RPC.
+- Outbound calls to such a carrier answer its digest challenge with the same credentials, in Kamailio or in
+  FreeSWITCH's gateway config (to be decided with the carrier tests in sipbench).
+- Open: whether every Kamailio pod registers (two `Contact`s for the carrier to try) or one at a time with handover.
+  It depends on how each carrier treats several contacts.
 
 ## sipbench: the SIP test bench
 
@@ -227,12 +254,12 @@ See [`sipbench/README.md`](sipbench/README.md) for how to run it.
 
 ## GitOps with Flux
 
-Clusters are managed with Flux. This repository publishes what a cluster needs; a separate fleet repository says
+Clusters may be managed with Flux and other Gitops tools. This repository publishes what a cluster needs; a separate fleet repository says
 which version runs where.
 
 - **This repository** builds and publishes the operator image and the CRDs and manager manifests as a Kustomize
   base (`config/`), and an example of the Flux objects that consume them ([`deploy/flux/`](deploy/flux/)).
-- **The fleet repository** (one per organisation) holds `clusters/<name>/` with a Flux `GitRepository` or
+- **The fleet repository** (one per organization) holds `clusters/<name>/` with a Flux `GitRepository` or
   `OCIRepository` pointing here at a tag, a `Kustomization` for the operator, and the `FreeswitchCluster`,
   FreeSWITCH config ConfigMaps and Kamailio for that cluster. Promotion from QA to production is a pull request
   that moves a tag.
@@ -245,8 +272,8 @@ which version runs where.
 | --- | --- | --- |
 | M0 | Repository, plan, operator scaffold, sipbench mock backend and runner running against FreeSWITCH in Docker | in progress |
 | M1 | v0 operator on kind: fleet, dispatcher list, drains and rolling updates; sipbench runs against it | in progress |
-| M2 | sipbench fleet scenarios on a cluster: drain mid-call, rolling update with live calls | planned |
-| M3 | `SIPAddressPool` with an AWS Elastic IP provider; edge node group on EKS | planned |
+| M2 | `KamailioCluster`: managed Kamailio, dispatcher changes to every pod, outbound registrations; sipbench fleet scenarios (drain mid-call, rolling update with live calls) | planned |
+| M3 | `SIPAddressPool` with an AWS Elastic IP provider, shared by both fleets; edge node group on EKS | planned |
 | M4 | v1 failover with fencing and call recovery | planned |
 | M5 | Typed trunk and ACL resources; reload without restart | planned |
 | M6 | Publish as open source, once it has carried production calls | planned |
@@ -265,18 +292,28 @@ make docker-build IMG=<registry>/freeswitch-operator:<tag>
 
 sipbench has its own instructions in [`sipbench/README.md`](sipbench/README.md).
 
+## Decisions
+
+1. **The operator runs Kamailio too**, as a `KamailioCluster` resource ([loop 7](#7-kamailio-as-a-managed-resource-m2)).
+   One operator describes the whole edge.
+2. **No media relay for now: each FreeSWITCH node advertises its own fixed public address.** In the Kamailio and
+   FreeSWITCH communities, rtpengine in front of FreeSWITCH is a *sometimes* pattern, not the default. FreeSWITCH
+   already anchors media, so it only needs a routable address it can advertise (`ext-rtp-ip`). rtpengine earns its
+   place when FreeSWITCH must stay on private addresses or media needs per-direction control, and it puts another
+   component in the media path. It stays an option for later.
+3. **Registrations live on Kamailio** ([loop 8](#8-outbound-registrations-m2)), whose address is fixed.
+4. **Apache 2.0 from the start** ([`LICENSE`](LICENSE)). The repository is private; whether and when to publish
+   is decided separately, and the license can change before then if that decision says so.
+5. **Start with an off-the-shelf public FreeSWITCH image** (chosen and pinned in [`sipbench`](sipbench/README.md)),
+   and build our own only when we need something it lacks.
+
 ## Open questions
 
-1. **Does the operator also run Kamailio?** v0 drives a Kamailio it doesn't own. Owning it would let one resource
-   describe the whole edge, at the cost of a second, larger API.
-2. **rtpengine beside Kamailio, or fixed addresses on every FreeSWITCH node?** It depends on whether peers
-   allow-list media addresses. Fixed addresses on FreeSWITCH nodes are simpler; rtpengine keeps FreeSWITCH
-   private.
-3. **Where do registrations live?** Registering to a carrier ties a registration to one address. It should be one
-   designated node, or Kamailio.
-4. **Licence and publishing.** Apache 2.0 is the likely choice; the decision to publish, and when, is the owners'.
-5. **The FreeSWITCH image.** We build and maintain our own; packages from SignalWire need a token.
+1. **One registration per carrier, or one per Kamailio pod?** Depends on how each carrier treats several contacts
+   for one number.
+2. **Do peers allow-list media addresses?** If none do, FreeSWITCH nodes can keep advertising their node's own
+   public address (v0), and the address pool can cover Kamailio first.
 
-## Licence
+## License
 
-Not yet decided; see open question 4. Until then this is internal code.
+Apache License 2.0; see [`LICENSE`](LICENSE).
