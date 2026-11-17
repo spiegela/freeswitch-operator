@@ -3,6 +3,9 @@
 #
 # Through Kamailio the runner can't know which FreeSWITCH node a call lands on, so there is no event socket ("esl"
 # capability): scenarios that change FreeSWITCH's settings (admission-limit) skip. OPTIONS is answered by Kamailio.
+#
+# SIPBENCH_FLEET names the FreeswitchCluster the fleet scenarios act on (the "fleet" capability), through the
+# sipbench-runner service account (runner-rbac.yaml). Empty, they skip.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -19,6 +22,7 @@ spec:
         app.kubernetes.io/part-of: sipbench
     spec:
       restartPolicy: Never
+      serviceAccountName: sipbench-runner
       containers:
         - name: sipbench
           image: sipbench:dev
@@ -30,6 +34,7 @@ spec:
             - {name: SIPBENCH_ESL, value: ""}             # set but empty: no event socket
             - {name: SIPBENCH_TARGET, value: "0.0.0.0:5090"}
             - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma"}
+            - {name: SIPBENCH_FLEET, value: "telephony/edge"}    # namespace/name; empty skips the fleet scenarios
             - {name: SIPBENCH_RUN, value: ""}             # a regexp picking scenarios by name; hack/kind.sh bench sets it
             - {name: SIPBENCH_JSON, value: ""}            # "-" prints the JSON report after the summary; hack/kind.sh bench sets it
           ports:

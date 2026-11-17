@@ -6,3 +6,4 @@ resources:
   - ../freeswitch
   - mockbackend.yaml
   - runner-service.yaml
+  - runner-rbac.yaml

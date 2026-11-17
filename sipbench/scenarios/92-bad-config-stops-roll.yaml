@@ -1,0 +1,34 @@
+name: bad-config-stops-roll
+area: fleet
+description: >
+  A bad config stops the roll at one node. The runner edits the fleet's SIP profiles so the trunks profile
+  listens on 5061 instead of the SIP port: the operator snapshots the change and starts a roll, and the first
+  replacement never passes readiness (no profile on the SIP port). The roll must stop there for 90 s while the
+  rest of the fleet keeps taking calls (call a, placed meanwhile). Restoring the config lets the roll finish.
+  The edit targets the bench's FreeSWITCH config (sipbench/freeswitch); it is put back however the scenario ends.
+requires: [mock, fleet]
+timeoutMs: 900000
+calls:
+  - id: a
+    to: agent
+    startAfter: broken
+    startMs: 45000
+    steps:
+      - tone: {hz: 600, ms: 1500}
+      - hangup: {}
+    expect:
+      status: 200
+      tonesHeard: [1000]
+      backend:
+        answered: true
+        tonesHeard: [600]
+actions:
+  - name: broken
+    breakConfig:
+      configMap: freeswitch-profiles
+      key: trunks.xml
+      replace: '<param name="sip-port" value="5060"/>'
+      with: '<param name="sip-port" value="5061"/>'
+  - expectRollStuck: {forMs: 90000, timeoutMs: 180000}
+  - restoreConfig: {}
+  - waitFleetCurrent: {timeoutMs: 600000}

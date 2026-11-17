@@ -5,6 +5,8 @@ package runner
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +29,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/esl"
+	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/fleet"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/script"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/uas"
@@ -69,18 +72,24 @@ type Config struct {
 	CallerBindHost string
 	// Caps are the capabilities this run provides; scenarios requiring others are skipped.
 	Caps map[string]bool
-	Log  *slog.Logger
+	// Fleet is the FreeSWITCH fleet scenario actions act on; with it, add "fleet" to Caps.
+	Fleet fleet.Fleet
+	Log   *slog.Logger
 }
 
-// Runner runs scenarios. Create one with New and call Start before Run.
+// Runner runs scenarios. Create one with New and call Start before Run. Run may be called concurrently: each call
+// is its own run, with its own mock routes, transfer target and records (see uas.RunOf), though scenarios that
+// change the edge itself (setup commands, fleet actions) will still disturb each other.
 type Runner struct {
-	cfg    Config
-	log    *slog.Logger
-	http   *http.Client
-	runID  string
-	target atomic.Pointer[scenario.Target]
-	tstore *uas.Store
-	seq    atomic.Int64
+	cfg   Config
+	log   *slog.Logger
+	http  *http.Client
+	runID string
+	runs  atomic.Int64
+	// targets holds each run's transfer target script, by run key.
+	targets sync.Map
+	tstore  *uas.Store
+	seq     atomic.Int64
 }
 
 // New returns a runner for cfg.
@@ -93,9 +102,16 @@ func New(cfg Config) *Runner {
 		cfg:    cfg,
 		log:    log,
 		http:   &http.Client{Timeout: 10 * time.Second},
-		runID:  strconv.FormatInt(time.Now().Unix()%100000, 36),
+		runID:  newRunID(),
 		tstore: &uas.Store{},
 	}
+}
+
+// newRunID returns 8 random hex digits: unlikely to meet another runner's on the same mock.
+func newRunID() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // DefaultTarget answers and plays the target tone until the caller hangs up.
@@ -124,10 +140,13 @@ func (r *Runner) Start(ctx context.Context) error {
 		diago.WithMediaConfig(diago.MediaConfig{Codecs: []media.Codec{media.CodecAudioUlaw, media.CodecAudioAlaw, media.CodecTelephoneEvent8000}}),
 		diago.WithLogger(r.log.With("end", "target")),
 	)
-	def := DefaultTarget
-	r.target.Store(&def)
 	return dg.ServeBackground(ctx, func(d *diago.DialogServerSession) {
-		t := r.target.Load()
+		t := &DefaultTarget
+		if h := d.InviteRequest.GetHeader(uas.BenchCallHeader); h != nil {
+			if v, ok := r.targets.Load(uas.RunOf(h.Value())); ok {
+				t = v.(*scenario.Target)
+			}
+		}
 		detect := append(append([]float64{}, StandardTones...), t.DetectHz...)
 		uas.Handle(d, "target", t.Steps, r.tstore, uas.Options{DetectHz: detect, Hold: 30 * time.Second, Log: r.log.With("end", "target")})
 	})
@@ -143,6 +162,8 @@ type Result struct {
 	Failures []string      `json:"failures,omitempty"`
 	Duration time.Duration `json:"durationNs"`
 	Calls    []CallResult  `json:"calls,omitempty"`
+	// Timeline is what the scenario's actions did, when, as "+12.3s action: what happened".
+	Timeline []string `json:"timeline,omitempty"`
 }
 
 // CallResult is what the runner saw of one call.
@@ -153,6 +174,7 @@ type CallResult struct {
 	ResponseHeaders map[string]string `json:"responseHeaders,omitempty"`
 	Codec           string            `json:"codec,omitempty"`
 	TonesHeard      []float64         `json:"tonesHeard"`
+	AudioGapsMs     map[string]int    `json:"audioGapsMs,omitempty"`
 	Digits          string            `json:"digits"`
 	EndedBy         string            `json:"endedBy,omitempty"`
 	MediaFrames     int64             `json:"mediaFrames"`
@@ -183,26 +205,27 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 		res.Failures = append(res.Failures, fmt.Sprintf(format, args...))
 	}
 
-	// Prepare the ends.
+	if s.NeedsFleet() && r.cfg.Fleet == nil {
+		res.Status, res.Reason = statusFail, "the scenario acts on the fleet, and the runner has none (-fleet)"
+		return res
+	}
+
+	// Prepare the ends, for this run only: its key starts every bench call id it places.
+	key := fmt.Sprintf("%s.%d", r.runID, r.runs.Add(1))
 	if r.cfg.MockURL != "" {
-		if err := r.mockReset(ctx); err != nil {
-			res.Status, res.Reason = statusFail, "resetting mock backend: "+err.Error()
-			return res
-		}
+		defer r.mockForget(key)
 		if s.Backend != nil && len(s.Backend.Routes) > 0 {
-			if err := r.mockRoutes(ctx, s.Backend.Routes); err != nil {
+			if err := r.mockRoutes(ctx, key, s.Backend.Routes); err != nil {
 				res.Status, res.Reason = statusFail, "configuring mock backend: "+err.Error()
 				return res
 			}
 		}
 	}
-	r.tstore.Reset()
+	defer r.tstore.DeleteRun(key)
 	if s.Target != nil {
 		t := *s.Target
-		r.target.Store(&t)
-	} else {
-		def := DefaultTarget
-		r.target.Store(&def)
+		r.targets.Store(key, &t)
+		defer r.targets.Delete(key)
 	}
 	if len(s.Setup) > 0 {
 		if err := r.eslRun(s.Setup); err != nil {
@@ -229,25 +252,21 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 		}
 	}
 
-	// Place every call, each after its start delay, and wait for all of them.
-	results := make([]CallResult, len(s.Calls))
-	var wg sync.WaitGroup
-	for i, c := range s.Calls {
-		wg.Add(1)
-		go func(i int, c scenario.Call) {
-			defer wg.Done()
-			if c.StartMs > 0 {
-				select {
-				case <-ctx.Done():
-					results[i] = CallResult{ID: c.ID, Error: "scenario timed out before start"}
-					return
-				case <-time.After(time.Duration(c.StartMs) * time.Millisecond):
-				}
-			}
-			results[i] = r.call(ctx, s, c)
-		}(i, c)
+	// Each call's state lets the timeline wait on it and hang it up.
+	states := map[string]*callState{}
+	for _, c := range s.Calls {
+		states[c.ID] = newCallState(fmt.Sprintf("%s-%s-%s-%d", key, s.Name, c.ID, r.seq.Add(1)))
 	}
-	wg.Wait()
+	tl := newTimeline(r, s, key, states, start)
+	defer func() {
+		tl.cleanup()
+		res.Timeline = tl.log
+		if len(tl.failures) > 0 {
+			res.Failures = append(res.Failures, tl.failures...)
+			res.Status = statusFail
+		}
+	}()
+	results := r.placeCalls(ctx, s, states, tl)
 
 	// Give the ends a moment to finish recording after the last BYE.
 	time.Sleep(500 * time.Millisecond)
@@ -266,6 +285,9 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 			fail("call %s: %s", c.ID, f)
 		}
 	}
+	for _, f := range crossChecks(s.Calls, results) {
+		fail("%s", f)
+	}
 	res.Calls = results
 	if len(res.Failures) > 0 {
 		res.Status = statusFail
@@ -275,11 +297,44 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 	return res
 }
 
+// placeCalls places every call, each after its action and start delay, runs the timeline alongside, and waits for
+// all of it.
+func (r *Runner) placeCalls(ctx context.Context, s *scenario.Scenario, states map[string]*callState, tl *timeline) []CallResult {
+	results := make([]CallResult, len(s.Calls))
+	var wg sync.WaitGroup
+	for i, c := range s.Calls {
+		wg.Go(func() {
+			st := states[c.ID]
+			defer st.end()
+			if c.StartAfter != "" {
+				if err := tl.waitFor(ctx, c.StartAfter); err != nil {
+					results[i] = CallResult{ID: c.ID, BenchCall: st.bench, Error: "not started: " + err.Error()}
+					return
+				}
+			}
+			if c.StartMs > 0 {
+				select {
+				case <-ctx.Done():
+					results[i] = CallResult{ID: c.ID, BenchCall: st.bench, Error: "scenario timed out before start"}
+					return
+				case <-time.After(time.Duration(c.StartMs) * time.Millisecond):
+				}
+			}
+			results[i] = r.call(ctx, s, c, st)
+		})
+	}
+	if len(s.Actions) > 0 {
+		wg.Go(func() { tl.run(ctx) })
+	}
+	wg.Wait()
+	return results
+}
+
 // call places one call and returns what the runner saw.
 func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splitting it scatters the steps
-	ctx context.Context, s *scenario.Scenario, c scenario.Call,
+	ctx context.Context, s *scenario.Scenario, c scenario.Call, st *callState,
 ) CallResult {
-	bench := fmt.Sprintf("%s-%s-%s-%d", r.runID, s.Name, c.ID, r.seq.Add(1))
+	bench := st.bench
 	cr := CallResult{ID: c.ID, BenchCall: bench, TonesHeard: []float64{}}
 	log := r.log.With("scenario", s.Name, "call", c.ID)
 
@@ -394,6 +449,7 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 	if res := d.InviteResponse; res != nil {
 		cr.ResponseHeaders = responseHeaders(res)
 	}
+	st.answer()
 
 	detect := append(append([]float64{}, StandardTones...), c.DetectHz...)
 	detect = append(detect, c.Expect.TonesHeard...)
@@ -414,25 +470,33 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 		return d.Hangup(hctx)
 	}
 	stepCtx, cancelSteps := context.WithCancel(callCtx)
+	// An action may hang the call up (Action.Hangup): that ends the steps, and isn't the steps' error.
+	var stopped atomic.Bool
 	go func() {
 		select {
 		case <-dialogDone:
 			cancelSteps()
+		case <-st.stop:
+			stopped.Store(true)
+			cancelSteps()
 		case <-stepCtx.Done():
 		}
 	}()
-	for _, st := range c.Steps {
+	for _, step := range c.Steps {
 		if stepCtx.Err() != nil || endedLocal {
 			break
 		}
-		if st.Refer != nil {
+		if step.Refer != nil {
 			cr.Error = "refer from the caller is not supported yet"
 			break
 		}
-		if err := eng.RunMedia(stepCtx, st, hangup); err != nil {
-			log.Warn("step failed", "step", st.Kind(), "error", err)
+		if err := eng.RunMedia(stepCtx, step, hangup); err != nil {
+			if stopped.Load() {
+				break
+			}
+			log.Warn("step failed", "step", step.Kind(), "error", err)
 			if cr.Error == "" {
-				cr.Error = st.Kind() + ": " + err.Error()
+				cr.Error = step.Kind() + ": " + err.Error()
 			}
 			break
 		}
@@ -445,6 +509,8 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 		}
 		select {
 		case <-dialogDone:
+		case <-st.stop:
+			_ = hangup()
 		case <-time.After(max):
 			_ = hangup()
 		case <-ctx.Done():
@@ -460,6 +526,7 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 	time.Sleep(100 * time.Millisecond)
 	cr.Codec = eng.Codec()
 	cr.TonesHeard = eng.Heard(uas.MinToneFrames)
+	cr.AudioGapsMs = eng.MaxGapsMs()
 	cr.Digits = eng.Digits()
 	cr.MediaFrames = eng.FramesReceived()
 	return cr
@@ -510,16 +577,21 @@ func (r *Runner) eslRun(cmds []string) error {
 	return nil
 }
 
-func (r *Runner) mockReset(ctx context.Context) error {
-	return r.mockDo(ctx, http.MethodPost, "/reset", nil, nil)
+// mockForget has the mock drop one run's records and routes, once the run has read them.
+func (r *Runner) mockForget(key string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.mockDo(ctx, http.MethodDelete, "/runs/"+url.PathEscape(key), nil, nil); err != nil {
+		r.log.Warn("mock backend kept a finished run's records", "run", key, "error", err)
+	}
 }
 
-func (r *Runner) mockRoutes(ctx context.Context, routes map[string]scenario.Route) error {
+func (r *Runner) mockRoutes(ctx context.Context, key string, routes map[string]scenario.Route) error {
 	b, err := yaml.Marshal(routes)
 	if err != nil {
 		return err
 	}
-	return r.mockDo(ctx, http.MethodPost, "/routes", b, nil)
+	return r.mockDo(ctx, http.MethodPost, "/runs/"+url.PathEscape(key)+"/routes", b, nil)
 }
 
 func (r *Runner) mockCalls(ctx context.Context, benchCall string) ([]uas.Call, error) {

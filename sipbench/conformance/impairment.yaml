@@ -54,7 +54,7 @@ cases:
       Kamailio, one leg at the backend, a 200 to the caller, and setup time no more than 600 ms over the clean
       baseline.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-sig-provisional-lost
     ref: "rtpbench:invite-retransmit; RFC 3261 17.2.1"
@@ -66,7 +66,7 @@ cases:
       The caller resends the INVITE; Kamailio absorbs every copy into the existing transaction and answers each
       with the latest provisional, so the backend sees exactly one leg and the call is answered with one To-tag.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-sig-200-lost
     ref: "rtpbench:invite-retransmit; RFC 3261 13.3.1.4"
@@ -79,7 +79,7 @@ cases:
       caller gets the 200 within 1.5 s of the first copy, every copy carries the same To-tag, the call is up with
       two-way audio, and the edge does not hang up for want of an ACK.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-sig-ack-lost-once
     ref: "rtpbench:invite-retransmit; RFC 3261 13.3.1.4"
@@ -91,7 +91,7 @@ cases:
       The edge resends its 200, the caller ACKs the copy, the edge stops resending within T1 of that ACK, and the
       call goes on with two-way audio: no BYE from the edge, one leg at the backend.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-sig-ack-never
     ref: "RFC 3261 13.3.1.4 (64*T1)"
@@ -104,7 +104,7 @@ cases:
       call: a BYE toward the caller and the backend leg released (the mock records endedBy remote) in the same
       second. No FreeSWITCH channel is left afterwards.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-sig-bye-lost-in
     ref: "rtpbench:bye-lost; RFC 3261 17.1.2.2 (timer E)"
@@ -116,7 +116,7 @@ cases:
       The caller's retransmission 500 ms later ends the call: 200 to the BYE within 1 s of the first copy, the
       backend leg released within 1.5 s, and the backend sees one BYE, not two.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-sig-bye-lost-out
     ref: "rtpbench:bye-lost; RFC 3261 17.1.2.2 (timer E)"
@@ -128,7 +128,7 @@ cases:
       When the backend hangs up, the edge's BYE to the caller is resent at T1; the caller receives it within 1 s
       of the backend's BYE and the edge stops resending once the 200 arrives (no copies after it).
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-sig-bye-never
     ref: "RFC 3261 17.1.2.2 (timer F); RFC 3550 6.3.5"
@@ -141,7 +141,7 @@ cases:
       (60 s): the backend leg is released and a BYE goes toward the caller no later than 62 s after the caller's
       last RTP, with a media-timeout hangup cause on record.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-sig-loss-random
     ref: "rtpbench:mobile; RFC 3261 17"
@@ -154,7 +154,7 @@ cases:
       copies); every call reaches the backend as exactly one leg, and none is left up 5 s after its BYE. At 20%
       loss each way at least 49 of 50 calls succeed, with the same no-duplicate and no-leftover rules.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-sig-delay-over-t1
     ref: "rtpbench:delay; RFC 3261 17.1.1.2"
@@ -167,7 +167,7 @@ cases:
       every copy is absorbed: one leg per call at the backend, no 482 or second dialog, and setup time within
       2.5 round trips plus 200 ms of the backend's answer.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-sig-bye-before-ack
     ref: "RFC 3261 13.3.1.4, 15"
@@ -179,7 +179,7 @@ cases:
       With the ACK held back 1 s and a BYE sent 200 ms after the 200, the edge accepts the BYE (200), releases
       both legs within 1 s, and ignores the late ACK; no 481 to the BYE and no channel left.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-sig-cancel-crosses-200
     ref: "RFC 3261 9.1, 15"
@@ -192,7 +192,7 @@ cases:
       200 (not 487), the caller ACKs and sends BYE, and the backend leg is released within 2 s; neither leg is
       left up.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   # --- Signalling: Kamailio <-> FreeSWITCH node (dispatch and failover) ------------------------------------------
 
@@ -207,7 +207,7 @@ cases:
       answered by that node, setup time no more than 600 ms over baseline, one leg at the backend, and the node
       stays active in the dispatcher.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-node-unreachable
     ref: "kamailio dispatcher failure_route; RFC 3261 17.1.1.2"
@@ -221,7 +221,7 @@ cases:
       over baseline, never a 408 or 503 to the caller, and one leg at the backend. Calls placed afterwards skip
       the node with no added delay; it returns to rotation within 25 s of the link coming back.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-node-slow
     ref: "kamailio tm fr_timer; RFC 3261 17.2.1"
@@ -234,7 +234,7 @@ cases:
       Kamailio's own resends are absorbed by it (one leg at the backend), and its probes still succeed, so it stays
       active.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-node-slow-past-fr-timer
     ref: "kamailio tm fr_timer; RFC 3261 13.2.2.4"
@@ -247,7 +247,7 @@ cases:
       must not leave a second call: the caller ends up in one dialog (any second 2xx is ACKed and released with a
       BYE within 2 s), and 10 s after answer exactly one backend leg is still up.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-node-dark-after-100
     ref: "kamailio tm fr_inv_timer; RFC 3261 17.1.1.2 (timer B)"
@@ -260,7 +260,7 @@ cases:
       caller gets a final response no later than fr_inv_timer plus 1 s (61 s), and once the link returns no
       backend leg from that attempt is left up.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-node-sig-loss
     ref: "rtpbench:loss; kamailio tm"
@@ -273,7 +273,7 @@ cases:
       spurious failover (every call lands on the node first chosen unless its first INVITE and all resends inside
       5 s were lost).
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-node-probe-loss
     ref: "kamailio dispatcher ds_probing_threshold"
@@ -286,7 +286,7 @@ cases:
       fr_timer and two consecutive failures are needed); at 100% loss it goes inactive within 25 s (two probes,
       each failing after the 5 s probe timeout) and returns within 25 s of the link coming back.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-node-cut-mid-call
     ref: "RFC 3261 16.6, 17.1.2.2"
@@ -303,7 +303,7 @@ cases:
       that times out instead gets 408 from Kamailio, and the node then ends the call on its media timeout (60 s
       after the caller's RTP stops) and releases the backend.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   # --- Media: carrier <-> edge -----------------------------------------------------------------------------------
 
@@ -318,7 +318,7 @@ cases:
       edge's own added delay at most 20 ms (one packet), and an E-model MOS of 4.3 or more. Every impaired case
       compares against these figures.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-media-y1541-class0
     ref: "i3f 7.1.2-7.1.4, 7.3.5; Y.1541 class 0"
@@ -330,7 +330,7 @@ cases:
       Each side hears the other's tone; measured loss per direction is within 0.1 point of the injected rate;
       MOS estimate 4.0 or more; the edge adds no more jitter than baseline.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-media-lte
     ref: "rtpbench:lte; i3f 7.3.5"
@@ -342,7 +342,7 @@ cases:
       Tones heard both ways with at least 95% of 20 ms frames detected; measured loss 0.5-1.5% with mean loss
       runs near 2 packets; MOS estimate 3.5 or more; SSRC unchanged throughout.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-media-lte-bad
     ref: "rtpbench:lte-bad; i3f 7.3.5"
@@ -355,7 +355,7 @@ cases:
       200 ms, the call stays up, and the reported loss and MOS estimate match the injected profile (MOS is
       expected to be poor; the case checks the edge survives and measures, not that it sounds good).
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-media-loss-random
     ref: "rtpbench:loss; G.1020"
@@ -368,7 +368,7 @@ cases:
       measured loss per direction is within 1 point of injected; the edge relays what arrives without stretching
       or restarting the stream (SSRC unchanged, RTP timestamps advance with the clock across gaps).
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-media-jitter
     ref: "rtpbench:jitter; RFC 3550 A.8"
@@ -381,7 +381,7 @@ cases:
       backend measures is no more than the jitter measured at the edge's input plus 5 ms; the reverse direction
       stays at baseline jitter.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-media-delay
     ref: "rtpbench:delay; G.114"
@@ -394,7 +394,7 @@ cases:
       baseline within 40 ms; the call is not ended for lateness; MOS estimate falls only by the E-model delay
       term (4.0 or more at 150 ms).
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-media-reorder
     ref: "rtpbench:lte-bad (reordering); RFC 3550 A.1"
@@ -406,7 +406,7 @@ cases:
       The backend still hears the caller's tone with at least 90% of frames detected; the stream the edge sends
       on keeps one SSRC, sequence numbers that rise by one per packet, and timestamps that never go backwards.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-media-duplicate
     ref: "RFC 3550 A.1"
@@ -418,7 +418,7 @@ cases:
       Duplicates do not lengthen audio: a 2 s tone measures 2 s within 5% at the backend, and the edge's output
       carries no duplicate sequence numbers.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-media-asymmetric
     ref: "rtpbench:loss (per direction)"
@@ -431,7 +431,7 @@ cases:
       caller's tone; the caller measures baseline loss (0) on the backend's tone. The edge does not end or
       re-negotiate the call.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   # --- DTMF under impairment ------------------------------------------------------------------------------------
 
@@ -445,7 +445,7 @@ cases:
       In 20 runs of the dtmf-both-ways exchange the backend records exactly 1234# and the caller exactly 4321
       every time: no digit missing, none doubled, order kept.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-dtmf-end-lost
     ref: "RFC 4733 2.5.1.4, 2.5.2.2"
@@ -457,7 +457,7 @@ cases:
       The digit is still delivered once (ended by the next event or by the receiver's timeout), the following
       digit is a separate digit, and the backend records 1234#.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-dtmf-duplicate-reorder
     ref: "RFC 4733 2.5.2"
@@ -469,7 +469,7 @@ cases:
       Event packets that arrive twice or out of order still give each digit once, in order (backend records
       1234#), with each digit's reported duration within 20 ms of what was sent.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   # --- One-way audio and blackholes ----------------------------------------------------------------------------
 
@@ -484,7 +484,7 @@ cases:
       ends the call on its media timeout (60 s): BYE to both sides within 62 s of answer, with a media-timeout
       cause on record.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-oneway-outbound-dead
     ref: "rtpbench:hold"
@@ -496,7 +496,7 @@ cases:
       The caller hears nothing, the backend hears the caller. The edge still receives media, so it must not
       time the call out: the call lasts until the caller's BYE, and both legs end then.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-blackhole-short
     ref: "rtpbench:ssrc-change, pause checks; RFC 3550 5.1"
@@ -508,7 +508,7 @@ cases:
       The call survives: no BYE either way, audio back both ways within 500 ms of the link returning, same SSRC
       and a timestamp jump that matches the 2 s gap. The gap is reported as a 2 s outage, not as random loss.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-blackhole-long
     ref: "RFC 3261 17.1.2.2 (timer F); RFC 3550 6.3.5"
@@ -522,7 +522,7 @@ cases:
       FreeSWITCH channel is left. After the link returns (120 s, past both), a BYE from the caller for that call
       gets 481.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   # --- Edge <-> backend ------------------------------------------------------------------------------------------
 
@@ -537,7 +537,7 @@ cases:
       detected; digits from the caller reach the backend exactly once; the carrier-side leg shows only the loss
       that came from the backend side (the edge invents none).
     status: planned
-    milestone: M2
+    milestone: M2b
 
   - id: imp-backend-sig-loss
     ref: "rtpbench:bye-lost; RFC 3261 13.2.2.4, 17.1.2.2"
@@ -549,7 +549,7 @@ cases:
       The backend's resent 200 is ACKed each time and bridged once (the caller sees one 200); the backend's BYE,
       lost once, is resent and ends the caller's leg with a single BYE within 1 s.
     status: planned
-    milestone: M2
+    milestone: M2b
 
   # --- Real network (M3) -----------------------------------------------------------------------------------------
 

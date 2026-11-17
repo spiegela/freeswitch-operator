@@ -22,6 +22,13 @@ import (
 // to the call that caused them. The edge must pass X- headers through, which is itself under test.
 const BenchCallHeader = "X-Sipbench-Call"
 
+// RunOf returns the run part of a bench call id: everything before the first "-". The runner gives each scenario
+// run its own, so an end can keep one run's records and routes apart from another's.
+func RunOf(benchCall string) string {
+	run, _, _ := strings.Cut(benchCall, "-")
+	return run
+}
+
 // MinToneFrames is how many 20 ms frames a tone must be present for to count as heard (200 ms).
 const MinToneFrames = 10
 
@@ -44,10 +51,15 @@ type Call struct {
 	// EndedBy is "local" (this end hung up), "remote" (the other end did), or "" while the call is up.
 	EndedBy string `json:"endedBy,omitempty"`
 
-	Codec       string    `json:"codec,omitempty"`
-	TonesHeard  []float64 `json:"tonesHeard"`
-	Digits      string    `json:"digits"`
-	MediaFrames int64     `json:"mediaFrames"`
+	// Source is where the INVITE came from (host:port): the edge node that sent the call here.
+	Source string `json:"source,omitempty"`
+
+	Codec      string    `json:"codec,omitempty"`
+	TonesHeard []float64 `json:"tonesHeard"`
+	// AudioGapsMs is, for each tone heard, the longest it went missing once it had started (see tone.Detector).
+	AudioGapsMs map[string]int `json:"audioGapsMs,omitempty"`
+	Digits      string         `json:"digits"`
+	MediaFrames int64          `json:"mediaFrames"`
 
 	Refer  *ReferResult `json:"refer,omitempty"`
 	Errors []string     `json:"errors,omitempty"`
@@ -85,6 +97,7 @@ func (l *live) snapshot() Call {
 	c.Headers = make(map[string]string, len(l.call.Headers))
 	maps.Copy(c.Headers, l.call.Headers)
 	c.TonesHeard = append([]float64{}, l.call.TonesHeard...)
+	c.AudioGapsMs = maps.Clone(l.call.AudioGapsMs)
 	c.Errors = append([]string(nil), l.call.Errors...)
 	if l.call.Refer != nil {
 		r := *l.call.Refer
@@ -124,6 +137,20 @@ func (s *Store) Reset() {
 	s.mu.Unlock()
 }
 
+// DeleteRun forgets the calls of one run (see RunOf).
+func (s *Store) DeleteRun(run string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.calls[:0]
+	for _, l := range s.calls {
+		if RunOf(l.snapshot().BenchCall) != run {
+			kept = append(kept, l)
+		}
+	}
+	clear(s.calls[len(kept):])
+	s.calls = kept
+}
+
 // Options tune Handle.
 type Options struct {
 	// DetectHz are the tone frequencies to listen for.
@@ -159,6 +186,7 @@ func Handle( //nolint:gocyclo // one dispatch over every script step; splitting 
 		To:         req.To().Address.User,
 		RequestURI: req.Recipient.String(),
 		Headers:    headers,
+		Source:     req.Source(),
 		StartedAt:  time.Now(),
 		TonesHeard: []float64{},
 	})
@@ -276,6 +304,7 @@ func Handle( //nolint:gocyclo // one dispatch over every script step; splitting 
 		if eng != nil {
 			c.Codec = eng.Codec()
 			c.TonesHeard = eng.Heard(MinToneFrames)
+			c.AudioGapsMs = eng.MaxGapsMs()
 			c.Digits = eng.Digits()
 			c.MediaFrames = eng.FramesReceived()
 		}

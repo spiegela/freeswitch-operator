@@ -97,3 +97,36 @@ func TestAPI(t *testing.T) {
 		t.Fatalf("after reset: %v", got.Routes)
 	}
 }
+
+func TestRuns(t *testing.T) {
+	cfg, err := ParseConfig([]byte("routes: {agent: {steps: [{answer: {}}]}}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := s.Handler()
+
+	if w := do(t, h, "POST", "/runs/r1/routes", "agent: {steps: [{reject: {code: 486}}]}"); w.Code != 204 {
+		t.Fatalf("run routes: %d %s", w.Code, w.Body.String())
+	}
+	if w := do(t, h, "POST", "/runs/r1/routes", "bad: {steps: [{tone: {hz: 9000, ms: 1}}]}"); w.Code != 400 {
+		t.Fatalf("invalid run route accepted: %d", w.Code)
+	}
+	// The override is r1's alone.
+	if _, r, _ := s.route("r1", "agent"); r.Steps[0].Reject == nil {
+		t.Errorf("r1 should get its own agent route")
+	}
+	if _, r, _ := s.route("r2", "agent"); r.Steps[0].Answer == nil {
+		t.Errorf("r2 should get the config's agent route")
+	}
+	if _, r, _ := s.route("", "agent"); r.Steps[0].Answer == nil {
+		t.Errorf("a call with no run should get the config's agent route")
+	}
+
+	if w := do(t, h, "DELETE", "/runs/r1", ""); w.Code != 204 {
+		t.Fatalf("delete run: %d", w.Code)
+	}
+	if _, r, _ := s.route("r1", "agent"); r.Steps[0].Answer == nil {
+		t.Errorf("r1's routes should be gone")
+	}
+}
