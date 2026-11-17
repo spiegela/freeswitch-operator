@@ -152,8 +152,9 @@ with `maxUnavailable: 1`.
 **The headless service's EndpointSlices are the source of truth: a ready endpoint takes new calls.** The operator
 watches them and:
 1. renders Kamailio's `dispatcher.list` (one line per ready node, set `dispatcher.setID`) into the ConfigMap named
-   by `dispatcher.configMapName`; Kamailio mounts it;
-2. if `dispatcher.jsonrpcURL` is set, calls Kamailio's JSON-RPC: `dispatcher.set_state` to take a draining node out
+   by `dispatcher.configMapName`. A `KamailioCluster` that dispatches to the fleet reads it and drives its own pods
+   ([loop 7](#7-kamailio-as-a-managed-resource-m2)); a Kamailio you run yourself mounts it;
+2. for a Kamailio you run yourself, if `dispatcher.jsonrpcURL` is set, calls Kamailio's JSON-RPC: `dispatcher.set_state` to take a draining node out
    immediately, then `dispatcher.reload` once the new list should be on disk (`dispatcher.reloadDelaySeconds`, a
    guess at the kubelet's sync time). After each reload it reads the list back (`dispatcher.list`) and reloads
    again every 10 s until Kamailio holds the one it wrote. When the URL names a Service in the cluster,
@@ -215,31 +216,60 @@ it), reloaded with `reloadxml` and `reloadacl`.
 
 ### 7. Kamailio as a managed resource (M2)
 
-A `KamailioCluster` runs the proxy fleet the same way a `FreeswitchCluster` runs the media fleet: one pod per edge
-node on the host network, a fixed public address each, and the operator in charge of its config. It names the
-`FreeswitchCluster`s it dispatches to, one dispatcher set each.
+A `KamailioCluster` runs the proxy fleet the same way a `FreeswitchCluster` runs the media fleet: a StatefulSet
+(`<name>-kamailio`) with one pod per node on the host network, a fixed public address each, the same one-at-a-time
+roll, and the operator in charge of its config. `spec.dispatch` names the `FreeswitchCluster`s it sends calls to, in
+priority order; each must set `spec.dispatcher`, whose `setID` becomes that fleet's dispatcher set. See
+[`config/samples`](config/samples/sip_v1alpha1_kamailiocluster.yaml).
 
-- **Config:** the operator renders `kamailio.cfg` from a template (dispatcher routing with failover on `503` or no
-  answer, JSON-RPC on an internal port, as in [`deploy/examples/kamailio`](deploy/examples/kamailio/)), plus the
-  dispatcher list. Peer data (loop 9) and registrations (loop 8) join it in M5.
-- **Membership changes reach every Kamailio pod**, as they already do in v0 when `jsonrpcURL` names a Service:
-  the operator calls each pod's JSON-RPC directly, rather than one Service name that reaches only one of them.
+- **Config:** the operator renders `kamailio.cfg` from a template
+  ([`kamailio.cfg.tmpl`](internal/controller/kamailio.cfg.tmpl)) into an immutable ConfigMap named by its hash.
+  It routes:
+  - a new call from a peer to the first set in `spec.dispatch` with an active node, round-robin within it
+    (`ds_select_routes`), failing over on `503` or no answer to the set's next node and then to the next set's;
+  - requests from a FreeSWITCH node to the request URI, so peers always see Kamailio's address;
+  - in-dialog requests along their route set; one without Kamailio's route, or a CANCEL that matches nothing, gets
+    `481` (a stray ACK is dropped);
+  - OPTIONS keepalives from peers (no user part), answered by Kamailio itself: `200` with an `Allow` header while any
+    set has an active node, `503` while none has or while the pod drains, so peers route elsewhere.
+
+  It also inserts `Max-Forwards: 70` when missing and refuses requests that require an extension it doesn't support
+  (`420`). Requests it relays onward wait RFC 3261's 32 s; a new call fails over after 5 s without any answer, and the
+  dispatcher's probes use the same 5 s. A `503` from the last node is passed on as `503`. `make check-kamailio-cfg`
+  runs `kamailio -c` on rendered cases in the pinned image, in the lint workflow. Peer data (loop 9) and
+  registrations (loop 8) join the config in M5.
+- **Most changes are live; a short list restarts.** The restart list is the rendered config and the pod template:
+  listening ports, loaded modules and their parameters, the routing script, and the order of `spec.dispatch` (the
+  sets are in the routing). A change to one of those makes a new snapshot and a new template, and the fleet rolls one
+  pod at a time, which is cheap because a Kamailio drain is short. Everything else reloads live: today that is
+  membership, the dispatcher list.
+- **Membership is live.** Each `FreeswitchCluster` keeps publishing its own dispatcher list. The `KamailioCluster`
+  combines its fleets' lists into `<name>-dispatcher`, which its pods mount as a directory, with every destination
+  flagged for probing (Kamailio's probes take a dead node out on their own). When a destination leaves, the operator
+  marks it inactive on every ready Kamailio pod at once, by pod address. Once `reloadDelaySeconds` have passed it has
+  each pod reload, reads each pod's list back, and reloads again every 10 s until every pod holds the combined list
+  (`status.dispatcherReloadedHash`). A fleet that is missing, has no `spec.dispatcher`, or reuses another's `setID`
+  is left out and named in the `SetConflict` condition.
 - **JSON-RPC is authenticated.** Kamailio's JSON-RPC has no authentication of its own, and NetworkPolicy doesn't
-  apply to host-network pods. So the operator keeps a token in a Secret and the pods get it as an environment
-  variable. The HTTP route refuses any request without that token. The RPC listener binds to the node's private
-  address only, and the security group allows it only from the operator's subnet.
-- **Most changes are live; a short list restarts.** Changes reach the fleet over JSON-RPC unless they touch a field
-  on the restart list: listening addresses and ports, loaded modules and their parameters, and the routing script.
-  A change to one of those rolls the fleet one pod at a time, which is cheap because a Kamailio drain is short. The
-  operator keeps that list rather than a list of what reloads, since everything not on it reloads.
-- **Updates and drains:** Kamailio holds transactions, not calls, so a drain is short: stop taking new requests,
-  let transactions finish, stop. From M5, a pod that holds registrations hands them over first (loop 8).
+  apply to host-network pods. So the operator keeps a random token in a Secret (`<name>-jsonrpc`), the pods get it
+  as an environment variable, and the HTTP route answers `401` to any request without it. The RPC listener binds to
+  the pod's own address only (on the host network, the node's private address); keep the port closed in the security
+  group too. A `FreeswitchCluster`'s `jsonrpcURL` remains for a Kamailio you run yourself, without a token.
+- **Updates and drains:** Kamailio holds transactions, not calls, so a drain is short (`drain.maxDrainSeconds`,
+  default 40). The `preStop` hook makes the pod unready, sets a shared variable over JSON-RPC so new calls from
+  peers get `503` (they retry another Kamailio) while FreeSWITCH's own requests and in-dialog requests still pass,
+  and waits until `tm.stats` shows no open transactions. Calls already up hold no transaction: their in-dialog
+  requests follow the node's address to the replacement pod. The dispatcher's own probes count as transactions, so
+  with dead destinations a drain can run to its limit. From M5, a pod that holds registrations hands them over first
+  (loop 8).
 - **One Kamailio fleet by default.** Per-peer behaviour is data in that fleet (loop 9), not a fleet per peer. Because
   a `FreeswitchCluster` publishes its membership as a ConfigMap, more than one `KamailioCluster` can dispatch to the
   same FreeSWITCH fleet. That is for isolation: a lane whose bad config or overload can't reach the other, or that
   upgrades on its own schedule. Behaviour alone isn't a reason for one, and neither is a peer on the inside network
   (loop 10 covers those in the one fleet).
-- The example in `deploy/examples/kamailio` becomes the template once this lands; until then, it is how v0 is run.
+- **Not yet:** TLS, rate limiting of scanners (`pike`) and allow-listing peers. Kamailio listens on `0.0.0.0` and
+  advertises the public address, so a reply leaves from whatever address the kernel picks; with the address pool (M3)
+  it should listen on each address explicitly.
 
 ### 8. Outbound registrations (M5, when a peer needs them)
 
@@ -380,6 +410,7 @@ which version runs where.
 | M0 | Repository, plan, operator scaffold, sipbench mock backend and runner running against FreeSWITCH in Docker | done |
 | M1 | v0 operator on kind: fleet, dispatcher list, drains and rolling updates; sipbench runs against it ([how](#the-edge-on-kind)) | done |
 | M2 | `KamailioCluster`: managed Kamailio, authenticated JSON-RPC, restart list; sipbench fleet scenarios (drain mid-call, rolling update with live calls, run as scenarios rather than by hand), with call records kept per run so concurrent runners don't clear each other's; opt-in liveness (hang detection) with a lax default | planned |
+| M2b | Bench tooling for the remaining conformance cases: a raw-message sender (RFC 4475 torture tests), netem impairment (loss, jitter, reordering), and runner features (re-INVITE, hand-set headers, DTMF before answer, full INVITE records) | planned |
 | M3 | `SIPAddressPool` with an AWS Elastic IP provider, shared by both fleets; edge node group on EKS | planned |
 | M4 | v1 failover with fencing and call recovery | planned |
 | M5 | Typed peer and ACL resources (loop 9), outbound registrations when a peer needs them (loop 8), sipbench peer mocks; reload without restart | planned |
@@ -402,15 +433,15 @@ sipbench has its own instructions in [`sipbench/README.md`](sipbench/README.md).
 ### The edge on kind
 
 [`hack/kind.sh`](hack/kind.sh) runs the whole edge locally: a kind cluster with two proxy nodes and three tainted
-edge nodes ([`deploy/kind`](deploy/kind/)), the operator built from this tree, Kamailio from
-[`deploy/examples/kamailio`](deploy/examples/kamailio/), a three-node `FreeswitchCluster` running sipbench's
-FreeSWITCH configuration, and sipbench's mock backend behind it.
+edge nodes ([`deploy/kind`](deploy/kind/)), the operator built from this tree, a two-node `KamailioCluster` on the
+proxy nodes, a three-node `FreeswitchCluster` running sipbench's FreeSWITCH configuration, and sipbench's mock
+backend behind it.
 
 ```sh
 make kind-up         # create the cluster (about 6 GB of Docker memory)
-make kind-deploy     # build and load the images, install the operator, apply deploy/kind, wait for the fleet
+make kind-deploy     # build and load the images, install the operator, apply deploy/kind, wait for both fleets
 make kind-bench      # run sipbench through Kamailio; hack/kind.sh bench <regexp> runs a subset
-hack/kind.sh status  # members, the dispatcher list, and what each Kamailio has loaded
+hack/kind.sh status  # both fleets' members, the combined dispatcher list, and what each Kamailio has loaded
 make kind-down
 ```
 
