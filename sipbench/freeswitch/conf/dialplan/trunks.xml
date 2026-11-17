@@ -23,6 +23,9 @@
 
     <extension name="to-backend">
       <condition field="destination_number" expression="^(.+)$">
+        <!-- Exported, so the backend leg and any transfer leg time out too. -->
+        <action application="export" data="media_timeout=$${media_timeout_ms}"/>
+        <action application="export" data="media_hold_timeout=$${media_hold_timeout_ms}"/>
         <action application="set" data="hangup_after_bridge=true"/>
         <action application="set" data="continue_on_fail=true"/>
         <action application="set" data="call_timeout=$${ring_timeout}"/>

@@ -16,6 +16,10 @@
   <X-PRE-PROCESS cmd="exec-set" data="unreachable_host=/bin/sh /usr/local/freeswitch/conf/bin/env.sh UNREACHABLE_HOST 192.0.2.1:5060"/>
   <!-- Seconds the backend may ring before the caller gets the fallback. -->
   <X-PRE-PROCESS cmd="exec-set" data="ring_timeout=/bin/sh /usr/local/freeswitch/conf/bin/env.sh RING_TIMEOUT 6"/>
+  <!-- Hang up a call whose RTP stops (a lost BYE, a dead link, a crashed far end or backend) instead of keeping
+       it, and its backend leg, up forever: milliseconds without RTP, and the same while the call is on hold. -->
+  <X-PRE-PROCESS cmd="exec-set" data="media_timeout_ms=/bin/sh /usr/local/freeswitch/conf/bin/env.sh MEDIA_TIMEOUT_MS 60000"/>
+  <X-PRE-PROCESS cmd="exec-set" data="media_hold_timeout_ms=/bin/sh /usr/local/freeswitch/conf/bin/env.sh MEDIA_HOLD_TIMEOUT_MS 1800000"/>
   <!-- The fallback a caller hears when the backend can't take the call: a tone, then hang up. -->
   <X-PRE-PROCESS cmd="exec-set" data="fallback_tone_hz=/bin/sh /usr/local/freeswitch/conf/bin/env.sh FALLBACK_TONE_HZ 1400"/>
   <X-PRE-PROCESS cmd="exec-set" data="fallback_tone_ms=/bin/sh /usr/local/freeswitch/conf/bin/env.sh FALLBACK_TONE_MS 3000"/>
