@@ -152,6 +152,20 @@ report-card-run: ## Run both benches, save their reports and write the report ca
 	$(MAKE) report-card || exit 1; \
 	exit $$status
 
+# The Kamailio image the KamailioCluster config template is checked against (and deploy/kind runs).
+KAMAILIO_IMAGE ?= ghcr.io/kamailio/kamailio-ci:6.0-alpine@sha256:b3f60a1d3f3dd0602cb750859c2ac1458ae4159d0678ab31b22f6c598f8eca9f
+KAMAILIO_CFG_DIR ?= $(LOCALBIN)/kamailio-cfg
+
+.PHONY: check-kamailio-cfg
+check-kamailio-cfg: ## Render the KamailioCluster config template's test cases and check each with kamailio -c (needs docker)
+	mkdir -p "$(KAMAILIO_CFG_DIR)"
+	KAMAILIO_CFG_OUT="$(KAMAILIO_CFG_DIR)" go test ./internal/controller -run '^TestKamailioConfigRenders$$' -count=1
+	for name in no-sets one-set two-sets; do \
+	  docker run --rm -v "$(KAMAILIO_CFG_DIR):/cfg:ro" $(KAMAILIO_IMAGE) -c -f "/cfg/$$name.cfg" \
+	    -A PUBLIC_ADDR=192.0.2.10 -A PRIVATE_ADDR=127.0.0.1 >/dev/null || exit 1; \
+	  echo "kamailio -c $$name.cfg: ok"; \
+	done
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint on the operator and on sipbench (its own module, same config)
 	"$(GOLANGCI_LINT)" run

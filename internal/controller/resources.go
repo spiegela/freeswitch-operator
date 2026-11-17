@@ -18,6 +18,13 @@ import (
 const (
 	containerName = "freeswitch"
 
+	// Volume and port names both fleets' pods use.
+	volumeScripts = "operator-scripts"
+	volumePodInfo = "podinfo"
+	volumeConfig  = "config"
+	portSIPUDP    = "sip-udp"
+	portSIPTCP    = "sip-tcp"
+
 	// drainGraceMargin is added to maxDrainSeconds for the pod's termination grace period, so the preStop drain
 	// always finishes before the kubelet's SIGKILL.
 	drainGraceMargin int64 = 30
@@ -185,8 +192,8 @@ func buildService(fsc *sipv1alpha1.FreeswitchCluster) *corev1.Service {
 			// Not-ready pods stay out of the EndpointSlices' ready set; that is the dispatcher's signal.
 			PublishNotReadyAddresses: false,
 			Ports: []corev1.ServicePort{
-				{Name: "sip-udp", Protocol: corev1.ProtocolUDP, Port: cfg.sipPort, TargetPort: intstr.FromInt32(cfg.sipPort)},
-				{Name: "sip-tcp", Protocol: corev1.ProtocolTCP, Port: cfg.sipPort, TargetPort: intstr.FromInt32(cfg.sipPort)},
+				{Name: portSIPUDP, Protocol: corev1.ProtocolUDP, Port: cfg.sipPort, TargetPort: intstr.FromInt32(cfg.sipPort)},
+				{Name: portSIPTCP, Protocol: corev1.ProtocolTCP, Port: cfg.sipPort, TargetPort: intstr.FromInt32(cfg.sipPort)},
 			},
 		},
 	}
@@ -226,7 +233,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 
 	volumes := []corev1.Volume{
 		{
-			Name: "operator-scripts",
+			Name: volumeScripts,
 			VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 				LocalObjectReference: corev1.LocalObjectReference{Name: scriptsConfigMapName(fsc)},
 				DefaultMode:          ptr.To[int32](0o755),
@@ -234,7 +241,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		},
 		{
 			// Downward-API files update in place when the annotation changes; environment variables would not.
-			Name: "podinfo",
+			Name: volumePodInfo,
 			VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{
 				Items: []corev1.DownwardAPIVolumeFile{{
 					Path:     "external-address",
@@ -244,16 +251,16 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		},
 	}
 	mounts := []corev1.VolumeMount{
-		{Name: "operator-scripts", MountPath: scriptsDir, ReadOnly: true},
-		{Name: "podinfo", MountPath: podInfoDir, ReadOnly: true},
+		{Name: volumeScripts, MountPath: scriptsDir, ReadOnly: true},
+		{Name: volumePodInfo, MountPath: podInfoDir, ReadOnly: true},
 	}
 	var templateAnnotations map[string]string
 	if len(conf.sources) > 0 {
 		volumes = append(volumes, corev1.Volume{
-			Name:         "config",
+			Name:         volumeConfig,
 			VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: conf.sources}},
 		})
-		mounts = append(mounts, corev1.VolumeMount{Name: "config", MountPath: conf.mountPath, ReadOnly: true})
+		mounts = append(mounts, corev1.VolumeMount{Name: volumeConfig, MountPath: conf.mountPath, ReadOnly: true})
 		templateAnnotations = map[string]string{configHashAnnotation: conf.hash}
 	}
 
@@ -269,8 +276,8 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		// second pod on a node where it is taken; the RTP range is too large to declare and is guarded by the
 		// anti-affinity below.
 		Ports: []corev1.ContainerPort{
-			{Name: "sip-udp", Protocol: corev1.ProtocolUDP, ContainerPort: cfg.sipPort, HostPort: cfg.sipPort},
-			{Name: "sip-tcp", Protocol: corev1.ProtocolTCP, ContainerPort: cfg.sipPort, HostPort: cfg.sipPort},
+			{Name: portSIPUDP, Protocol: corev1.ProtocolUDP, ContainerPort: cfg.sipPort, HostPort: cfg.sipPort},
+			{Name: portSIPTCP, Protocol: corev1.ProtocolTCP, ContainerPort: cfg.sipPort, HostPort: cfg.sipPort},
 		},
 		VolumeMounts: mounts,
 		// Startup: FreeSWITCH up with a SIP profile on the SIP port, within startupGraceSeconds. A config that

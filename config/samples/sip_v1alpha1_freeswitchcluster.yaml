@@ -44,6 +44,5 @@ spec:
     setID: 1
     configMapName: edge-dispatcher
     transport: udp
-    # Optional: Kamailio's JSON-RPC endpoint (jsonrpcs over xhttp) for immediate removal and reloads.
-    jsonrpcURL: http://kamailio.telephony.svc:5070/RPC
-    reloadDelaySeconds: 75
+    # A KamailioCluster (sip_v1alpha1_kamailiocluster.yaml) reads this list and drives its own pods. Only a
+    # Kamailio you run yourself needs jsonrpcURL here.

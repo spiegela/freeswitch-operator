@@ -36,6 +36,17 @@ rules:
   - patch
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - apps
   resources:
   - statefulsets
@@ -71,6 +82,7 @@ rules:
   - sip.instruments.com
   resources:
   - freeswitchclusters
+  - kamailioclusters
   verbs:
   - create
   - delete
@@ -83,12 +95,14 @@ rules:
   - sip.instruments.com
   resources:
   - freeswitchclusters/finalizers
+  - kamailioclusters/finalizers
   verbs:
   - update
 - apiGroups:
   - sip.instruments.com
   resources:
   - freeswitchclusters/status
+  - kamailioclusters/status
   verbs:
   - get
   - patch

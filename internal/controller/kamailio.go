@@ -135,13 +135,13 @@ func (r *FreeswitchClusterReconciler) dispatcherNotifier(ctx context.Context, na
 	}
 	key, port, ok := serviceRef(rawURL, namespace)
 	if !ok {
-		return r.NewNotifier(rawURL), nil
+		return r.NewNotifier(rawURL, ""), nil
 	}
 	var svc corev1.Service
 	if err := r.Get(ctx, key, &svc); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Not a Service of this cluster (an outside name such as kamailio.example): call it as given.
-			return r.NewNotifier(rawURL), nil
+			return r.NewNotifier(rawURL, ""), nil
 		}
 		return nil, err
 	}
@@ -153,10 +153,10 @@ func (r *FreeswitchClusterReconciler) dispatcherNotifier(ctx context.Context, na
 	if err != nil {
 		return nil, err
 	}
-	f := &fanoutNotifier{service: key.String()}
+	f := &fanoutNotifier{service: "Service " + key.String()}
 	for _, t := range targets {
 		f.targets = append(f.targets, t)
-		f.notifiers = append(f.notifiers, r.NewNotifier(t))
+		f.notifiers = append(f.notifiers, r.NewNotifier(t, ""))
 	}
 	return f, nil
 }
@@ -174,15 +174,15 @@ func (f *fanoutNotifier) SetInactive(ctx context.Context, setID int32, uri strin
 	return f.each(func(n DispatcherNotifier) error { return n.SetInactive(ctx, setID, uri) })
 }
 
-func (f *fanoutNotifier) Reload(ctx context.Context, setID int32, want []string) error {
-	return f.each(func(n DispatcherNotifier) error { return n.Reload(ctx, setID, want) })
+func (f *fanoutNotifier) Reload(ctx context.Context, want map[int32][]string) error {
+	return f.each(func(n DispatcherNotifier) error { return n.Reload(ctx, want) })
 }
 
 func (f *fanoutNotifier) each(call func(DispatcherNotifier) error) error {
 	var errs []error
 	for i, n := range f.notifiers {
 		if err := call(n); err != nil {
-			errs = append(errs, fmt.Errorf("%s (Service %s): %w", f.targets[i], f.service, err))
+			errs = append(errs, fmt.Errorf("%s (%s): %w", f.targets[i], f.service, err))
 		}
 	}
 	return errors.Join(errs...)

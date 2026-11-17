@@ -117,7 +117,9 @@ spec:
                     type: string
                   jsonrpcURL:
                     description: |-
-                      jsonrpcURL, when set, is Kamailio's JSON-RPC endpoint (jsonrpcs over xhttp). The operator uses it to
+                      jsonrpcURL is for a Kamailio you run yourself; leave it empty when a KamailioCluster dispatches to this
+                      fleet, since that drives its own pods. When set, it is Kamailio's JSON-RPC endpoint (jsonrpcs over xhttp,
+                      without authentication). The operator uses it to
                       take a leaving node out at once (dispatcher.set_state) and to reload the list once the kubelet has
                       written the new file (dispatcher.reload). When the host names a Service in this cluster ("name",
                       "name.namespace" or "name.namespace.svc[.<cluster domain>]"), each call goes to every ready pod behind it,

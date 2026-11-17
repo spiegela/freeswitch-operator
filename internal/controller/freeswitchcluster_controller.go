@@ -26,6 +26,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -138,7 +139,7 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	pods := podList.Items
 	slices.SortFunc(pods, func(a, b corev1.Pod) int { return strings.Compare(a.Name, b.Name) })
 
-	if err := r.syncExternalAddresses(ctx, cfg, pods); err != nil {
+	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, pods); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -181,7 +182,7 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionDegraded, Status: metav1.ConditionTrue, Reason: "ConfigInvalid", Message: confErr.Error(), ObservedGeneration: gen})
 		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionReady, Status: metav1.ConditionFalse, Reason: "ConfigInvalid", Message: confErr.Error(), ObservedGeneration: gen})
 	}
-	if !equalStatus(&fsc.Status, status) {
+	if !equalJSON(&fsc.Status, status) {
 		fsc.Status = *status
 		if err := r.Status().Update(ctx, &fsc); err != nil {
 			if apierrors.IsConflict(err) {
@@ -305,7 +306,7 @@ func (r *FreeswitchClusterReconciler) ensureConfigSnapshots(ctx context.Context,
 			return err
 		}
 		labels := commonLabels(fsc)
-		labels[configSnapshotLabel] = "true"
+		labels[configSnapshotLabel] = configSnapshotValue
 		cm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        snap.name,
@@ -341,7 +342,7 @@ func (r *FreeswitchClusterReconciler) pruneConfigSnapshots(ctx context.Context, 
 		podConfigSnapshots(&pods[i], keep)
 	}
 	var list corev1.ConfigMapList
-	if err := r.List(ctx, &list, client.InNamespace(fsc.Namespace), client.MatchingLabels{sipv1alpha1.ClusterLabel: fsc.Name, configSnapshotLabel: "true"}); err != nil {
+	if err := r.List(ctx, &list, client.InNamespace(fsc.Namespace), client.MatchingLabels{sipv1alpha1.ClusterLabel: fsc.Name, configSnapshotLabel: configSnapshotValue}); err != nil {
 		return err
 	}
 	for i := range list.Items {
@@ -367,20 +368,21 @@ func templateHash(t *corev1.PodTemplateSpec) (string, error) {
 	return hex.EncodeToString(sum[:8]), nil
 }
 
-// syncExternalAddresses writes each pod's external address annotation from its node.
-func (r *FreeswitchClusterReconciler) syncExternalAddresses(ctx context.Context, cfg settings, pods []corev1.Pod) error {
+// syncExternalAddresses writes each pod's external address annotation from its node. FreeSWITCH and Kamailio pods
+// both read it from their downward-API volume.
+func syncExternalAddresses(ctx context.Context, c client.Client, source sipv1alpha1.ExternalAddressSource, pods []corev1.Pod) error {
 	for i := range pods {
 		p := &pods[i]
 		if p.DeletionTimestamp != nil {
 			continue
 		}
 		want := ""
-		if cfg.addressSource == sipv1alpha1.ExternalAddressNodeExternalIP {
+		if source == sipv1alpha1.ExternalAddressNodeExternalIP {
 			if p.Spec.NodeName == "" {
 				continue
 			}
 			var node corev1.Node
-			if err := r.Get(ctx, types.NamespacedName{Name: p.Spec.NodeName}, &node); err != nil {
+			if err := c.Get(ctx, types.NamespacedName{Name: p.Spec.NodeName}, &node); err != nil {
 				if apierrors.IsNotFound(err) {
 					continue
 				}
@@ -401,7 +403,7 @@ func (r *FreeswitchClusterReconciler) syncExternalAddresses(ctx context.Context,
 		} else {
 			p.Annotations[sipv1alpha1.ExternalAddressAnnotation] = want
 		}
-		if err := r.Patch(ctx, p, patch); err != nil && !apierrors.IsNotFound(err) {
+		if err := c.Patch(ctx, p, patch); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 	}
@@ -494,7 +496,7 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 	}
 	// The reload is done only once every Kamailio holds the list just written: reloadDelaySeconds is a guess at
 	// how long the kubelet takes to update the mounted file, and a reload before that re-reads the old one.
-	if err := notifier.Reload(ctx, cfg.dispatcherSetID, parseDispatcherURIs(content, cfg.dispatcherSetID)); err != nil {
+	if err := notifier.Reload(ctx, map[int32][]string{cfg.dispatcherSetID: parseDispatcherURIs(content, cfg.dispatcherSetID)}); err != nil {
 		if onlyListNotLoaded(err) {
 			log.Info("Kamailio has not loaded the new dispatcher list yet; will reload again", "detail", err.Error())
 			return 10 * time.Second, nil
@@ -521,77 +523,46 @@ func onlyListNotLoaded(err error) bool {
 }
 
 func (r *FreeswitchClusterReconciler) fillStatus(fsc *sipv1alpha1.FreeswitchCluster, cfg settings, sts *appsv1.StatefulSet, pods []corev1.Pod, decision rolloutDecision, status *sipv1alpha1.FreeswitchClusterStatus) {
-	members := make([]sipv1alpha1.Member, 0, len(pods))
-	var ready, updated int32
-	for i := range pods {
-		p := &pods[i]
-		m := sipv1alpha1.Member{
-			Pod:             p.Name,
-			Node:            p.Spec.NodeName,
-			Address:         p.Status.PodIP,
-			ExternalAddress: p.Annotations[sipv1alpha1.ExternalAddressAnnotation],
-			State:           memberState(p),
-			Revision:        podRevision(p),
-		}
-		if m.State == sipv1alpha1.MemberActive {
-			ready++
-		}
-		if sts.Status.UpdateRevision != "" && m.Revision == sts.Status.UpdateRevision {
-			updated++
-		}
-		members = append(members, m)
-	}
+	members, ready, updated := fleetMembers(pods, sts.Status.UpdateRevision)
 	status.Members = members
 	status.Replicas = int32(len(pods))
 	status.ReadyReplicas = ready
 	status.UpdatedReplicas = updated
 	status.CurrentRevision = sts.Status.CurrentRevision
 	status.UpdateRevision = sts.Status.UpdateRevision
-
-	gen := fsc.Generation
-	if ready > 0 {
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionAvailable, Status: metav1.ConditionTrue, Reason: "MembersReady", Message: fmt.Sprintf("%d of %d members take calls", ready, cfg.replicas), ObservedGeneration: gen})
-	} else {
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionAvailable, Status: metav1.ConditionFalse, Reason: "NoMembersReady", Message: "no member takes calls", ObservedGeneration: gen})
-	}
-	if decision.Outdated > 0 {
-		msg := fmt.Sprintf("%d members on an older revision", decision.Outdated)
-		if decision.Waiting != "" {
-			msg += "; " + decision.Waiting
-		}
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionProgressing, Status: metav1.ConditionTrue, Reason: "RollingUpdate", Message: msg, ObservedGeneration: gen})
-	} else {
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionProgressing, Status: metav1.ConditionFalse, Reason: "UpToDate", Message: "every member runs the latest revision", ObservedGeneration: gen})
-	}
-	if ready < cfg.replicas {
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionDegraded, Status: metav1.ConditionTrue, Reason: "MembersNotReady", Message: fmt.Sprintf("%d of %d members ready", ready, cfg.replicas), ObservedGeneration: gen})
-	} else {
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionDegraded, Status: metav1.ConditionFalse, Reason: "AllMembersReady", Message: "every member is ready", ObservedGeneration: gen})
-	}
-	// Ready is the summary GitOps tools (Flux health checks, kstatus) wait on: the whole fleet ready and current.
-	if ready >= cfg.replicas && decision.Outdated == 0 {
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionReady, Status: metav1.ConditionTrue, Reason: "FleetReady", Message: "every member is ready and current", ObservedGeneration: gen})
-	} else {
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionReady, Status: metav1.ConditionFalse, Reason: "FleetNotReady", Message: fmt.Sprintf("%d of %d members ready, %d outdated", ready, cfg.replicas, decision.Outdated), ObservedGeneration: gen})
-	}
+	setFleetConditions(&status.Conditions, fsc.Generation, ready, cfg.replicas, decision)
 }
 
-func equalStatus(a, b *sipv1alpha1.FreeswitchClusterStatus) bool {
+func equalJSON(a, b any) bool {
 	ja, _ := json.Marshal(a)
 	jb, _ := json.Marshal(b)
 	return string(ja) == string(jb)
 }
 
+// indexFleetPodsByNode indexes FreeSWITCH and Kamailio pods by node, so a node's change reaches the fleets on it.
+// Both controllers use it; it is registered once.
+func indexFleetPodsByNode(ctx context.Context, mgr ctrl.Manager) error {
+	podIndexOnce.Do(func() {
+		podIndexErr = mgr.GetFieldIndexer().IndexField(ctx, &corev1.Pod{}, podNodeNameField, func(o client.Object) []string {
+			p := o.(*corev1.Pod)
+			if p.Spec.NodeName == "" || p.Labels[sipv1alpha1.ClusterLabel] == "" && p.Labels[sipv1alpha1.KamailioClusterLabel] == "" {
+				return nil
+			}
+			return []string{p.Spec.NodeName}
+		})
+	})
+	return podIndexErr
+}
+
+var (
+	podIndexOnce sync.Once
+	podIndexErr  error
+)
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *FreeswitchClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	ctx := context.Background()
-	if err := mgr.GetFieldIndexer().IndexField(ctx, &corev1.Pod{}, podNodeNameField, func(o client.Object) []string {
-		p := o.(*corev1.Pod)
-		if p.Spec.NodeName == "" || p.Labels[sipv1alpha1.ClusterLabel] == "" {
-			return nil
-		}
-		return []string{p.Spec.NodeName}
-	}); err != nil {
+	if err := indexFleetPodsByNode(ctx, mgr); err != nil {
 		return err
 	}
 

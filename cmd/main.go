@@ -183,6 +183,14 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "freeswitchcluster")
 		os.Exit(1)
 	}
+	if err := (&controller.KamailioClusterReconciler{
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		NewNotifier: controller.NewJSONRPCNotifier,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "kamailiocluster")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
