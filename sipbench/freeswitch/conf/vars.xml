@@ -20,6 +20,10 @@
   <X-PRE-PROCESS cmd="exec-set" data="fallback_tone_hz=/bin/sh /usr/local/freeswitch/conf/bin/env.sh FALLBACK_TONE_HZ 1400"/>
   <X-PRE-PROCESS cmd="exec-set" data="fallback_tone_ms=/bin/sh /usr/local/freeswitch/conf/bin/env.sh FALLBACK_TONE_MS 3000"/>
 
+  <!-- Where the event socket listens. The bench's runner uses it for admission tests; on a cluster keep it on
+       127.0.0.1, where fs_cli (and the operator's ready and drain scripts) reach it. -->
+  <X-PRE-PROCESS cmd="exec-set" data="esl_listen_ip=/bin/sh /usr/local/freeswitch/conf/bin/env.sh ESL_LISTEN_IP 0.0.0.0"/>
+
   <X-PRE-PROCESS cmd="set" data="domain=$${local_ip_v4}"/>
   <X-PRE-PROCESS cmd="set" data="global_codec_prefs=PCMU,PCMA"/>
   <X-PRE-PROCESS cmd="set" data="outbound_codec_prefs=PCMU,PCMA"/>

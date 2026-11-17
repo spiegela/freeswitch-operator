@@ -22,6 +22,8 @@ import (
 
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/runner"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+
+	"github.com/emiago/sipgo/sip"
 )
 
 func main() {
@@ -123,6 +125,8 @@ func run(args []string) (int, error) {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lv}))
 	slog.SetDefault(log) // the SIP and media libraries log through the default logger
+	// SIPBENCH_SIP_DEBUG=true logs every SIP message sent and received (at debug level, so with -log-level debug).
+	sip.SIPDebug = os.Getenv("SIPBENCH_SIP_DEBUG") == "true"
 
 	ss, err := load(fs.Args())
 	if err != nil {
