@@ -44,8 +44,9 @@ cases:
     component: proxy
     expect: >
       Kamailio answers 420 with an Unsupported header listing the unknown option tags, instead of relaying the
-      request. The example config's sanity mask leaves out the Proxy-Require check, so today the request is relayed
-      to FreeSWITCH, and a UAS isn't bound by Proxy-Require.
+      request. The example config's sanity mask now includes the Proxy-Require check: verified by hand, a request
+      with Proxy-Require: frobnicate got 420 with Unsupported: frobnicate and reached no node. No scenario checks
+      it yet.
     status: planned
     milestone: M2
     gap: >
@@ -114,7 +115,8 @@ cases:
     expect: >
       From a FreeSWITCH node, Kamailio relays to the target in the Request-URI (or its maddr), from its fixed
       address. From a peer, the edge is no open relay: a new request goes to a FreeSWITCH node whatever domain it
-      names, and an OPTIONS with a user part is answered by that node. The peer-side purposes fail on purpose.
+      names, an OPTIONS with a user part is answered by that node, and one without a user part is answered by
+      Kamailio itself whatever host it names. The peer-side purposes fail on purpose.
     status: planned
     milestone: M2
     gap: The node-to-peer direction needs a FreeSWITCH call out through Kamailio to a sipbench peer.
@@ -143,7 +145,8 @@ cases:
     component: proxy
     expect: >
       Kamailio relays INVITE, ACK and BYE with Max-Forwards one lower (1 becomes 0 and is still relayed), and adds
-      the header when absent. The recommended inserted value is 70; the example config inserts 10.
+      the header when absent, with the recommended value 70. The example config now inserts 70 and decrements
+      otherwise (verified by hand); no scenario checks it yet.
     status: planned
     milestone: M2
     gap: Needs control of Max-Forwards on sent requests and a mock that records the value it receives.
@@ -171,9 +174,11 @@ cases:
     area: call-release
     component: proxy
     expect: >
-      RFC 3261 has a proxy relay such a CANCEL statelessly (with Route, Max-Forwards and Via handled as for any
-      request) or refuse it. The example config drops it unanswered. Decide which the edge does, then check it
-      never reaches a node that has no matching INVITE and never loops.
+      RFC 3261 (16.10) has a proxy relay such a CANCEL statelessly (with Route, Max-Forwards and Via handled as
+      for any request), and these purposes expect that. Decided: Kamailio answers it 481 itself and relays
+      nothing, a deliberate deviation, since without the INVITE there is no node to send it to; so it never
+      reaches a node with no matching INVITE and never loops. The relaying purposes fail on purpose. The example
+      config does this now (verified by hand: 481; it was dropped unanswered before); no scenario checks it yet.
     status: planned
     milestone: M2
     gap: Needs a CANCEL the runner sends without a pending INVITE; sipgo only cancels its own transactions.
@@ -184,9 +189,11 @@ cases:
     area: error-handling
     component: proxy
     expect: >
-      ETSI expects relaying to the Request-URI, and 481 for a BYE that names no dialog. The example config answers
-      404 to any in-dialog request without its Route, and drops such an ACK. Pin one behaviour (481 is the clearer
-      answer to a stray BYE) and check nothing is relayed to an arbitrary Request-URI.
+      ETSI expects relaying to the Request-URI, and 481 for a BYE that names no dialog. Decided: Kamailio relays
+      nothing to an arbitrary Request-URI; an in-dialog request without its Route gets 481 Call/Transaction Does
+      Not Exist (it got 404 before), and such an ACK is dropped silently, never answered. The relaying purpose
+      fails on purpose. The example config does this now (verified by hand with a stray BYE: 481); no scenario
+      checks it yet.
     status: planned
     milestone: M2
     gap: Needs a hand-built in-dialog BYE and ACK.
@@ -235,13 +242,14 @@ cases:
 
   - id: etsi-SIP_CC_PR_MP_RS_V_016
     ref: SIP_CC_PR_MP_RS_V_016
-    title: A node's 503 to an INVITE fails over, and the last one goes upstream as 500
+    title: A node's 503 to an INVITE fails over, and the last one goes upstream as 503
     area: resilience
     component: proxy
     expect: >
-      On 503 (or no answer) from a FreeSWITCH node Kamailio tries the next node in the set. When none is left, the
-      peer gets 500, not 503 (Kamailio's tm remaps a relayed 503 by default). With no active node at all, the
-      example config answers 503 itself, so a peer sees 500 or 503 for the same "fleet full" state; pick one.
+      On 503 (or no answer within 5 s) from a FreeSWITCH node Kamailio tries the next node in the set. When none
+      is left, the peer gets 503. Decided: 503, not 500; the example config now turns off tm's remapping of a
+      relayed 503 to 500 (remap_503_500 0), so a peer sees the same 503 it gets when Kamailio has no active node
+      at all and answers itself.
     status: planned
     milestone: M2
     gap: >
@@ -296,8 +304,10 @@ cases:
     component: proxy
     expect: >
       Over UDP Kamailio resends the INVITE at T1 then doubling, never over TCP; stops once a 100 or 183 arrives;
-      gives up on a silent node and fails over (the example config's fr_timer is 5 s, deliberately shorter than
-      64*T1); and resends its ACK for each retransmitted final response.
+      gives up on a silent node and fails over (the example config gives a node 5 s to answer a new INVITE,
+      deliberately shorter than 64*T1, while requests relayed to peers or along a dialog get 32 s and fr_inv_timer
+      stays 60 s);
+      and resends its ACK for each retransmitted final response.
     status: planned
     milestone: M2
     gap: Needs a node stand-in that ignores or delays requests and records retransmission times.
@@ -311,7 +321,8 @@ cases:
     component: proxy
     expect: >
       Over UDP Kamailio resends a relayed BYE at T1, doubling to T2, and keeps resending at T2 after a provisional.
-      It then gives up: after 5 s with the example config's fr_timer, not the 64*T1 these purposes expect.
+      It then gives up after 64*T1 (32 s), as these purposes expect: the example config gives every request it
+      relays to a peer or along a dialog 32 s (it was 5 s); only new calls to nodes and its own probes keep 5 s.
     status: planned
     milestone: M2
     gap: Needs an endpoint stand-in that withholds its answer to BYE and records retransmission times.
@@ -381,12 +392,14 @@ cases:
     component: proxy
     expect: >
       An OPTIONS whose Request-URI is Kamailio's address with no user part gets 200 from Kamailio, with From,
-      Call-ID, CSeq and Via copied and a To tag added (or kept if sent).
+      Call-ID, CSeq and Via copied and a To tag added (or kept if sent). The example config now answers any
+      OPTIONS with no user part from a peer itself, whatever host it names (the Service name, an unknown address
+      or Kamailio's own IP; verified by hand, Server: kamailio on each), or 503 when no node is active.
     status: partial
     scenarios: [options]
     gap: >
-      On kind the runner addresses the Service name (kamailio-sip), which the example config doesn't count as
-      itself (auto_aliases=no, no alias), so the 200 may come from a FreeSWITCH node; headers aren't checked.
+      On kind the options scenario's 200 now comes from Kamailio, but the scenario doesn't check who answered, and
+      the copied headers and To tag aren't checked.
 
   - id: etsi-SIP_QC_PR_V_006
     ref: SIP_QC_PR_V_006, SIP_QC_PR_V_007, SIP_QC_PR_V_008
@@ -395,7 +408,9 @@ cases:
     component: proxy
     expect: >
       Recommended only: the 200 carries Allow, Accept, Accept-Encoding, Accept-Language and Supported, and a body
-      unless Accept rules it out. The example config's bare 200 has none of these; decide if peers need them.
+      unless Accept rules it out. The example config's 200 now carries Allow (INVITE, ACK, BYE, CANCEL, OPTIONS,
+      INFO, UPDATE, REFER, NOTIFY; verified by hand) and none of the others, nor a body: a keepalive answer needs
+      no more, and these are only recommended.
     status: planned
     milestone: M2
     gap: The runner doesn't record response headers or bodies for OPTIONS.

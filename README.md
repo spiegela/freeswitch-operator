@@ -1,7 +1,7 @@
-# freeSWITCH Operator
+# FreeSWITCH Operator
 
 A Kubernetes operator for running a fleet of FreeSWITCH nodes as a SIP edge (an SBC) behind a Kamailio proxy, plus
-**sipbench**, a SIP test bench that call flows against that edge before real traffic moves onto it.
+**sipbench**, a SIP test bench that checks call flows against that edge before real traffic moves onto it.
 
 > **Status: early, under construction (v0).** The API is `v1alpha1` and will change. The plan below is the design we
 > are building toward; the [milestones](#milestones) describe what is in place today.
@@ -374,7 +374,6 @@ which version runs where.
 | M4 | v1 failover with fencing and call recovery | planned |
 | M5 | Typed peer and ACL resources (loop 9), outbound registrations when a peer needs them (loop 8), sipbench peer mocks; reload without restart | planned |
 | M6 | Peers on the inside network (loop 10): FreeSWITCH inside profile and dispatcher set, Kamailio inside listener, sipbench VPN peer mock | planned |
-| M7 | Publish as open source, once it has carried production calls | planned |
 
 ## Development
 
@@ -422,12 +421,12 @@ needs the event socket of one particular node). M1 was also checked by hand on t
 2. **Media relay deferred for now: each FreeSWITCH node advertises its own fixed public address.** In the Kamailio and
    FreeSWITCH communities, rtpengine may be used when FreeSWITCH must stay on private addresses or media needs per-direction
    control. FreeSWITCH already anchors media, so it only needs a routable address it can advertise (`ext-rtp-ip`). `rtpengine`
-   maybe be added later as needed.
-4. **Registrations live on Kamailio** ([loop 8](#8-outbound-registrations-m5-when-a-peer-needs-them)), whose
+   may be added later as needed.
+3. **Registrations live on Kamailio** ([loop 8](#8-outbound-registrations-m5-when-a-peer-needs-them)), whose
    address is fixed, with the mode chosen per peer: one pod at a time by default, every pod once a carrier is shown
    to accept several contacts. **Per-peer behaviour is data in one Kamailio fleet** ([loop 9](#9-per-peer-behaviour-m5));
    a second fleet is for isolation only.
-5. **Start with an off-the-shelf public FreeSWITCH image**: `drachtio/drachtio-freeswitch-mrf:0.9.6` (FreeSWITCH
+4. **Start with an off-the-shelf public FreeSWITCH image**: `drachtio/drachtio-freeswitch-mrf:0.9.6` (FreeSWITCH
    1.10.10, amd64 and arm64), pinned by digest in [`sipbench`](sipbench/compose.yaml) and the sample. It passes the
    bench and the operator's ready and drain scripts. It has no G.722, so that scenario is skipped. We maintain our own
    only when we need something it lacks.

@@ -14,9 +14,12 @@
 # under the condition).
 #
 # Timers the expectations lean on: RFC 3261 T1 500 ms, T2 4 s, timers A/E start at T1 and double (E capped at T2),
-# B/F and the 2xx-without-ACK limit are 64*T1 = 32 s. Kamailio tm: fr_timer 5 s (no reply at all), fr_inv_timer
-# 60 s (provisional but no final); dispatcher probes every 10 s, a node goes inactive after 2 failed probes and back
-# after 2 answered ones, and failure_route marks a node inactive at once when its branch times out unanswered.
+# B/F and the 2xx-without-ACK limit are 64*T1 = 32 s. Kamailio tm: fr_timer (no reply at all) is 5 s for new INVITEs
+# dispatched to a FreeSWITCH node (then failover) and for the dispatcher's own probes, and 32 s for requests relayed
+# to a peer or along a dialog; fr_inv_timer 60 s (provisional but no final). Dispatcher probes every 10 s; a node
+# goes inactive after 2 failed probes (each fails after 5 s, so within about 25 s of the node going dark) and back
+# after 2 answered ones, and failure_route marks a node inactive at once when its branch times out unanswered. FreeSWITCH: media_timeout 60 s (no RTP received, call not on hold) and
+# media_hold_timeout 30 min (on hold), set on every call and its backend and transfer legs.
 #
 # MOS figures are E-model estimates (ITU-T G.107, default R0 93.2, G.711 with no packet loss concealment at the
 # receiver: Ie 0, Bpl 4.3 per G.113 Appendix I), computed by the runner from measured loss, burstiness and delay.
@@ -134,12 +137,11 @@ cases:
     component: freeswitch
     impairment: {link: carrier-edge, direction: to-edge, traffic: sip, drop: every BYE}
     expect: >
-      The caller gives up on its BYE after 32 s; the edge, receiving no RTP, ends the call on its RTP timeout:
-      the backend leg is released and a BYE goes toward the caller no later than the timeout plus 2 s, with a
-      media-timeout hangup cause on record.
+      The caller gives up on its BYE after 32 s; the edge, receiving no RTP, ends the call on its media timeout
+      (60 s): the backend leg is released and a BYE goes toward the caller no later than 62 s after the caller's
+      last RTP, with a media-timeout hangup cause on record.
     status: planned
     milestone: M2
-    gap: The edge sets no RTP timeout today (no rtp-timeout-sec or media_timeout), so this call would stay up.
 
   - id: imp-sig-loss-random
     ref: "rtpbench:mobile; RFC 3261 17"
@@ -201,7 +203,7 @@ cases:
     component: proxy
     impairment: {link: proxy-node, direction: to-node, traffic: sip, drop: first INVITE}
     expect: >
-      Kamailio resends to the same node 500 ms later, well inside fr_timer, so there is no failover: the call is
+      Kamailio resends to the same node 500 ms later, well inside its 5 s, so there is no failover: the call is
       answered by that node, setup time no more than 600 ms over baseline, one leg at the backend, and the node
       stays active in the dispatcher.
     status: planned
@@ -228,7 +230,7 @@ cases:
     component: proxy
     impairment: {link: proxy-node, direction: both, traffic: sip, delay: 1500ms}
     expect: >
-      With a 3 s round trip the node's 100 arrives before fr_timer: no failover, the call is answered by that node,
+      With a 3 s round trip the node's 100 arrives inside its 5 s: no failover, the call is answered by that node,
       Kamailio's own resends are absorbed by it (one leg at the backend), and its probes still succeed, so it stays
       active.
     status: planned
@@ -281,8 +283,8 @@ cases:
     impairment: {link: proxy-node, direction: both, traffic: sip, loss: 10%, for: 10m}
     expect: >
       Over 10 minutes at 10% SIP loss each way the node never leaves rotation (each probe is resent inside
-      fr_timer and two consecutive failures are needed); at 100% loss it goes inactive within 25 s and returns
-      within 25 s of the link coming back.
+      fr_timer and two consecutive failures are needed); at 100% loss it goes inactive within 25 s (two probes,
+      each failing after the 5 s probe timeout) and returns within 25 s of the link coming back.
     status: planned
     milestone: M2
 
@@ -294,12 +296,14 @@ cases:
     impairment: {link: proxy-node, direction: both, traffic: sip, loss: 100%, at: 5s, for: 30s}
     expect: >
       RTP runs carrier to node, not through Kamailio, so the call keeps two-way audio through the cut with no
-      measured loss. The node leaves rotation within 25 s and new calls go to the others. A caller BYE sent
-      during the cut gets 408 from Kamailio after 5 s; the node then reaps the leg on its RTP timeout and releases
-      the backend.
+      measured loss. A new call dispatched to the node during the cut fails over to another after 5 s and takes
+      the node out of rotation at once (without one, two failed probes do within about 25 s); later calls go to
+      the others. A caller BYE sent during the cut is resent by Kamailio
+      (fr_timer 32 s outlasts the cut), reaches the node once the link returns, and both legs end then; a BYE
+      that times out instead gets 408 from Kamailio, and the node then ends the call on its media timeout (60 s
+      after the caller's RTP stops) and releases the backend.
     status: planned
     milestone: M2
-    gap: Needs an RTP timeout on the edge (see imp-sig-bye-never).
 
   # --- Media: carrier <-> edge -----------------------------------------------------------------------------------
 
@@ -477,11 +481,10 @@ cases:
     impairment: {link: carrier-edge, direction: to-edge, traffic: rtp, loss: 100%}
     expect: >
       SIP completes and the caller hears the backend, but the backend hears nothing (600 Hz not heard). The edge
-      ends the call on its RTP timeout: BYE to both sides within the timeout plus 2 s, with a media-timeout
+      ends the call on its media timeout (60 s): BYE to both sides within 62 s of answer, with a media-timeout
       cause on record.
     status: planned
     milestone: M2
-    gap: Needs an RTP timeout on the edge (see imp-sig-bye-never).
 
   - id: imp-oneway-outbound-dead
     ref: "rtpbench:hold"
@@ -512,14 +515,14 @@ cases:
     title: The carrier link goes dark for good mid-call
     area: impairment
     component: edge
-    impairment: {link: carrier-edge, direction: both, traffic: all, loss: 100%, at: 5s, for: 60s}
+    impairment: {link: carrier-edge, direction: both, traffic: all, loss: 100%, at: 5s, for: 120s}
     expect: >
-      The edge notices the missing RTP and ends the call on its RTP timeout: the backend leg is released within
-      the timeout plus 2 s, the BYE toward the caller is resent until timer F (32 s) and then dropped, and no
-      FreeSWITCH channel is left. After the link returns, a BYE from the caller for that call gets 481.
+      The edge notices the missing RTP and ends the call on its media timeout (60 s): the backend leg is released
+      within 62 s of the cut, the BYE toward the caller is resent until timer F (32 s) and then dropped, and no
+      FreeSWITCH channel is left. After the link returns (120 s, past both), a BYE from the caller for that call
+      gets 481.
     status: planned
     milestone: M2
-    gap: Needs an RTP timeout on the edge (see imp-sig-bye-never).
 
   # --- Edge <-> backend ------------------------------------------------------------------------------------------
 
@@ -639,7 +642,8 @@ cases:
     impairment: {link: carrier-edge, direction: to-edge, traffic: rtp, loss: 100%, at: on hold}
     expect: >
       A peer that puts the call on hold (sendonly, inactive or c=0.0.0.0) and stops sending RTP keeps the call
-      past the RTP timeout up to its per-peer hold timeout; the same silence without a hold is still timed out.
+      past the 60 s media timeout, up to the hold timeout (30 min, edge-wide today; per peer with M5); the same
+      silence without a hold is still timed out at 60 s.
     status: planned
     milestone: M5
     gap: The runner cannot send re-INVITEs yet; needs the M5 peer mocks.
