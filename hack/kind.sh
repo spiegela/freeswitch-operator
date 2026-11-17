@@ -66,6 +66,7 @@ deploy() {
   # A rebuilt image under the same tag needs a restart to be picked up.
   "${KUBECTL[@]}" -n freeswitch-operator-system rollout restart deployment/freeswitch-operator-controller-manager
   "${KUBECTL[@]}" -n freeswitch-operator-system rollout status deployment/freeswitch-operator-controller-manager --timeout=120s
+  wait_leader 120
 
   say "applying the edge"
   "$KUSTOMIZE" build "$ROOT/deploy/kind" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -
@@ -75,6 +76,24 @@ deploy() {
   say "waiting for the fleet to be Ready and current"
   wait_fleet 600
   status
+}
+
+# Wait until the new operator pod holds the leader lease; until then the old one's status is all there is.
+wait_leader() {
+  local deadline=$((SECONDS + $1)) pod holder
+  # The newest pod: the one rollout status just waited for (the old one may still be terminating).
+  pod=$("${KUBECTL[@]}" -n freeswitch-operator-system get pods -l control-plane=controller-manager \
+    --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}')
+  while :; do
+    holder=$("${KUBECTL[@]}" -n freeswitch-operator-system get lease d927555f.instruments.com \
+      -o jsonpath='{.spec.holderIdentity}' 2>/dev/null || true)
+    case "$holder" in "${pod}_"*) return 0 ;; esac
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "operator pod $pod has not taken the leader lease after ${1}s (holder: ${holder:-none})" >&2
+      return 1
+    fi
+    sleep 2
+  done
 }
 
 # Ready alone can be the status from before the operator saw a new template (a rebuilt operator, a config edit),

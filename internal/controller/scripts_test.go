@@ -86,3 +86,52 @@ func TestReadyScriptRunsTheStartupChecks(t *testing.T) {
 		t.Fatalf("a required external address must be checked first: %d %q", code, out)
 	}
 }
+
+func TestDrainWaitsForAStartingFreeSWITCH(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "draining")
+	script := strings.ReplaceAll(drainScript, drainMarker, marker)
+	if err := os.WriteFile(filepath.Join(dir, "drain.sh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Not ready for the first two status calls, then ready with no calls; every command is logged.
+	fake := `#!/bin/sh
+d='` + dir + `'
+echo "$*" >> "$d/log"
+case "$*" in
+  *"-x status")
+    n=$(cat "$d/n" 2>/dev/null || echo 0); echo $((n + 1)) > "$d/n"
+    if [ "$n" -ge 2 ]; then echo "FreeSWITCH is ready"; else exit 1; fi ;;
+  *"show calls count"*) echo "0 total." ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "fs_cli"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", filepath.Join(dir, "drain.sh"))
+	cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "FS_MAX_DRAIN_SECONDS=30"}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("drain: %v %s", err, out)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("the drain must mark the pod as draining first")
+	}
+	log, _ := os.ReadFile(filepath.Join(dir, "log"))
+	calls := strings.Split(strings.TrimSpace(string(log)), "\n")
+	var status, pauseAt int
+	for i, c := range calls {
+		if strings.HasSuffix(c, "-x status") {
+			status++
+		}
+		if strings.Contains(c, "fsctl pause inbound") {
+			pauseAt = i
+		}
+	}
+	if status != 3 || pauseAt != 3 {
+		t.Fatalf("want three status checks, then the pause; got %q", calls)
+	}
+	if !strings.Contains(string(out), "no live calls") {
+		t.Fatalf("output %q", out)
+	}
+}

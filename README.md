@@ -159,7 +159,9 @@ Kamailio's own OPTIONS probing (`ds_ping_interval`) stays on as a backstop, and 
 
 **One mechanism serves both: a pod is drained by deleting it, and its `preStop` hook does the waiting.**
 - `preStop` marks the pod as draining (readiness fails at once, so loop 2 removes it from dispatch), runs
-  `fsctl pause inbound`, and waits until `show calls count` reaches zero or `maxDrainSeconds` passes.
+  `fsctl pause inbound`, and waits until `show calls count` reaches zero or `maxDrainSeconds` passes. If FreeSWITCH
+  is still starting, it first waits (up to 60 s) for it to be ready: FreeSWITCH loses a SIGTERM that arrives while
+  it starts, and the pod would then sit `Terminating` for its whole grace period.
 - **Rolling update:** when the pod template changes, the operator replaces one pod at a time, only while every
   other pod is ready and none is terminating: delete, wait for the replacement to pass readiness, move on. A
   replacement that never gets its SIP profile up stops the roll there, with the rest of the fleet still serving.
