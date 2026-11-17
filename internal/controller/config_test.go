@@ -126,20 +126,6 @@ func TestLayoutConfigSnapshots(t *testing.T) {
 		t.Fatalf("got %d sources and %d snapshots, want 3 and 2", len(c.sources), len(c.snapshots))
 	}
 
-	// A ConfigMap with no keys mounts nothing (a projection without items would mean every key at the root).
-	cms["fs-extra"] = cm("fs-extra", nil)
-	d, err := layoutConfig(fsc, cms, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(d.sources) != 2 || len(d.snapshots) != 2 {
-		t.Fatalf("empty ConfigMap: got %d sources and %d snapshots, want 2 and 2", len(d.sources), len(d.snapshots))
-	}
-	for _, src := range d.sources {
-		if len(src.ConfigMap.Items) == 0 {
-			t.Fatal("a projection without items")
-		}
-	}
 }
 
 func TestLayoutConfigHash(t *testing.T) {
@@ -217,6 +203,13 @@ func TestLayoutConfigErrors(t *testing.T) {
 	fsc.Spec.Config.ConfigMapRefs[2].Path = "."
 	if _, err := layoutConfig(fsc, cms, nil); !errors.As(err, &ce) || !strings.Contains(err.Error(), "both write vars.xml") {
 		t.Fatalf("duplicate: %v", err)
+	}
+
+	// An empty ConfigMap is refused, not rolled out: it could remove a whole directory, such as every profile.
+	fsc, cms = treeCluster()
+	cms["fs-extra"] = cm("fs-extra", nil)
+	if _, err := layoutConfig(fsc, cms, nil); !errors.As(err, &ce) || !strings.Contains(err.Error(), "fs-extra has no keys") {
+		t.Fatalf("empty: %v", err)
 	}
 
 	// A file in one ConfigMap where another needs a directory, in either order.

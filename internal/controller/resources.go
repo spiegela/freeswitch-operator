@@ -20,6 +20,11 @@ const (
 	// drainGraceMargin is added to maxDrainSeconds for the pod's termination grace period, so the preStop drain
 	// always finishes before the kubelet's SIGKILL.
 	drainGraceMargin int64 = 30
+
+	// startupGraceSeconds is how long a starting FreeSWITCH has to come up with its SIP profile before the
+	// kubelet restarts it.
+	startupGraceSeconds int32 = 120
+	startupProbePeriod  int32 = 5
 )
 
 // settings is a FreeswitchClusterSpec with every default applied. The API server applies the same defaults from
@@ -122,8 +127,9 @@ func buildScriptsConfigMap(fsc *sipv1alpha1.FreeswitchCluster) *corev1.ConfigMap
 			Labels:    commonLabels(fsc),
 		},
 		Data: map[string]string{
-			drainScriptName: drainScript,
-			readyScriptName: readyScript,
+			drainScriptName:   drainScript,
+			readyScriptName:   readyScript,
+			startupScriptName: startupScript,
 		},
 	}
 }
@@ -231,6 +237,15 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 			{Name: "sip-tcp", Protocol: corev1.ProtocolTCP, ContainerPort: cfg.sipPort, HostPort: cfg.sipPort},
 		},
 		VolumeMounts: mounts,
+		// Startup: FreeSWITCH up with a SIP profile on the SIP port, within startupGraceSeconds. A config that
+		// leaves no profile running keeps the new pod restarting and never ready, so a roll stops at that node.
+		StartupProbe: &corev1.Probe{
+			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/bin/sh", scriptsDir + "/" + startupScriptName}}},
+			PeriodSeconds:    startupProbePeriod,
+			TimeoutSeconds:   3,
+			FailureThreshold: startupGraceSeconds / startupProbePeriod,
+			SuccessThreshold: 1,
+		},
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/bin/sh", scriptsDir + "/" + readyScriptName}}},
 			PeriodSeconds:    5,
@@ -238,7 +253,9 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 			FailureThreshold: 1,
 			SuccessThreshold: 1,
 		},
-		// No liveness probe in v0: a false positive kills every call on the node. Crashes restart the container.
+		// No liveness probe: a failure restarts the container and drops every call on the node, and fs_cli can
+		// be slow under load, so a false positive at peak would do more harm than the hang it guards against.
+		// A crash needs no probe: the process exits and the container restarts.
 		Lifecycle: &corev1.Lifecycle{
 			PreStop: &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{"/bin/sh", scriptsDir + "/" + drainScriptName}}},
 		},
