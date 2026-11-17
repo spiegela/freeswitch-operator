@@ -1,0 +1,46 @@
+# Three FreeSWITCH nodes running sipbench's edge configuration, behind Kamailio.
+apiVersion: sip.instruments.com/v1alpha1
+kind: FreeswitchCluster
+metadata:
+  name: edge
+spec:
+  replicas: 3
+  image: drachtio/drachtio-freeswitch-mrf:0.9.6@sha256:cb81acc1112990ca33693374f1de7443d44cf9c95e6ae6c02ba1edcee4b68bba
+  imagePullPolicy: IfNotPresent
+  # The image's entrypoint rewrites its own config; run the binary against the assembled one instead.
+  command: ["/usr/local/freeswitch/bin/freeswitch"]
+  args: ["-nonat", "-nf", "-nc", "-conf", "/usr/local/freeswitch/conf", "-log", "/tmp", "-db", "/tmp"]
+  env:
+    - {name: BACKEND_HOST, value: "mockbackend.telephony.svc.cluster.local:5060"}
+    - {name: TRANSFER_HOST, value: "sipbench.telephony.svc.cluster.local:5090"}
+    - {name: ESL_LISTEN_IP, value: "127.0.0.1"}
+  nodeSelector:
+    node-role.example.com/sip-edge: "true"
+  tolerations:
+    - {key: node-role.example.com/sip-edge, operator: Exists, effect: NoSchedule}
+  sip:
+    port: 5060
+  rtp:
+    # Must match switch.conf.xml.
+    portRangeStart: 16384
+    portRangeEnd: 16584
+  externalAddress:
+    # kind nodes have no external address; FreeSWITCH advertises the node's own (bin/external-address.sh).
+    source: None
+  config:
+    mountPath: /usr/local/freeswitch/conf
+    configMapRefs:
+      - {name: freeswitch-conf, path: "."}
+      - {name: freeswitch-autoload, path: autoload_configs}
+      - {name: freeswitch-dialplan, path: dialplan}
+      - {name: freeswitch-profiles, path: sip_profiles}
+      - {name: freeswitch-bin, path: bin}
+  drain:
+    # Short, so a stuck drain shows up quickly here. Production allows hours.
+    maxDrainSeconds: 300
+  dispatcher:
+    setID: 1
+    configMapName: edge-dispatcher
+    transport: udp
+    jsonrpcURL: http://kamailio.telephony.svc.cluster.local:5070/RPC
+    reloadDelaySeconds: 75
