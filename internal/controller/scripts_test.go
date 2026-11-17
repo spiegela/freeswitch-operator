@@ -22,7 +22,7 @@ const fsReady = "UP 0 years, 0 days, 0 hours, 1 minute, 2 seconds\nFreeSWITCH (V
 func runScript(t *testing.T, name, status, sofia string, env ...string) (int, string) {
 	t.Helper()
 	dir := t.TempDir()
-	for file, body := range map[string]string{startupScriptName: startupScript, readyScriptName: readyScript} {
+	for file, body := range map[string]string{startupScriptName: startupScript, readyScriptName: readyScript, liveScriptName: liveScript} {
 		if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -33,7 +33,8 @@ func runScript(t *testing.T, name, status, sofia string, env ...string) (int, st
 			t.Fatal(err)
 		}
 	}
-	fake := "#!/bin/sh\ncase \"$2\" in\n  status) cat '" + bin + "/status.out' ;;\n  'sofia status') cat '" + bin + "/sofia.out' ;;\nesac\n"
+	// The command is fs_cli's last argument; FAKE_ARGS, when set, collects every call's arguments.
+	fake := "#!/bin/sh\nfor a; do last=$a; done\n[ -n \"$FAKE_ARGS\" ] && echo \"$*\" >>\"$FAKE_ARGS\"\ncase \"$last\" in\n  status) cat '" + bin + "/status.out' ;;\n  'sofia status') cat '" + bin + "/sofia.out' ;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(bin, "fs_cli"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -133,5 +134,41 @@ esac
 	}
 	if !strings.Contains(string(out), "no live calls") {
 		t.Fatalf("output %q", out)
+	}
+}
+
+func TestLiveScript(t *testing.T) {
+	cases := []struct {
+		name, status string
+		want         int
+	}{
+		{"ready", fsReady, 0},
+		{"up but not ready", "UP 0 years, 0 days, 0 hours, 0 minutes, 3 seconds\nFreeSWITCH (Version 1.10.10) is starting\n", 0},
+		{"paused", "UP 0 years, 0 days, 2 hours, 0 minutes, 3 seconds\nFreeSWITCH (Version 1.10.10) is ready (paused)\n", 0},
+		{"no answer", "", 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			code, out := runScript(t, liveScriptName, c.status, "")
+			if code != c.want {
+				t.Fatalf("exit %d (want %d), output %q", code, c.want, out)
+			}
+		})
+	}
+}
+
+func TestLiveScriptKeepsUnderTheProbeTimeout(t *testing.T) {
+	for timeout, want := range map[string]string{"15": "-t 13000", "5": "-t 3000", "3": "-t 2000"} {
+		args := filepath.Join(t.TempDir(), "args")
+		if code, out := runScript(t, liveScriptName, fsReady, "", "FS_LIVENESS_TIMEOUT_SECONDS="+timeout, "FAKE_ARGS="+args); code != 0 {
+			t.Fatalf("timeout %s: exit %d %q", timeout, code, out)
+		}
+		got, err := os.ReadFile(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("timeout %s: fs_cli called with %q, want %q", timeout, got, want)
+		}
 	}
 }

@@ -135,10 +135,12 @@ The operator renders a StatefulSet with:
   that doesn't get there within two minutes is restarted, which costs nothing: it has never been ready, so it holds
   no calls. **Readiness** adds "not draining" and, when required, "knows its external address", and keeps
   re-checking the profile, so a profile that stops later takes the node out of dispatch without touching its calls.
-  **No liveness probe:** a failure restarts the container and drops every call on the node, and `fs_cli` can be
-  slow under load, so a false positive at peak would do more harm than the hang it guards against. A crash needs no
-  probe, since the process exits and the container restarts. (Opt-in hang detection with a lax default is planned
-  for M2.)
+  **Liveness is opt-in** (`spec.liveness`): a failure restarts the container and drops every call on the node, and
+  `fs_cli` can be slow under load, so a false positive at peak would do more harm than the hang it guards against.
+  A crash needs no probe, since the process exits and the container restarts. With `liveness: {}` the probe fails
+  only when FreeSWITCH doesn't answer `fs_cli status` at all (not ready, paused and draining all count as alive),
+  checking every 30 s with a 15 s timeout and restarting after 10 misses in a row, about five minutes of silence.
+  `fs_cli` gives up two seconds before the probe does, so a slow answer is a counted miss, never a killed probe.
 - a downward-API volume of the pod's annotations, through which the operator hands the pod its external address
   (loop 4).
 

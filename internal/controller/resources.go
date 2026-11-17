@@ -43,6 +43,7 @@ type settings struct {
 	dispatcherSetID int32
 	dispatcherProto sipv1alpha1.DispatcherTransport
 	reloadDelaySecs int32
+	liveness        *sipv1alpha1.LivenessSpec // nil: no liveness probe
 }
 
 func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
@@ -92,7 +93,41 @@ func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
 			out.reloadDelaySecs = d.ReloadDelaySeconds
 		}
 	}
+	if l := s.Liveness; l != nil {
+		out.liveness = &sipv1alpha1.LivenessSpec{PeriodSeconds: 30, TimeoutSeconds: 15, FailureThreshold: 10}
+		if l.PeriodSeconds != 0 {
+			out.liveness.PeriodSeconds = l.PeriodSeconds
+		}
+		if l.TimeoutSeconds != 0 {
+			out.liveness.TimeoutSeconds = l.TimeoutSeconds
+		}
+		if l.FailureThreshold != 0 {
+			out.liveness.FailureThreshold = l.FailureThreshold
+		}
+	}
 	return out
+}
+
+// livenessProbe runs the live script, or is nil when liveness is off.
+func livenessProbe(l *sipv1alpha1.LivenessSpec) *corev1.Probe {
+	if l == nil {
+		return nil
+	}
+	return &corev1.Probe{
+		ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + liveScriptName}}},
+		PeriodSeconds:    l.PeriodSeconds,
+		TimeoutSeconds:   l.TimeoutSeconds,
+		FailureThreshold: l.FailureThreshold,
+		SuccessThreshold: 1,
+	}
+}
+
+// livenessEnv tells the live script the probe's timeout, so fs_cli gives up first.
+func livenessEnv(l *sipv1alpha1.LivenessSpec) []corev1.EnvVar {
+	if l == nil {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "FS_LIVENESS_TIMEOUT_SECONDS", Value: strconv.Itoa(int(l.TimeoutSeconds))}}
 }
 
 // Object names. The headless Service shares the cluster's name, so its EndpointSlices carry
@@ -131,6 +166,7 @@ func buildScriptsConfigMap(fsc *sipv1alpha1.FreeswitchCluster) *corev1.ConfigMap
 			drainScriptName:   drainScript,
 			readyScriptName:   readyScript,
 			startupScriptName: startupScript,
+			liveScriptName:    liveScript,
 		},
 	}
 }
@@ -186,7 +222,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		{Name: "FS_EXTERNAL_ADDRESS_FILE", Value: externalAddrFile},
 		{Name: "FS_MAX_DRAIN_SECONDS", Value: strconv.FormatInt(cfg.maxDrainSeconds, 10)},
 		{Name: "FS_REQUIRE_EXTERNAL_ADDRESS", Value: strconv.FormatBool(cfg.requireAddress)},
-	}, fsc.Spec.Env)
+	}, livenessEnv(cfg.liveness), fsc.Spec.Env)
 
 	volumes := []corev1.Volume{
 		{
@@ -253,9 +289,10 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 			FailureThreshold: 1,
 			SuccessThreshold: 1,
 		},
-		// No liveness probe: a failure restarts the container and drops every call on the node, and fs_cli can
-		// be slow under load, so a false positive at peak would do more harm than the hang it guards against.
-		// A crash needs no probe: the process exits and the container restarts.
+		// Liveness only when spec.liveness asks for it: a failure restarts the container and drops every call on
+		// the node, and fs_cli can be slow under load, so a false positive at peak would do more harm than the
+		// hang it guards against. A crash needs no probe: the process exits and the container restarts.
+		LivenessProbe: livenessProbe(cfg.liveness),
 		Lifecycle: &corev1.Lifecycle{
 			PreStop: &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + drainScriptName}}},
 		},
