@@ -6,7 +6,7 @@ metadata:
   name: kamailio-sip
 spec:
   selector:
-    app.kubernetes.io/name: kamailio
+    sip.instruments.com/kamailio-cluster: proxy
   ports:
     - {name: sip-udp, port: 5060, targetPort: 5060, protocol: UDP}
     - {name: sip-tcp, port: 5060, targetPort: 5060, protocol: TCP}

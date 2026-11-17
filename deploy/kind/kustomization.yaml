@@ -1,20 +1,12 @@
-# The edge on kind (milestone M1): Kamailio from deploy/examples/kamailio on the proxy nodes, a FreeswitchCluster
-# with sipbench's configuration on the edge nodes, and sipbench's mock backend behind it. hack/kind.sh applies it
-# after the operator (deploy/kind/operator).
+# The edge on kind: a KamailioCluster on the proxy nodes, a FreeswitchCluster with sipbench's configuration on the
+# edge nodes, and sipbench's mock backend behind them. hack/kind.sh applies it after the operator
+# (deploy/kind/operator).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: telephony
 resources:
   - namespace.yaml
-  - ../examples/kamailio
   - ../../sipbench/k8s
   - kamailio-sip.yaml
   - freeswitchcluster.yaml
-patches:
-  - target: {kind: Deployment, name: kamailio}
-    patch: |
-      - op: replace
-        path: /spec/template/spec/nodeSelector
-        value: {node-role.example.com/sip-proxy: "true"}
-      - op: remove
-        path: /spec/template/spec/tolerations
+  - kamailiocluster.yaml

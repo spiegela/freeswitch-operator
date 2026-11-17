@@ -1,4 +1,4 @@
-# Three FreeSWITCH nodes running sipbench's edge configuration, behind Kamailio.
+# Three FreeSWITCH nodes running sipbench's edge configuration, behind the KamailioCluster "proxy".
 apiVersion: sip.instruments.com/v1alpha1
 kind: FreeswitchCluster
 metadata:
@@ -42,5 +42,4 @@ spec:
     setID: 1
     configMapName: edge-dispatcher
     transport: udp
-    jsonrpcURL: http://kamailio.telephony.svc.cluster.local:5070/RPC
-    reloadDelaySeconds: 75
+    # No jsonrpcURL: the KamailioCluster reads this list and drives its own pods.

@@ -1,0 +1,18 @@
+# Two Kamailio proxies, run by the operator, in front of the FreeswitchCluster.
+apiVersion: sip.instruments.com/v1alpha1
+kind: KamailioCluster
+metadata:
+  name: proxy
+spec:
+  replicas: 2
+  # Kamailio 6.0.8, multi-arch. Matches KAMAILIO_IMAGE in the Makefile, which make check-kamailio-cfg uses.
+  image: ghcr.io/kamailio/kamailio-ci:6.0-alpine@sha256:b3f60a1d3f3dd0602cb750859c2ac1458ae4159d0678ab31b22f6c598f8eca9f
+  imagePullPolicy: IfNotPresent
+  nodeSelector:
+    node-role.example.com/sip-proxy: "true"
+  externalAddress:
+    # kind nodes have no external address; Kamailio advertises the node's own.
+    source: None
+  dispatch:
+    - freeswitchCluster: edge
+  reloadDelaySeconds: 75
