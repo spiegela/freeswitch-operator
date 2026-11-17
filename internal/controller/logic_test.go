@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -268,41 +270,92 @@ func TestScriptsReferenceSharedPaths(t *testing.T) {
 	}
 }
 
-func TestJSONRPCNotifier(t *testing.T) {
-	var got []map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		var req map[string]any
-		_ = json.Unmarshal(body, &req)
-		got = append(got, req)
-		if req["method"] == "dispatcher.reload" && len(got) > 2 {
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","error":{"code":500,"message":"boom"},"id":1}`))
+// fakeKamailio answers like Kamailio's jsonrpcs: dispatcher.reload copies the file on disk into memory, and
+// dispatcher.list shows memory, or HTTP 500 "No Destination Sets" when it holds none.
+type fakeKamailio struct {
+	calls  []map[string]any
+	onDisk map[int][]string
+	loaded map[int][]string
+	fail   string // a JSON-RPC error message to answer every call with
+}
+
+func (k *fakeKamailio) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	var req map[string]any
+	_ = json.Unmarshal(body, &req)
+	k.calls = append(k.calls, req)
+	rpcErr := func(msg string) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","error":{"code":500,"message":%q},"id":1}`, msg)
+	}
+	if k.fail != "" {
+		rpcErr(k.fail)
+		return
+	}
+	switch req["method"] {
+	case "dispatcher.reload":
+		k.loaded = k.onDisk
+	case "dispatcher.list":
+		if len(k.loaded) == 0 {
+			rpcErr("No Destination Sets")
 			return
 		}
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":"ok","id":1}`))
-	}))
-	defer srv.Close()
+		var records []any
+		for id, uris := range k.loaded {
+			var targets []any
+			for _, u := range uris {
+				targets = append(targets, map[string]any{"DEST": map[string]any{"URI": u, "FLAGS": "AP", "PRIORITY": 0}})
+			}
+			records = append(records, map[string]any{"SET": map[string]any{"ID": id, "TARGETS": targets}})
+		}
+		out, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "result": map[string]any{"NRSETS": len(records), "RECORDS": records}, "id": 1})
+		_, _ = w.Write(out)
+		return
+	}
+	_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":"ok","id":1}`))
+}
 
+func TestJSONRPCNotifier(t *testing.T) {
+	k := &fakeKamailio{}
+	srv := httptest.NewServer(k)
+	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	n := NewJSONRPCNotifier(srv.URL)
+
 	if err := n.SetInactive(ctx, 1, "sip:10.0.0.1:5060"); err != nil {
 		t.Fatal(err)
 	}
-	if err := n.Reload(ctx); err != nil {
-		t.Fatal(err)
+	if k.calls[0]["method"] != "dispatcher.set_state" {
+		t.Fatalf("first call %v", k.calls[0])
 	}
-	if err := n.Reload(ctx); err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("expected a JSON-RPC error, got %v", err)
-	}
-	if got[0]["method"] != "dispatcher.set_state" {
-		t.Fatalf("first call %v", got[0])
-	}
-	params := got[0]["params"].([]any)
+	params := k.calls[0]["params"].([]any)
 	if params[0] != "ip" || params[1] != float64(1) || params[2] != "sip:10.0.0.1:5060" {
 		t.Fatalf("set_state params %v", params)
 	}
-	if got[1]["method"] != "dispatcher.reload" {
-		t.Fatalf("second call %v", got[1])
+
+	want := []string{"sip:10.0.0.2:5060", "sip:10.0.0.1:5060"}
+	if err := n.Reload(ctx, 1, want); !errors.Is(err, errListNotLoaded) {
+		t.Fatalf("the kubelet hasn't written the file yet, so Kamailio holds nothing: want errListNotLoaded, got %v", err)
+	}
+	if err := n.Reload(ctx, 1, nil); err != nil {
+		t.Fatalf("an empty list loaded is an empty list: %v", err)
+	}
+
+	k.onDisk = map[int][]string{1: {"sip:10.0.0.1:5060", "sip:10.0.0.2:5060"}, 2: {"sip:10.9.9.9:5060"}}
+	if err := n.Reload(ctx, 1, want); err != nil {
+		t.Fatalf("set 1 holds the same URIs in another order, and other sets don't count: %v", err)
+	}
+	if got := k.calls[len(k.calls)-2]["method"]; got != "dispatcher.reload" {
+		t.Fatalf("reload before list, got %v", got)
+	}
+	if err := n.Reload(ctx, 1, want[:1]); !errors.Is(err, errListNotLoaded) {
+		t.Fatalf("one destination too many: want errListNotLoaded, got %v", err)
+	}
+
+	k.fail = "boom"
+	err := n.Reload(ctx, 1, want)
+	if err == nil || !strings.Contains(err.Error(), "kamailio dispatcher.reload: 500 boom") || errors.Is(err, errListNotLoaded) {
+		t.Fatalf("expected the JSON-RPC error, got %v", err)
 	}
 }

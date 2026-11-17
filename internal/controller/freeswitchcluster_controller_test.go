@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -44,6 +45,8 @@ type fakeNotifier struct {
 	mu       sync.Mutex
 	inactive []string
 	reloads  int
+	loaded   []string // the list the last reload asked for
+	stale    int      // reloads still to come that find the old file, as before the kubelet syncs it
 }
 
 func (f *fakeNotifier) SetInactive(_ context.Context, setID int32, uri string) error {
@@ -53,10 +56,15 @@ func (f *fakeNotifier) SetInactive(_ context.Context, setID int32, uri string) e
 	return nil
 }
 
-func (f *fakeNotifier) Reload(context.Context) error {
+func (f *fakeNotifier) Reload(_ context.Context, _ int32, want []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reloads++
+	if f.stale > 0 {
+		f.stale--
+		return fmt.Errorf("%w: test", errListNotLoaded)
+	}
+	f.loaded = want
 	return nil
 }
 
@@ -266,6 +274,90 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(notifier.reloads).To(Equal(2))
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
 		Expect(fsc.Status.DispatcherReloadedHash).To(Equal(changed))
+	})
+
+	It("tells every ready Kamailio behind the JSON-RPC Service, not just the one the Service picks", func() {
+		ns := newNamespace(ctx)
+		kns := newNamespace(ctx)
+		// Kamailio in its own namespace; the Service port (5070) maps to a different target port (5071).
+		Expect(k8sClient.Create(ctx, &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "kamailio", Namespace: kns},
+			Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{
+				{Name: "sip", Port: 5060, Protocol: corev1.ProtocolUDP},
+				{Name: "rpc", Port: 5070, TargetPort: intstr.FromInt32(5071), Protocol: corev1.ProtocolTCP},
+			}},
+		})).To(Succeed())
+		Expect(k8sClient.Create(ctx, &discoveryv1.EndpointSlice{
+			ObjectMeta:  metav1.ObjectMeta{Name: "kamailio-xyz", Namespace: kns, Labels: map[string]string{discoveryv1.LabelServiceName: "kamailio"}},
+			AddressType: discoveryv1.AddressTypeIPv4,
+			Ports:       []discoveryv1.EndpointPort{{Name: ptr.To("sip"), Port: ptr.To[int32](5060)}, {Name: ptr.To("rpc"), Port: ptr.To[int32](5071)}},
+			Endpoints: []discoveryv1.Endpoint{
+				{Addresses: []string{"10.0.2.1"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)}},
+				{Addresses: []string{"10.0.2.2"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)}},
+				{Addresses: []string{"10.0.2.3"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(false)}},
+			},
+		})).To(Succeed())
+		Expect(k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
+			f.Spec.Dispatcher = &sipv1alpha1.DispatcherSpec{
+				ConfigMapName: "kamailio-dispatcher", SetID: 1, ReloadDelaySeconds: 60,
+				JSONRPCURL: fmt.Sprintf("http://kamailio.%s.svc.cluster.local:5070/RPC", kns),
+			}
+		}))).To(Succeed())
+		slice := &discoveryv1.EndpointSlice{
+			ObjectMeta:  metav1.ObjectMeta{Name: "edge-abcde", Namespace: ns, Labels: map[string]string{discoveryv1.LabelServiceName: "edge"}},
+			AddressType: discoveryv1.AddressTypeIPv4,
+			Endpoints: []discoveryv1.Endpoint{
+				{Addresses: []string{"10.0.1.10"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "edge-0"}},
+				{Addresses: []string{"10.0.1.20"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "edge-1"}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, slice)).To(Succeed())
+
+		notifiers := map[string]*fakeNotifier{}
+		now := time.Now()
+		r := &FreeswitchClusterReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			NewNotifier: func(url string) DispatcherNotifier {
+				if notifiers[url] == nil {
+					notifiers[url] = &fakeNotifier{}
+				}
+				return notifiers[url]
+			},
+			Now: func() time.Time { return now },
+		}
+		// The second Kamailio's kubelet is slow: its first reload still finds the old file.
+		notifiers["http://10.0.2.2:5071/RPC"] = &fakeNotifier{stale: 1}
+		reconcileOnce(r, ns)
+		now = now.Add(61 * time.Second)
+		res := reconcileOnce(r, ns)
+		Expect(notifiers).To(HaveLen(2), "one notifier per ready Kamailio, none for the unready one")
+		for _, url := range []string{"http://10.0.2.1:5071/RPC", "http://10.0.2.2:5071/RPC"} {
+			Expect(notifiers[url].reloads).To(Equal(1), url)
+		}
+		var fsc sipv1alpha1.FreeswitchCluster
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
+		Expect(fsc.Status.DispatcherReloadedHash).NotTo(Equal(fsc.Status.DispatcherHash), "not done until every Kamailio has the list")
+		Expect(res.RequeueAfter).To(Equal(10*time.Second), "reload again soon")
+
+		By("the next reload finds the file and the reload is done")
+		res = reconcileOnce(r, ns)
+		for _, url := range []string{"http://10.0.2.1:5071/RPC", "http://10.0.2.2:5071/RPC"} {
+			Expect(notifiers[url].reloads).To(Equal(2), url)
+			Expect(notifiers[url].loaded).To(ConsistOf("sip:10.0.1.10:5060", "sip:10.0.1.20:5060"), url)
+		}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
+		Expect(fsc.Status.DispatcherReloadedHash).To(Equal(fsc.Status.DispatcherHash))
+
+		By("a leaving node is marked inactive on every Kamailio")
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge-abcde"}, slice)).To(Succeed())
+		slice.Endpoints[1].Conditions.Ready = ptr.To(false)
+		slice.Endpoints[1].Conditions.Terminating = ptr.To(true)
+		Expect(k8sClient.Update(ctx, slice)).To(Succeed())
+		reconcileOnce(r, ns)
+		for url, n := range notifiers {
+			Expect(n.inactive).To(Equal([]string{"1 sip:10.0.1.20:5060"}), url)
+		}
 	})
 
 	It("replaces one outdated pod at a time, only when the rest of the fleet is ready", func() {

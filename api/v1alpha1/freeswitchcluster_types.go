@@ -176,12 +176,17 @@ type DispatcherSpec struct {
 
 	// jsonrpcURL, when set, is Kamailio's JSON-RPC endpoint (jsonrpcs over xhttp). The operator uses it to
 	// take a leaving node out at once (dispatcher.set_state) and to reload the list once the kubelet has
-	// written the new file (dispatcher.reload).
+	// written the new file (dispatcher.reload). When the host names a Service in this cluster ("name",
+	// "name.namespace" or "name.namespace.svc[.<cluster domain>]"), each call goes to every ready pod behind it,
+	// on the target port of the Service port the URL names, so that every Kamailio hears of each change; any
+	// other URL is called as given.
 	// +optional
 	JSONRPCURL string `json:"jsonrpcURL,omitempty"`
 
 	// reloadDelaySeconds is how long after writing the ConfigMap the operator waits before asking Kamailio to
-	// reload, so the kubelet has synced the mounted file.
+	// reload, so the kubelet has synced the mounted file. After each reload the operator checks (dispatcher.list)
+	// that the Kamailio holds the list it wrote, and reloads again every 10 seconds until it does, so a kubelet
+	// slower than this delay costs time but never leaves a Kamailio on the old list.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:default=75
 	// +optional

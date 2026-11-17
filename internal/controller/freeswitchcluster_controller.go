@@ -431,9 +431,11 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 		return 0, err
 	}
 
-	var notifier DispatcherNotifier
-	if d.JSONRPCURL != "" && r.NewNotifier != nil {
-		notifier = r.NewNotifier(d.JSONRPCURL)
+	// One call per ready Kamailio pod when the URL names a Service; see dispatcherNotifier. Failing to find them is
+	// handled like a failed call: logged, and the reload retried.
+	notifier, notifierErr := r.dispatcherNotifier(ctx, fsc.Namespace, d.JSONRPCURL)
+	if notifierErr != nil {
+		log.Error(notifierErr, "could not find the Kamailio pods to notify", "jsonrpcURL", d.JSONRPCURL)
 	}
 
 	// The ConfigMap is the record of what changed when: the list, its hash and the change time go in one update,
@@ -478,7 +480,7 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 		status.DispatcherUpdatedAt = &at
 	}
 
-	if notifier == nil || status.DispatcherReloadedHash == status.DispatcherHash {
+	if (notifier == nil && notifierErr == nil) || status.DispatcherReloadedHash == status.DispatcherHash {
 		return 0, nil
 	}
 	delay := time.Duration(cfg.reloadDelaySecs) * time.Second
@@ -487,12 +489,35 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 			return wait, nil
 		}
 	}
-	if err := notifier.Reload(ctx); err != nil {
+	if notifierErr != nil {
+		return 30 * time.Second, nil
+	}
+	// The reload is done only once every Kamailio holds the list just written: reloadDelaySeconds is a guess at
+	// how long the kubelet takes to update the mounted file, and a reload before that re-reads the old one.
+	if err := notifier.Reload(ctx, cfg.dispatcherSetID, parseDispatcherURIs(content, cfg.dispatcherSetID)); err != nil {
+		if onlyListNotLoaded(err) {
+			log.Info("Kamailio has not loaded the new dispatcher list yet; will reload again", "detail", err.Error())
+			return 10 * time.Second, nil
+		}
 		log.Error(err, "could not reload Kamailio dispatcher list; will retry")
 		return 30 * time.Second, nil
 	}
 	status.DispatcherReloadedHash = status.DispatcherHash
 	return 0, nil
+}
+
+// onlyListNotLoaded reports whether err, or every error joined in it, is errListNotLoaded: Kamailio answered, but
+// its file was not updated yet.
+func onlyListNotLoaded(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range joined.Unwrap() {
+			if !onlyListNotLoaded(e) {
+				return false
+			}
+		}
+		return true
+	}
+	return errors.Is(err, errListNotLoaded)
 }
 
 func (r *FreeswitchClusterReconciler) fillStatus(fsc *sipv1alpha1.FreeswitchCluster, cfg settings, sts *appsv1.StatefulSet, pods []corev1.Pod, decision rolloutDecision, status *sipv1alpha1.FreeswitchClusterStatus) {

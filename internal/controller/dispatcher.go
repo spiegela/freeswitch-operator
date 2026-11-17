@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -135,9 +136,14 @@ func contentHash(s string) string {
 type DispatcherNotifier interface {
 	// SetInactive takes a destination out of rotation at once (dispatcher.set_state with "ip": inactive, probing).
 	SetInactive(ctx context.Context, setID int32, uri string) error
-	// Reload makes Kamailio re-read its dispatcher list from disk (dispatcher.reload).
-	Reload(ctx context.Context) error
+	// Reload makes Kamailio re-read its dispatcher list from disk (dispatcher.reload), then checks that the set now
+	// holds exactly want (dispatcher.list). If it doesn't, the error wraps errListNotLoaded: the kubelet has not
+	// yet written the new file into that pod, and a later reload will pick it up.
+	Reload(ctx context.Context, setID int32, want []string) error
 }
+
+// errListNotLoaded means Kamailio reloaded but still holds another list than the one the operator wrote.
+var errListNotLoaded = errors.New("kamailio has not loaded the current dispatcher list")
 
 // NotifierFactory builds a notifier for a Kamailio JSON-RPC URL.
 type NotifierFactory func(url string) DispatcherNotifier
@@ -153,15 +159,78 @@ type jsonrpcNotifier struct {
 	id     atomic.Int64
 }
 
+// rpcError is an error answer from Kamailio's JSON-RPC.
+type rpcError struct {
+	Method  string
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e *rpcError) Error() string {
+	return fmt.Sprintf("kamailio %s: %d %s", e.Method, e.Code, e.Message)
+}
+
 func (n *jsonrpcNotifier) SetInactive(ctx context.Context, setID int32, uri string) error {
-	return n.call(ctx, "dispatcher.set_state", []any{"ip", setID, uri})
+	return n.call(ctx, "dispatcher.set_state", []any{"ip", setID, uri}, nil)
 }
 
-func (n *jsonrpcNotifier) Reload(ctx context.Context) error {
-	return n.call(ctx, "dispatcher.reload", nil)
+func (n *jsonrpcNotifier) Reload(ctx context.Context, setID int32, want []string) error {
+	if err := n.call(ctx, "dispatcher.reload", nil, nil); err != nil {
+		return err
+	}
+	have, err := n.destinations(ctx, setID)
+	if err != nil {
+		return err
+	}
+	if !sameURIs(have, want) {
+		return fmt.Errorf("%w: set %d holds %v, want %v", errListNotLoaded, setID, have, want)
+	}
+	return nil
 }
 
-func (n *jsonrpcNotifier) call(ctx context.Context, method string, params []any) error {
+// destinations lists the URIs Kamailio holds for one dispatcher set (dispatcher.list).
+func (n *jsonrpcNotifier) destinations(ctx context.Context, setID int32) ([]string, error) {
+	var res struct {
+		Records []struct {
+			Set struct {
+				ID      int32 `json:"ID"`
+				Targets []struct {
+					Dest struct {
+						URI string `json:"URI"`
+					} `json:"DEST"`
+				} `json:"TARGETS"`
+			} `json:"SET"`
+		} `json:"RECORDS"`
+	}
+	if err := n.call(ctx, "dispatcher.list", nil, &res); err != nil {
+		// What Kamailio answers when it holds no sets at all, as after loading an empty list.
+		if re := (*rpcError)(nil); errors.As(err, &re) && re.Message == "No Destination Sets" {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, r := range res.Records {
+		if r.Set.ID != setID {
+			continue
+		}
+		for _, t := range r.Set.Targets {
+			out = append(out, t.Dest.URI)
+		}
+	}
+	return out, nil
+}
+
+func sameURIs(a, b []string) bool {
+	a, b = slices.Clone(a), slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
+}
+
+// call makes one JSON-RPC call and decodes its result into result, when that is not nil. Kamailio answers an error
+// with a matching HTTP status and the error in the body, so the body is read first.
+func (n *jsonrpcNotifier) call(ctx context.Context, method string, params []any, result any) error {
 	req := map[string]any{"jsonrpc": "2.0", "method": method, "id": n.id.Add(1)}
 	if params != nil {
 		req["params"] = params
@@ -181,19 +250,24 @@ func (n *jsonrpcNotifier) call(ctx context.Context, method string, params []any)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var out struct {
-		Error *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
+		Result json.RawMessage `json:"result"`
+		Error  *rpcError       `json:"error"`
+	}
+	decodeErr := json.NewDecoder(resp.Body).Decode(&out)
+	if decodeErr == nil && out.Error != nil {
+		out.Error.Method = method
+		return out.Error
 	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("kamailio %s: HTTP %d", method, resp.StatusCode)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return fmt.Errorf("kamailio %s: decoding response: %w", method, err)
+	if decodeErr != nil {
+		return fmt.Errorf("kamailio %s: decoding response: %w", method, decodeErr)
 	}
-	if out.Error != nil {
-		return fmt.Errorf("kamailio %s: %d %s", method, out.Error.Code, out.Error.Message)
+	if result != nil {
+		if err := json.Unmarshal(out.Result, result); err != nil {
+			return fmt.Errorf("kamailio %s: decoding result: %w", method, err)
+		}
 	}
 	return nil
 }

@@ -100,7 +100,8 @@ spec:
   dispatcher:
     setID: 1                        # v0. Kamailio dispatcher set for this fleet
     configMapName: edge-dispatcher  # v0. The operator writes dispatcher.list here
-    jsonrpcURL: ""                  # v0, optional. Kamailio JSON-RPC endpoint (port 5070 in the example)
+    jsonrpcURL: ""                  # v0, optional. Kamailio JSON-RPC endpoint (port 5070 in the example); a
+                                    #   Service name reaches every ready Kamailio pod behind it
 status:
   readyReplicas: 2
   members:                          # v0. One entry per pod
@@ -150,7 +151,11 @@ watches them and:
 1. renders Kamailio's `dispatcher.list` (one line per ready node, set `dispatcher.setID`) into the ConfigMap named
    by `dispatcher.configMapName`; Kamailio mounts it;
 2. if `dispatcher.jsonrpcURL` is set, calls Kamailio's JSON-RPC: `dispatcher.set_state` to take a draining node out
-   immediately, then `dispatcher.reload` once the new list is on disk.
+   immediately, then `dispatcher.reload` once the new list should be on disk (`dispatcher.reloadDelaySeconds`, a
+   guess at the kubelet's sync time). After each reload it reads the list back (`dispatcher.list`) and reloads
+   again every 10 s until Kamailio holds the one it wrote. When the URL names a Service in the cluster,
+   each call goes to every ready Kamailio pod behind it rather than to the one the Service would pick, so every
+   Kamailio hears of each change; a Kamailio that starts later reads the current list from disk.
 
 Kamailio's own OPTIONS probing (`ds_ping_interval`) stays on as a backstop, and FreeSWITCH answers new calls with
 `503` while paused, so dispatcher fails over on a `503` during the gap between "not ready" and "Kamailio knows".
@@ -214,8 +219,8 @@ node on the host network, a fixed public address each, and the operator in charg
 - **Config:** the operator renders `kamailio.cfg` from a template (dispatcher routing with failover on `503` or no
   answer, JSON-RPC on an internal port, as in [`deploy/examples/kamailio`](deploy/examples/kamailio/)), plus the
   dispatcher list. Peer data (loop 9) and registrations (loop 8) join it in M5.
-- **Membership changes reach every Kamailio pod.** The operator calls each pod's JSON-RPC directly, rather than
-  one Service name that reaches only one of them.
+- **Membership changes reach every Kamailio pod**, as they already do in v0 when `jsonrpcURL` names a Service:
+  the operator calls each pod's JSON-RPC directly, rather than one Service name that reaches only one of them.
 - **JSON-RPC is authenticated.** Kamailio's JSON-RPC has no authentication of its own, and NetworkPolicy doesn't
   apply to host-network pods. So the operator keeps a token in a Secret and the pods get it as an environment
   variable. The HTTP route refuses any request without that token. The RPC listener binds to the node's private
@@ -369,7 +374,7 @@ which version runs where.
 | --- | --- | --- |
 | M0 | Repository, plan, operator scaffold, sipbench mock backend and runner running against FreeSWITCH in Docker | done |
 | M1 | v0 operator on kind: fleet, dispatcher list, drains and rolling updates; sipbench runs against it ([how](#the-edge-on-kind)) | done |
-| M2 | `KamailioCluster`: managed Kamailio, dispatcher changes to every pod over authenticated JSON-RPC, restart list; sipbench fleet scenarios (drain mid-call, rolling update with live calls, run as scenarios rather than by hand), with call records kept per run so concurrent runners don't clear each other's; opt-in liveness (hang detection) with a lax default | planned |
+| M2 | `KamailioCluster`: managed Kamailio, authenticated JSON-RPC, restart list; sipbench fleet scenarios (drain mid-call, rolling update with live calls, run as scenarios rather than by hand), with call records kept per run so concurrent runners don't clear each other's; opt-in liveness (hang detection) with a lax default | planned |
 | M3 | `SIPAddressPool` with an AWS Elastic IP provider, shared by both fleets; edge node group on EKS | planned |
 | M4 | v1 failover with fencing and call recovery | planned |
 | M5 | Typed peer and ACL resources (loop 9), outbound registrations when a peer needs them (loop 8), sipbench peer mocks; reload without restart | planned |

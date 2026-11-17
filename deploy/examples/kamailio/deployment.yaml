@@ -81,8 +81,8 @@ spec:
             optional: true          # the operator creates it on first reconcile
 ---
 # The operator's JSON-RPC target (spec.dispatcher.jsonrpcURL). With host networking each Kamailio is reached on
-# its node; a Service gives one stable name. To keep every Kamailio in step, point the operator at each one
-# (planned) or rely on the delayed reload plus Kamailio's own probing.
+# its node; a Service gives one stable name. The operator doesn't call the Service itself, which would reach only
+# one Kamailio: it reads the Service's endpoints and calls every ready pod behind it.
 apiVersion: v1
 kind: Service
 metadata:

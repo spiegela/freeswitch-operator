@@ -6,7 +6,10 @@ dispatcher module. The operator keeps the dispatcher list in step with the fleet
 1. It writes `dispatcher.list` into the ConfigMap named by `spec.dispatcher.configMapName`. Kamailio mounts that
    ConfigMap as a directory (not with `subPath`, which never updates).
 2. When `spec.dispatcher.jsonrpcURL` is set, it calls `dispatcher.set_state` to take a leaving node out at once, and
-   `dispatcher.reload` once the kubelet has had time to write the new file (`reloadDelaySeconds`).
+   `dispatcher.reload` once the kubelet has had time to write the new file (`reloadDelaySeconds`), checking with
+   `dispatcher.list` that the new list was loaded and reloading again until it is. The URL names
+   the `kamailio` Service, and the operator makes each call on every ready pod behind it, so both Kamailios stay
+   in step.
 
 `kamailio.cfg` routes:
 - requests from a peer to a FreeSWITCH node, round-robin, failing over when a node answers `503` (paused, draining)
