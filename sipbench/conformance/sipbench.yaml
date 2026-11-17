@@ -1,0 +1,194 @@
+source:
+  id: sipbench
+  title: Cases written for this edge
+  reference: ../scenarios
+  citation: Our own cases; the IDs follow the scenario names.
+
+cases:
+  - id: sb-basic-two-way
+    ref: basic-two-way
+    title: Inbound call bridged to the backend with two-way audio
+    area: call-setup
+    component: edge
+    expect: >
+      A call from the far end is bridged to the backend; each side hears the other's tone; the caller's BYE ends
+      both legs.
+    status: covered
+    scenarios: [basic-two-way]
+
+  - id: sb-backend-hangup
+    ref: backend-hangup
+    title: Backend ends the call
+    area: call-release
+    component: edge
+    expect: The backend's BYE reaches the far end and both legs end.
+    status: covered
+    scenarios: [backend-hangup]
+
+  - id: sb-cancel
+    ref: cancel
+    title: Caller abandons while the backend rings
+    area: call-release
+    component: edge
+    expect: The far end's CANCEL reaches the backend while it rings, and the INVITE ends with 487.
+    status: covered
+    scenarios: [cancel]
+
+  - id: sb-busy-fallback
+    ref: busy-fallback
+    title: Backend busy (486) gets the fallback, not the failure
+    area: error-handling
+    component: edge
+    expect: >
+      The edge answers the caller with the fallback (in the bench a 1400 Hz tone and an X-Fallback-Reason header)
+      instead of passing 486 back, then hangs up.
+    status: covered
+    scenarios: [busy-fallback]
+
+  - id: sb-decline-fallback
+    ref: decline-fallback
+    title: Backend declines (603) gets the fallback
+    area: error-handling
+    component: edge
+    expect: As for busy, on a 603.
+    status: covered
+    scenarios: [decline-fallback]
+
+  - id: sb-no-answer-fallback
+    ref: no-answer-fallback
+    title: Backend rings past the ring timeout gets the fallback
+    area: error-handling
+    component: edge
+    expect: After the edge's ring timeout the backend leg is cancelled and the caller gets the fallback.
+    status: covered
+    scenarios: [no-answer-fallback]
+
+  - id: sb-unreachable-fallback
+    ref: unreachable-fallback
+    title: Backend unreachable gets the fallback
+    area: error-handling
+    component: edge
+    expect: A backend address that never answers ends in the fallback once the ring timeout passes.
+    status: covered
+    scenarios: [unreachable-fallback]
+
+  - id: sb-header-passthrough
+    ref: header-passthrough
+    title: X- headers reach the backend
+    area: headers
+    component: edge
+    expect: X- headers from the far end arrive at the backend unchanged.
+    status: covered
+    scenarios: [header-passthrough]
+
+  - id: sb-blind-transfer
+    ref: blind-transfer
+    title: Backend's blind transfer (REFER) is carried out by the edge
+    area: transfer
+    component: edge
+    expect: >
+      The edge accepts the REFER (202 and NOTIFY), releases the backend, and calls the target carrying the
+      caller's X- headers; the caller hears the backend, then the target, and the target hears the caller.
+    status: covered
+    scenarios: [blind-transfer]
+
+  - id: sb-dtmf-both-ways
+    ref: dtmf-both-ways
+    title: RFC 2833 DTMF in both directions
+    area: dtmf
+    component: edge
+    expect: Telephone-events pass through the edge both ways with the same digits.
+    status: covered
+    scenarios: [dtmf-both-ways]
+
+  - id: sb-codec-pcmu
+    ref: codec-pcmu
+    title: PCMU-only offer
+    area: codec
+    component: edge
+    expect: A far end offering only PCMU gets PCMU end to end, with audio both ways.
+    status: covered
+    scenarios: [codec-pcmu]
+
+  - id: sb-codec-pcma
+    ref: codec-pcma
+    title: PCMA-only offer
+    area: codec
+    component: edge
+    expect: A far end offering only PCMA gets PCMA end to end, with audio both ways.
+    status: covered
+    scenarios: [codec-pcma]
+
+  - id: sb-codec-g722
+    ref: codec-g722
+    title: G.722-only offer
+    area: codec
+    component: edge
+    expect: A far end offering only G.722 gets G.722 end to end.
+    status: partial
+    scenarios: [codec-g722]
+    gap: Skipped in every run so far; the bench image has no G.722 module and the runner no G.722 codec.
+
+  - id: sb-admission-limit
+    ref: admission-limit
+    title: Calls beyond the session limit are refused with 503
+    area: capacity
+    component: freeswitch
+    expect: With the limit at two bridged calls, a third is refused with 503 and never reaches the backend.
+    status: partial
+    scenarios: [admission-limit]
+    gap: Runs only against a single FreeSWITCH with its event socket (compose); behind Kamailio it is skipped.
+
+  - id: sb-options
+    ref: options
+    title: OPTIONS answered while there is capacity
+    area: keepalive
+    component: edge
+    expect: OPTIONS to the edge get 200 (what a peer's or Kamailio's probing sends).
+    status: covered
+    scenarios: [options]
+
+  - id: sb-echo
+    ref: echo
+    title: Media path round trip
+    area: media
+    component: edge
+    expect: The backend echoes the caller's audio; the caller hears its own 600 Hz back through the edge.
+    status: covered
+    scenarios: [echo]
+
+  - id: sb-drain-mid-call
+    ref: drain-mid-call
+    title: Node drained with a live call
+    area: resilience
+    component: operator
+    expect: >
+      A draining node leaves dispatch at once, new calls go elsewhere, its live call continues with audio until
+      it ends, and only then does the node stop.
+    status: planned
+    milestone: M2
+    gap: Verified by hand on kind in M1; to become a scenario.
+
+  - id: sb-rolling-update-live-call
+    ref: rolling-update-live-call
+    title: Rolling update with a live call
+    area: resilience
+    component: operator
+    expect: >
+      The roll replaces one node at a time and waits for the node carrying the call to drain; the call keeps
+      two-way audio throughout.
+    status: planned
+    milestone: M2
+    gap: Verified by hand on kind in M1; to become a scenario.
+
+  - id: sb-bad-config-stops-roll
+    ref: bad-config-stops-roll
+    title: A config without a SIP profile on the SIP port stops the roll at one node
+    area: resilience
+    component: operator
+    expect: >
+      The first replaced node never passes its startup probe, the roll stops there, the other nodes keep serving,
+      and restoring the config lets the roll finish.
+    status: planned
+    milestone: M2
+    gap: Verified by hand on kind in M1; to become a scenario.
