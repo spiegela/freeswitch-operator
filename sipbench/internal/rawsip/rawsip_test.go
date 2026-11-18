@@ -34,6 +34,19 @@ func TestFill(t *testing.T) {
 		t.Errorf("keepLineEnds changed the message: %q", msg)
 	}
 
+	// Blank lines ahead of the start line aren't the end of the headers.
+	msg, _ = Fill("\n\nINVITE sip:x SIP/2.0\nContent-Length: {{len}}\n\nab{{nul}}{{pad:3}}\n", nil, true)
+	if want := "\r\n\r\nINVITE sip:x SIP/2.0\r\nContent-Length: 8\r\n\r\nab\x00xxx\r\n"; string(msg) != want {
+		t.Errorf("got %q\nwant %q", msg, want)
+	}
+	msg, _ = Fill("\nOPTIONS sip:x SIP/2.0\nContent-Length: 0\n", nil, true)
+	if !strings.HasSuffix(string(msg), "Content-Length: 0\r\n\r\n") {
+		t.Errorf("a leading blank line kept the closing one from being added: %q", msg)
+	}
+	if _, err := Fill("{{pad:x}}", nil, true); err == nil {
+		t.Errorf("a bad pad size must be an error")
+	}
+
 	if _, err := Fill("{{nope}}", nil, true); err == nil {
 		t.Errorf("an unknown placeholder must be an error")
 	}

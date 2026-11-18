@@ -189,3 +189,15 @@ cases:
       and restoring the config lets the roll finish.
     status: covered
     scenarios: [bad-config-stops-roll]
+
+  - id: sb-silent-node-stays-in-rotation
+    ref: raw-malformed-requests
+    title: A request every node discards doesn't take the nodes out of rotation
+    area: resilience
+    component: proxy
+    expect: >
+      When every node discards a request without answering (one with a From Kamailio passes but FreeSWITCH can't
+      parse), the caller gets 408 and the nodes stay in rotation: the next call goes through. Only a 503, or failed
+      probes, take a node out; otherwise one malformed INVITE would empty the fleet.
+    status: covered
+    scenarios: [raw-malformed-requests]

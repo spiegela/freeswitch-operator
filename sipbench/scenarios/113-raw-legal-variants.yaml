@@ -1,0 +1,368 @@
+name: raw-legal-variants
+area: proxy-validation
+description: >
+  Requests that are odd but legal, each of which a node must get rather than a 400 from Kamailio. New requests from
+  a peer all go to a FreeSWITCH node, so the answer shows whose it is: a call that reaches the backend, or a refusal
+  carrying the node's User-Agent. A method Kamailio doesn't know, and one that only looks like REGISTER, get the
+  node's 501; escaped URIs, a semicolon in the user part, very long header values, unusual transports in lower Via
+  values, a Date in a local time zone, odd but legal From, To and Contact URIs, several Via values in one header,
+  escaped headers in the Request-URI and trailing spaces on the request line all reach the node (the last two are
+  among the forms RFC 4475 allows a proxy to accept). A body of an unknown type, and an Accept that rules out SDP,
+  get the node's 415 and 406; a MESSAGE with a binary multipart body gets the node's answer (407 here). A scheme we
+  don't route, and an OPTIONS keepalive whose branch is the bare magic cookie, Kamailio answers itself.
+requires: [proxy, mock]
+raw:
+  # RFC 4475 3.1.1.2: a method token, branch and Call-ID using the widest legal character ranges, and a quoted
+  # string with escapes.
+  - id: unknown-method
+    message: |
+      FROBNICATE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}-.!%*_+`'~
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 FROBNICATE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Subject: "a \"quoted\" string, a \\ and UTF-8: été"
+      Content-Length: 0
+    expect: {status: 501, headers: {User-Agent: sipbench-edge}}
+  # RFC 4475 3.1.1.5: % in a method is just a token character; this is not REGISTER.
+  - id: percent-method
+    message: |
+      RE%47ISTER sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 RE%47ISTER
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    expect: {status: 501, headers: {User-Agent: sipbench-edge}}
+  # RFC 4475 3.1.1.3: escapes in the Request-URI user part (%61 is a) and parameters, and in the From user part.
+  - id: uri-escapes
+    message: |
+      INVITE sip:%61gent@{{edge}};x-esc=%41%42 SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sip%62ench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 200, backend: {answered: true}}
+  # RFC 4475 3.1.1.9: the user part is all of agent;par=u@example.net. It names no backend route, so the bench
+  # dialplan's fallback answers once the backend doesn't (X-Fallback-Reason); the point is that a node took it.
+  - id: user-semicolon
+    waitMs: 12000
+    message: |
+      INVITE sip:agent;par=u%40example.net@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 200, headers: {X-Fallback-Reason: ''}, backend: {calls: 0}}
+  # RFC 4475 3.1.1.7: a display name over 1,000 bytes, 80 parameters on From and To, and a 2,000-byte header value.
+  - id: long-values
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: "long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name long display name " <sip:sipbench@{{localHost}}>;tag={{tag}};p0=v0;p1=v1;p2=v2;p3=v3;p4=v4;p5=v5;p6=v6;p7=v7;p8=v8;p9=v9;p10=v10;p11=v11;p12=v12;p13=v13;p14=v14;p15=v15;p16=v16;p17=v17;p18=v18;p19=v19;p20=v20;p21=v21;p22=v22;p23=v23;p24=v24;p25=v25;p26=v26;p27=v27;p28=v28;p29=v29;p30=v30;p31=v31;p32=v32;p33=v33;p34=v34;p35=v35;p36=v36;p37=v37;p38=v38;p39=v39;p40=v40;p41=v41;p42=v42;p43=v43;p44=v44;p45=v45;p46=v46;p47=v47;p48=v48;p49=v49;p50=v50;p51=v51;p52=v52;p53=v53;p54=v54;p55=v55;p56=v56;p57=v57;p58=v58;p59=v59;p60=v60;p61=v61;p62=v62;p63=v63;p64=v64;p65=v65;p66=v66;p67=v67;p68=v68;p69=v69;p70=v70;p71=v71;p72=v72;p73=v73;p74=v74;p75=v75;p76=v76;p77=v77;p78=v78;p79=v79
+      To: <sip:agent@{{edge}}>;t0=x;t1=x;t2=x;t3=x;t4=x;t5=x;t6=x;t7=x;t8=x;t9=x;t10=x;t11=x;t12=x;t13=x;t14=x;t15=x;t16=x;t17=x;t18=x;t19=x;t20=x;t21=x;t22=x;t23=x;t24=x;t25=x;t26=x;t27=x;t28=x;t29=x;t30=x;t31=x;t32=x;t33=x;t34=x;t35=x;t36=x;t37=x;t38=x;t39=x;t40=x;t41=x;t42=x;t43=x;t44=x;t45=x;t46=x;t47=x;t48=x;t49=x;t50=x;t51=x;t52=x;t53=x;t54=x;t55=x;t56=x;t57=x;t58=x;t59=x;t60=x;t61=x;t62=x;t63=x;t64=x;t65=x;t66=x;t67=x;t68=x;t69=x;t70=x;t71=x;t72=x;t73=x;t74=x;t75=x;t76=x;t77=x;t78=x;t79=x
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      X-Long: {{pad:2000}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 200, backend: {answered: true}}
+  # RFC 4475 3.1.1.10: lower Via values name TLS, SCTP and a transport nobody knows; the answer goes back by the top
+  # one.
+  - id: via-transports
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Via: SIP/2.0/TLS a.example.com:5061;branch=z9hG4bKa
+      Via: SIP/2.0/SCTP b.example.com;branch=z9hG4bKb
+      Via: SIP/2.0/NEWTRANSPORT c.example.com;branch=z9hG4bKc
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 200, backend: {answered: true}}
+  # ETSI SIP_MG_TE_V_001: two Via values in one header field.
+  - id: multi-value-via
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}, SIP/2.0/UDP d.example.com;branch=z9hG4bKd
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 200, backend: {answered: true}}
+  # ETSI SIP_MG_PR_V_001 and SIP_MG_TE_V_001: transport and method parameters in the From and To URIs; an escaped
+  # user, an unknown parameter and URI headers in the Contact.
+  - id: odd-uris
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}};transport=udp;method=INVITE>;tag={{tag}}
+      To: <sip:agent@{{edge}};transport=udp>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sip%62ench@{{local}};x-unknown=1?Subject=hi&Priority=urgent>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 200, backend: {answered: true}}
+  # RFC 4475 3.1.2.12: a Date header not in GMT. Kamailio doesn't use Date, so it shouldn't refuse the request for
+  # it.
+  - id: date-local-zone
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Date: Wed, 18 Nov 2026 04:15:00 PST
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 200, backend: {answered: true}}
+  # RFC 4475 3.1.2.11: escaped headers in the Request-URI. Kamailio may refuse it or pass it on; it passes it on,
+  # and the node takes the call.
+  - id: escaped-headers-in-request-uri
+    message: |
+      INVITE sip:agent@{{edge}}?Route=%3Csip:evil.example.com%3E&X-Injected=1 SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 200, backend: {answered: true}}
+  # RFC 4475 3.1.2.10: spaces after the SIP version. Kamailio may refuse it or pass it on; it passes it on.
+  - id: request-line-trailing-spaces
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0   
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 200, backend: {answered: true}}
+  # RFC 4475 3.1.1.6: no whitespace between a quoted display name and <. The OPTIONS has a user part, so it goes to
+  # a node rather than being a keepalive.
+  - id: no-space-before-bracket
+    message: |
+      OPTIONS sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: "sipbench"<sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 OPTIONS
+      Content-Length: 0
+    expect: {status: 200, headers: {User-Agent: sipbench-edge}}
+  # RFC 4475 3.3.6: a body of a type nobody knows. Kamailio relays it; the node, an endpoint here, answers 415.
+  - id: unknown-content-type
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/x-sipbench-unknown
+      Content-Length: {{len}}
+
+      not an offer
+    expect: {status: 415, headers: {User-Agent: sipbench-edge}, backend: {calls: 0}}
+  # RFC 4475 3.3.15: an Accept that leaves out application/sdp. Kamailio relays it; the node answers 406.
+  - id: accept-rules-out-sdp
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Accept: text/x-sipbench-only
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 406, headers: {User-Agent: sipbench-edge}, backend: {calls: 0}}
+  # RFC 4475 3.1.1.11: a MESSAGE with a multipart body, one part binary with zero bytes in it, framed by Content-
+  # Length. The node's answer (407: the bench profile challenges MESSAGE) comes back.
+  - id: multipart-binary-message
+    message: |
+      MESSAGE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 MESSAGE
+      X-Sipbench-Call: {{bench}}
+      Content-Type: multipart/mixed;boundary=sb-boundary
+      Content-Length: {{len}}
+
+      --sb-boundary
+      Content-Type: text/plain
+
+      hello
+      --sb-boundary
+      Content-Type: application/octet-stream
+      Content-Transfer-Encoding: binary
+
+      {{nul}}{{nul}}binary{{nul}}
+      --sb-boundary--
+    expect: {status: 407, headers: {User-Agent: sipbench-edge}}
+  # RFC 4475 3.3.3: a registered scheme we never route (pres:). Kamailio answers 416 itself.
+  - id: atypical-scheme
+    message: |
+      INVITE pres:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    expect: {status: 416, headers: {Server: kamailio}, backend: {calls: 0}}
+  # RFC 4475 3.2.1: a branch that is only the z9hG4bK cookie. Kamailio handles the keepalive normally.
+  - id: bare-magic-cookie
+    message: |
+      OPTIONS sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch=z9hG4bK
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 OPTIONS
+      Content-Length: 0
+    expect: {status: 200, headers: {Server: kamailio}}
