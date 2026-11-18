@@ -205,17 +205,17 @@ source_order,source,id,area,component,status,milestone,title
 4,RFC 4475 torture messages,rfc4475-3.3.14,parsing,proxy,partial,,Escaped Route header in a REGISTER Contact URI
 4,RFC 4475 torture messages,rfc4475-3.3.15,parsing,proxy,covered,,Accept that rules out SDP on an INVITE
 4,RFC 4475 torture messages,rfc4475-3.4.1,parsing,proxy,covered,,"RFC 2543-style INVITE (no branch, no From tag, no Content-Length, no Max-Forwards)"
-5,Network impairment,imp-sig-invite-lost,impairment,proxy,planned,M2b,The carrier's first INVITE is lost on the way in
-5,Network impairment,imp-sig-provisional-lost,impairment,proxy,planned,M2b,The edge's 100 and 180 are lost on the way out
-5,Network impairment,imp-sig-200-lost,impairment,freeswitch,planned,M2b,The 200 to the INVITE is lost on the way out
-5,Network impairment,imp-sig-ack-lost-once,impairment,freeswitch,planned,M2b,The caller's ACK is lost once
-5,Network impairment,imp-sig-ack-never,timers,freeswitch,planned,M2b,No ACK ever reaches the edge
-5,Network impairment,imp-sig-bye-lost-in,impairment,edge,planned,M2b,The caller's BYE is lost once on the way in
-5,Network impairment,imp-sig-bye-lost-out,impairment,freeswitch,planned,M2b,The edge's BYE toward the caller is lost once
+5,Network impairment,imp-sig-invite-lost,impairment,proxy,partial,,The carrier's first INVITE is lost on the way in
+5,Network impairment,imp-sig-provisional-lost,impairment,proxy,covered,,The edge's 100 and 180 are lost on the way out
+5,Network impairment,imp-sig-200-lost,impairment,freeswitch,covered,,The 200 to the INVITE is lost on the way out
+5,Network impairment,imp-sig-ack-lost-once,impairment,freeswitch,covered,,The caller's ACK is lost once
+5,Network impairment,imp-sig-ack-never,timers,freeswitch,partial,,No ACK ever reaches the edge
+5,Network impairment,imp-sig-bye-lost-in,impairment,edge,partial,,The caller's BYE is lost once on the way in
+5,Network impairment,imp-sig-bye-lost-out,impairment,freeswitch,partial,,The edge's BYE toward the caller is lost once
 5,Network impairment,imp-sig-bye-never,timers,freeswitch,planned,M2b,"The caller's BYE never arrives, and its media stops"
-5,Network impairment,imp-sig-loss-random,impairment,edge,planned,M2b,Random SIP loss on the carrier side
-5,Network impairment,imp-sig-delay-over-t1,impairment,proxy,planned,M2b,Signalling round trip longer than T1
-5,Network impairment,imp-sig-bye-before-ack,impairment,freeswitch,planned,M2b,The caller's BYE overtakes its ACK
+5,Network impairment,imp-sig-loss-random,impairment,edge,partial,,Random SIP loss on the carrier side
+5,Network impairment,imp-sig-delay-over-t1,impairment,proxy,covered,,Signalling round trip longer than T1
+5,Network impairment,imp-sig-bye-before-ack,impairment,freeswitch,partial,,The caller's BYE overtakes its ACK
 5,Network impairment,imp-sig-cancel-crosses-200,impairment,edge,planned,M2b,CANCEL crosses the 200 on a delayed path
 5,Network impairment,imp-node-invite-lost,impairment,proxy,planned,M2b,Kamailio's INVITE to the chosen node is lost once
 5,Network impairment,imp-node-unreachable,resilience,proxy,planned,M2b,The chosen node is unreachable; Kamailio fails over
@@ -225,22 +225,22 @@ source_order,source,id,area,component,status,milestone,title
 5,Network impairment,imp-node-sig-loss,impairment,proxy,planned,M2b,Random SIP loss between Kamailio and the nodes
 5,Network impairment,imp-node-probe-loss,keepalive,proxy,planned,M2b,Probe loss does not flap a healthy node
 5,Network impairment,imp-node-cut-mid-call,resilience,edge,planned,M2b,Kamailio loses a node mid-call; the call's media does not
-5,Network impairment,imp-media-baseline,media,freeswitch,planned,M2b,What the edge itself adds on a clean network
-5,Network impairment,imp-media-y1541-class0,impairment,edge,planned,M2b,Audio on a network at the class 0 limits
-5,Network impairment,imp-media-lte,impairment,edge,planned,M2b,Audio on a typical mobile caller's path
-5,Network impairment,imp-media-lte-bad,impairment,edge,planned,M2b,Audio on a poor mobile path with bursty loss
-5,Network impairment,imp-media-loss-random,impairment,edge,planned,M2b,Random media loss at 3% and 5%
+5,Network impairment,imp-media-baseline,media,freeswitch,partial,,What the edge itself adds on a clean network
+5,Network impairment,imp-media-y1541-class0,impairment,edge,partial,,Audio on a network at the class 0 limits
+5,Network impairment,imp-media-lte,impairment,edge,partial,,Audio on a typical mobile caller's path
+5,Network impairment,imp-media-lte-bad,impairment,edge,partial,,Audio on a poor mobile path with bursty loss
+5,Network impairment,imp-media-loss-random,impairment,edge,partial,,Random media loss at 3% and 5%
 5,Network impairment,imp-media-jitter,impairment,freeswitch,planned,M2b,"Jitter passes through, not amplified"
-5,Network impairment,imp-media-delay,impairment,edge,planned,M2b,Long one-way delay
+5,Network impairment,imp-media-delay,impairment,edge,partial,,Long one-way delay
 5,Network impairment,imp-media-reorder,impairment,freeswitch,planned,M2b,Reordered media
 5,Network impairment,imp-media-duplicate,impairment,freeswitch,planned,M2b,Duplicated media
-5,Network impairment,imp-media-asymmetric,impairment,edge,planned,M2b,Loss in one direction only
-5,Network impairment,imp-dtmf-loss,dtmf,edge,planned,M2b,"RFC 4733 digits survive media loss, once each"
+5,Network impairment,imp-media-asymmetric,impairment,edge,partial,,Loss in one direction only
+5,Network impairment,imp-dtmf-loss,dtmf,edge,covered,,"RFC 4733 digits survive media loss, once each"
 5,Network impairment,imp-dtmf-end-lost,dtmf,edge,planned,M2b,All end packets of one digit lost
-5,Network impairment,imp-dtmf-duplicate-reorder,dtmf,edge,planned,M2b,Duplicated and reordered event packets
-5,Network impairment,imp-oneway-inbound-dead,impairment,freeswitch,planned,M2b,The caller's media never arrives
-5,Network impairment,imp-oneway-outbound-dead,impairment,freeswitch,planned,M2b,The edge's media never reaches the caller
-5,Network impairment,imp-blackhole-short,impairment,edge,planned,M2b,Everything to the caller is cut for 2 s mid-call
+5,Network impairment,imp-dtmf-duplicate-reorder,dtmf,edge,partial,,Duplicated and reordered event packets
+5,Network impairment,imp-oneway-inbound-dead,impairment,freeswitch,partial,,The caller's media never arrives
+5,Network impairment,imp-oneway-outbound-dead,impairment,freeswitch,covered,,The edge's media never reaches the caller
+5,Network impairment,imp-blackhole-short,impairment,edge,partial,,Everything to the caller is cut for 2 s mid-call
 5,Network impairment,imp-blackhole-long,impairment,edge,planned,M2b,The carrier link goes dark for good mid-call
 5,Network impairment,imp-backend-media-loss,impairment,freeswitch,planned,M2b,Impaired media between the edge and the backend
 5,Network impairment,imp-backend-sig-loss,impairment,freeswitch,planned,M2b,Lost 200 and BYE between the edge and the backend
