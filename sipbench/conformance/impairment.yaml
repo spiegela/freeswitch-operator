@@ -354,8 +354,9 @@ cases:
     status: partial
     scenarios: [netem-media-y1541-class0]
     gap: >
-      Checks tones both ways, and bounds the caller's measured loss at 1% rather than within 0.1 point of the rate;
-      MOS and the jitter the edge adds are not measured yet.
+      Checks tones both ways (the caller's in 90% of frames: it has no jitter buffer, and 50 ms of jitter reorders
+      its packets), and bounds the caller's measured loss at 1% rather than within 0.1 point of the rate; MOS and
+      the jitter the edge adds are not measured yet.
 
   - id: imp-media-lte
     ref: "rtpbench:lte; i3f 7.3.5"
