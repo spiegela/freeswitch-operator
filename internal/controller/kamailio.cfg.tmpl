@@ -26,6 +26,11 @@ debug=2
 log_stderror=yes
 children=4
 tcp_accept_no_cl=yes
+# The largest message Kamailio takes in. The default (32767) drops larger datagrams unread; a SIP message may be up
+# to 65,535 bytes (a large SDP offer, a long header list), and ETSI TS 102 027-2 checks a proxy relays one that size.
+msg_recv_max_size=65535
+# The same over TCP: the read buffer one message must fit in (the default overruns well short of that).
+tcp_rd_buf_size=65536
 auto_aliases=no
 
 listen=udp:0.0.0.0:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
