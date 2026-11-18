@@ -32,6 +32,7 @@ type kamailioSettings struct {
 	rpcPort         int32
 	metricsPort     int32
 	addressSource   sipv1alpha1.ExternalAddressSource
+	addressPool     string // the SIPAddressPool, when addressSource is AddressPool
 	requireAddress  bool
 	maxDrainSeconds int64
 	reloadDelaySecs int32
@@ -64,6 +65,7 @@ func resolveKamailio(kc *sipv1alpha1.KamailioCluster) kamailioSettings {
 	if s.ExternalAddress.Source != "" {
 		out.addressSource = s.ExternalAddress.Source
 	}
+	out.addressPool = addressPoolName(s.ExternalAddress)
 	if s.ExternalAddress.Required != nil {
 		out.requireAddress = *s.ExternalAddress.Required
 	}

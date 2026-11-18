@@ -471,3 +471,55 @@ func TestBuildStatefulSetExporter(t *testing.T) {
 		t.Error("the exporter runs as non-root")
 	}
 }
+
+func TestAddressWaitOnlyForRequiredPoolAddresses(t *testing.T) {
+	waits := func(mutate func(*sipv1alpha1.FreeswitchCluster)) []corev1.Container {
+		fsc := testCluster()
+		mutate(fsc)
+		var out []corev1.Container
+		for _, c := range buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec.InitContainers {
+			if c.Name == addressWaitContainerName {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	pool := func(f *sipv1alpha1.FreeswitchCluster) {
+		f.Spec.ExternalAddress = sipv1alpha1.ExternalAddressSpec{
+			Source:         sipv1alpha1.ExternalAddressAddressPool,
+			AddressPoolRef: &sipv1alpha1.AddressPoolReference{Name: "edge-media"},
+		}
+	}
+
+	got := waits(pool)
+	if len(got) != 1 {
+		t.Fatalf("pool-sourced fleet: %d wait containers, want 1", len(got))
+	}
+	c := got[0]
+	if c.Image != testCluster().Spec.Image || c.Command[0] != shell || c.Command[2] != addressWaitScript {
+		t.Errorf("wait container runs %v in %s", c.Command, c.Image)
+	}
+	if len(c.VolumeMounts) != 1 || c.VolumeMounts[0].Name != volumePodInfo || c.VolumeMounts[0].MountPath != podInfoDir {
+		t.Errorf("wait container mounts %+v, want the pod-info volume", c.VolumeMounts)
+	}
+
+	// It must come before the exporter, so nothing starts until the address is known.
+	fsc := testCluster()
+	pool(fsc)
+	fsc.Spec.Metrics = &sipv1alpha1.FreeswitchMetricsSpec{ExporterImage: "example/exporter:1"}
+	inits := buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec.InitContainers
+	if len(inits) != 2 || inits[0].Name != addressWaitContainerName {
+		t.Errorf("init containers %v, want the wait first", []string{inits[0].Name, inits[len(inits)-1].Name})
+	}
+
+	// Other fleets' templates are unchanged, so upgrading the operator doesn't roll them.
+	if got := waits(func(*sipv1alpha1.FreeswitchCluster) {}); len(got) != 0 {
+		t.Error("NodeExternalIP fleet got a wait container")
+	}
+	if got := waits(func(f *sipv1alpha1.FreeswitchCluster) {
+		pool(f)
+		f.Spec.ExternalAddress.Required = ptr.To(false)
+	}); len(got) != 0 {
+		t.Error("fleet with required: false got a wait container")
+	}
+}

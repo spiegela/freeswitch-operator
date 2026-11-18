@@ -1,0 +1,20 @@
+apiVersion: sip.instruments.com/v1alpha1
+kind: SIPAddressPool
+metadata:
+  labels:
+    app.kubernetes.io/name: freeswitch-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: edge-signalling
+spec:
+  # Existing Elastic IPs that peers allow-list. The operator associates them with edge nodes and disassociates them;
+  # it never allocates or releases one. Run the manager with --address-providers=aws, and give its service account
+  # ec2:DescribeAddresses, ec2:DescribeNetworkInterfaces, ec2:AssociateAddress and ec2:DisassociateAddress (IRSA
+  # or EKS Pod Identity). A fleet uses the pool with
+  #   externalAddress: {source: AddressPool, addressPoolRef: {name: edge-signalling}}
+  # Keep one more address than nodes, for the node that replaces one.
+  awsElasticIP:
+    region: us-east-1
+    allocationIDs:
+      - eipalloc-0123456789abcdef0
+      - eipalloc-0123456789abcdef1
+      - eipalloc-0123456789abcdef2

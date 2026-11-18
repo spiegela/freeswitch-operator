@@ -17,9 +17,11 @@ import (
 )
 
 const (
-	containerName         = "freeswitch"
-	exporterContainerName = "exporter"
-	portMetrics           = "metrics"
+	containerName = "freeswitch"
+	// addressWaitContainerName is the init container that waits for a pool address.
+	addressWaitContainerName = "wait-for-address"
+	exporterContainerName    = "exporter"
+	portMetrics              = "metrics"
 
 	// Volume and port names both fleets' pods use.
 	volumeScripts = "operator-scripts"
@@ -47,6 +49,7 @@ type settings struct {
 	rtpStart        int32
 	rtpEnd          int32
 	addressSource   sipv1alpha1.ExternalAddressSource
+	addressPool     string // the SIPAddressPool, when addressSource is AddressPool
 	requireAddress  bool
 	maxDrainSeconds int64
 	dispatcher      *sipv1alpha1.DispatcherSpec
@@ -83,6 +86,7 @@ func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
 	if s.ExternalAddress.Source != "" {
 		out.addressSource = s.ExternalAddress.Source
 	}
+	out.addressPool = addressPoolName(s.ExternalAddress)
 	if s.ExternalAddress.Required != nil {
 		out.requireAddress = *s.ExternalAddress.Required
 	}
@@ -332,7 +336,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 			}},
 		}},
 		Containers:     []corev1.Container{container},
-		InitContainers: exporterContainers(cfg.metrics),
+		InitContainers: slices.Concat(addressWaitContainers(fsc, cfg), exporterContainers(cfg.metrics)),
 		Volumes:        volumes,
 	}
 
@@ -355,6 +359,36 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 			},
 		},
 	}
+}
+
+// addressWaitContainers holds FreeSWITCH back until the pod knows its external address, for a fleet that draws
+// from a SIPAddressPool and requires one. FreeSWITCH reads the address once, at start, and a pool binds it only after
+// the pod is on its node, which can take seconds (an Elastic IP association); started sooner, FreeSWITCH would
+// advertise the wrong address for its whole life. The wait has no limit: a pool with no address left keeps the pod
+// here, unready, and reports Degraded. Nil for other fleets, so their pod template, and the fleet, stay as they were.
+func addressWaitContainers(fsc *sipv1alpha1.FreeswitchCluster, cfg settings) []corev1.Container {
+	if cfg.addressSource != sipv1alpha1.ExternalAddressAddressPool || !cfg.requireAddress {
+		return nil
+	}
+	return []corev1.Container{{
+		Name:            addressWaitContainerName,
+		Image:           fsc.Spec.Image,
+		ImagePullPolicy: fsc.Spec.ImagePullPolicy,
+		Command:         []string{shell, "-c", addressWaitScript},
+		Env:             []corev1.EnvVar{{Name: "FS_EXTERNAL_ADDRESS_FILE", Value: externalAddrFile}},
+		VolumeMounts:    []corev1.VolumeMount{{Name: volumePodInfo, MountPath: podInfoDir, ReadOnly: true}},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("5m"), corev1.ResourceMemory: resource.MustParse("8Mi")},
+			Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("32Mi")},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			RunAsNonRoot:             ptr.To(true),
+			RunAsUser:                ptr.To[int64](65532),
+			AllowPrivilegeEscalation: ptr.To(false),
+			ReadOnlyRootFilesystem:   ptr.To(true),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		},
+	}}
 }
 
 // exporterContainers is the metrics exporter as a native sidecar (an init container that keeps running): it starts

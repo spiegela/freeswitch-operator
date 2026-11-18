@@ -4,6 +4,7 @@
 resources:
 - bases/sip.instruments.com_freeswitchclusters.yaml
 - bases/sip.instruments.com_kamailioclusters.yaml
+- bases/sip.instruments.com_sipaddresspools.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

@@ -39,12 +39,14 @@ const (
 )
 
 // ExternalAddressSource says where a FreeSWITCH pod's public address comes from.
-// +kubebuilder:validation:Enum=NodeExternalIP;None
+// +kubebuilder:validation:Enum=NodeExternalIP;AddressPool;None
 type ExternalAddressSource string
 
 const (
 	// ExternalAddressNodeExternalIP uses the ExternalIP address of the node the pod runs on.
 	ExternalAddressNodeExternalIP ExternalAddressSource = "NodeExternalIP"
+	// ExternalAddressAddressPool uses the address a SIPAddressPool binds to the node the pod runs on.
+	ExternalAddressAddressPool ExternalAddressSource = "AddressPool"
 	// ExternalAddressNone gives the pod no external address; FreeSWITCH uses its local address.
 	ExternalAddressNone ExternalAddressSource = "None"
 )
@@ -97,17 +99,29 @@ type RTPSpec struct {
 }
 
 // ExternalAddressSpec says how each pod learns the public address it advertises.
+// +kubebuilder:validation:XValidation:rule="(has(self.source) && self.source == 'AddressPool') == has(self.addressPoolRef)",message="addressPoolRef is set exactly when source is AddressPool"
 type ExternalAddressSpec struct {
-	// source of the address. AddressPool is planned.
+	// source of the address.
 	// +kubebuilder:default=NodeExternalIP
 	// +optional
 	Source ExternalAddressSource `json:"source,omitempty"`
+
+	// addressPoolRef names the SIPAddressPool to draw from when source is AddressPool. Pools are cluster-scoped.
+	// +optional
+	AddressPoolRef *AddressPoolReference `json:"addressPoolRef,omitempty"`
 
 	// required makes a pod unready until it has an external address, so it takes no calls it couldn't
 	// answer correctly. Ignored when source is None.
 	// +kubebuilder:default=true
 	// +optional
 	Required *bool `json:"required,omitempty"`
+}
+
+// AddressPoolReference names a SIPAddressPool.
+type AddressPoolReference struct {
+	// name of the SIPAddressPool.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
 }
 
 // ConfigSpec assembles FreeSWITCH's configuration directory from ConfigMaps.

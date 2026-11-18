@@ -2,4 +2,5 @@
 resources:
 - sip_v1alpha1_freeswitchcluster.yaml
 - sip_v1alpha1_kamailiocluster.yaml
+- sip_v1alpha1_sipaddresspool.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

@@ -1,0 +1,264 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: sipaddresspools.sip.instruments.com
+spec:
+  group: sip.instruments.com
+  names:
+    kind: SIPAddressPool
+    listKind: SIPAddressPoolList
+    plural: sipaddresspools
+    shortNames:
+    - sap
+    singular: sipaddresspool
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.datapath
+      name: Datapath
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SIPAddressPool is a fixed list of public addresses the operator binds to edge nodes, one per node, for the
+          FreeswitchClusters and KamailioClusters that use it. It is cluster-scoped: addresses and nodes are cluster-wide.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of SIPAddressPool
+            properties:
+              awsElasticIP:
+                description: awsElasticIP draws the pool from AWS Elastic IPs, associated
+                  with each node's instance (1:1 NAT).
+                properties:
+                  allocationIDs:
+                    description: |-
+                      allocationIDs of the Elastic IPs in the pool. The operator associates them with edge nodes' instances and
+                      disassociates them, and never touches any other Elastic IP. Removing an ID leaves its address wherever it is.
+                    items:
+                      pattern: ^eipalloc-[0-9a-f]+$
+                      type: string
+                    maxItems: 256
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: set
+                  region:
+                    description: region the Elastic IPs and the edge nodes are in.
+                    minLength: 1
+                    type: string
+                required:
+                - allocationIDs
+                - region
+                type: object
+            type: object
+            x-kubernetes-validations:
+            - message: exactly one provider must be set
+              rule: '[has(self.awsElasticIP)].filter(x, x).size() == 1'
+          status:
+            description: status defines the observed state of SIPAddressPool
+            properties:
+              addresses:
+                description: addresses in the pool, in the order of the spec.
+                items:
+                  description: PoolAddress is one of a pool's addresses as the provider
+                    last reported it.
+                  properties:
+                    address:
+                      description: address is the IP address peers see.
+                      type: string
+                    claimedBy:
+                      description: claimedBy are the pods on the node that use the
+                        address.
+                      items:
+                        description: AddressClaim is a pod that uses a pool's address.
+                        properties:
+                          kind:
+                            description: 'kind of the fleet the pod belongs to: FreeswitchCluster
+                              or KamailioCluster.'
+                            type: string
+                          name:
+                            description: name of the fleet.
+                            type: string
+                          namespace:
+                            description: namespace of the fleet and pod.
+                            type: string
+                          pod:
+                            description: pod name.
+                            type: string
+                        required:
+                        - kind
+                        - name
+                        - namespace
+                        - pod
+                        type: object
+                      type: array
+                    id:
+                      description: id is the provider's name for the address, such
+                        as an Elastic IP's allocation ID.
+                      type: string
+                    lastClaimedBy:
+                      description: |-
+                        lastClaimedBy are the pods that used the address most recently. A pod that comes back (a StatefulSet pod
+                        replaced onto a new node) gets the same address when it is free.
+                      items:
+                        description: AddressClaim is a pod that uses a pool's address.
+                        properties:
+                          kind:
+                            description: 'kind of the fleet the pod belongs to: FreeswitchCluster
+                              or KamailioCluster.'
+                            type: string
+                          name:
+                            description: name of the fleet.
+                            type: string
+                          namespace:
+                            description: namespace of the fleet and pod.
+                            type: string
+                          pod:
+                            description: pod name.
+                            type: string
+                        required:
+                        - kind
+                        - name
+                        - namespace
+                        - pod
+                        type: object
+                      type: array
+                    message:
+                      description: message explains a Conflict or Error.
+                      type: string
+                    node:
+                      description: node the address is bound to.
+                      type: string
+                    nodeID:
+                      description: nodeID is the provider's name for what the address
+                        is bound to, such as an instance ID.
+                      type: string
+                    state:
+                      description: state of the address.
+                      enum:
+                      - Free
+                      - Bound
+                      - Idle
+                      - Conflict
+                      - Error
+                      type: string
+                  required:
+                  - id
+                  - state
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - id
+                x-kubernetes-list-type: map
+              conditions:
+                description: |-
+                  conditions: Ready (every node running a pod that uses the pool holds one of its addresses, and the provider
+                  answered) and Degraded (a node is waiting for an address, or an address is in Conflict or Error).
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              datapath:
+                description: datapath of the pool's provider.
+                enum:
+                - NAT
+                - Local
+                type: string
+              fencing:
+                description: fencing of the pool's provider.
+                enum:
+                - Authoritative
+                - Advisory
+                type: string
+              observedGeneration:
+                description: observedGeneration is the generation the status describes.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

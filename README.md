@@ -89,8 +89,8 @@ spec:
     portRangeStart: 16384           # v0. Must match the node security group
     portRangeEnd: 32768
   externalAddress:
-    source: NodeExternalIP          # v0: NodeExternalIP | None. Planned: AddressPool
-    # addressPoolRef: {name: edge-media}       # planned (M3), a cluster-scoped SIPAddressPool (loop 4)
+    source: NodeExternalIP          # v0: NodeExternalIP | None. M3: AddressPool
+    # addressPoolRef: {name: edge-media}       # M3, with AddressPool: a cluster-scoped SIPAddressPool (loop 4)
   config:
     mountPath: /usr/local/freeswitch/conf   # v0. Point FreeSWITCH here with -conf
     configMapRefs:                  # v0. Each ConfigMap's keys become files in its directory; an edit rolls the fleet
@@ -191,8 +191,8 @@ volume, which, unlike environment variables, updates in place. The bundled `vars
 - **v0, `source: NodeExternalIP`:** the address comes from the node's `ExternalIP`.
 - **M3, `source: AddressPool`:** a `SIPAddressPool` holds a fixed list of addresses and binds one to each edge node,
   Kamailio's and FreeSWITCH's alike. When a node is replaced, its address moves to the replacement. One spare node
-  and one spare address are the norm. Pools work the same whatever provides the addresses: MetalLB first (on kind
-  and on-prem), then AWS Elastic IPs, and later other clouds and plain routed addresses.
+  and one spare address are the norm. Pools work the same whatever provides the addresses: AWS Elastic IPs today,
+  MetalLB next (on kind and on-prem), and later other clouds and plain routed addresses.
 
 **Pools and providers.** A pool is cluster-scoped, like a `GatewayClass`: addresses and nodes are cluster-wide, and
 two pools must never hold the same address. Its spec names exactly one provider, each with its own block, so a new
@@ -204,39 +204,65 @@ kind: SIPAddressPool
 metadata:
   name: edge-media
 spec:
-  metalLB:                          # M3. Addresses MetalLB announces (L2 or BGP)
-    ipAddressPool: sip-edge         #   a MetalLB IPAddressPool in MetalLB's namespace
-    addresses: [192.168.1.240, 192.168.1.241, 192.168.1.242, 192.168.1.243]
-  # awsElasticIP:                   # M3, after MetalLB
-  #   region: us-east-1
-  #   allocationIDs: [eipalloc-…]   # or a tag selector
+  awsElasticIP:                     # M3. Existing Elastic IPs, associated with each node's instance
+    region: us-east-1
+    allocationIDs: [eipalloc-…, eipalloc-…, eipalloc-…]
+  # metalLB:                        # M3, next. Addresses MetalLB announces (L2 or BGP)
+  #   ipAddressPool: sip-edge       #   a MetalLB IPAddressPool in MetalLB's namespace
+  #   addresses: [192.168.1.240, …]
   # static:                         # planned. Routed to the nodes by something else (BGP, keepalived, by hand)
   #   addresses: [198.51.100.10, …]
 status:
-  datapath: Local                   # Local | NAT, from the provider
-  fencing: Advisory                 # Authoritative | Advisory, from the provider
+  datapath: NAT                     # NAT | Local, from the provider
+  fencing: Authoritative            # Authoritative | Advisory, from the provider
   addresses:
-    - address: 192.168.1.240
-      node: edge-worker2
-      claimedBy: {kind: FreeswitchCluster, namespace: telephony, name: edge, pod: edge-1}
-      state: Bound                  # Free | Bound | Fenced | Error
-  conditions: []
+    - id: eipalloc-…
+      address: 203.0.113.10
+      state: Bound                  # Free | Bound | Idle | Conflict | Error
+      node: ip-10-0-1-23
+      nodeID: i-0abc…
+      claimedBy: [{kind: FreeswitchCluster, namespace: telephony, name: edge, pod: edge-1}]
+      lastClaimedBy: [{kind: FreeswitchCluster, namespace: telephony, name: edge, pod: edge-1}]
+  conditions: []                    # Ready, Degraded
 ```
 
 A fleet sets `externalAddress: {source: AddressPool, addressPoolRef: {name: …}}`. Signalling and media can draw from
 separate pools, even with different providers. The pool controller does everything that doesn't depend on the
 provider, once, tested against a fake provider: which address goes to which node, keeping a node's address while it
 lives, giving a replaced node's address to its replacement, holding the spare, conditions and status, and the pod
-annotations. A provider only observes, binds and unbinds:
+annotations. A provider ([`internal/addresspool`](internal/addresspool/provider.go)) only names nodes, observes,
+binds and unbinds:
 
 ```go
 type Provider interface {
-	Capabilities() Capabilities                          // Datapath (NAT | Local), Fencing (Authoritative | Advisory)
-	Observe(ctx context.Context) ([]Observed, error)     // where each address is bound now; truth, not our status
-	Bind(ctx context.Context, a Address, n *corev1.Node) error // idempotent; refuses an address bound elsewhere
-	Unbind(ctx context.Context, a Address) error         // Authoritative: works with the node dead or unreachable
+	Capabilities() Capabilities                     // Datapath (NAT | Local), Fencing (Authoritative | Advisory)
+	NodeID(n *corev1.Node) (string, error)          // the provider's name for a node (an instance ID)
+	Observe(ctx context.Context) ([]Address, error) // where each address is bound now; truth, not our status
+	Bind(ctx context.Context, a Address, nodeID string) error // refuses an address bound anywhere
+	Unbind(ctx context.Context, a Address) error    // Authoritative: works with the node dead or unreachable
 }
 ```
+
+The planner's rules, the same for every provider:
+- A node running a pod that uses the pool holds one address, `Bound`, for as long as the node lives, through rolling
+  updates and drains (a draining pod still claims it). A node with none of those pods keeps any address it has,
+  `Idle`: a spare, or a node between pods.
+- A node that needs an address gets, in order: a free or idle address one of its pods used last (`lastClaimedBy`),
+  so a StatefulSet pod replaced onto a new node keeps its address; any free address; then an idle one, moved off its
+  node. With none left, the pool is `Degraded` and the node's pods wait without an address (unready, when
+  `required`).
+- An address the pool bound to a node that has left the cluster is unbound and reused. One bound outside the cluster
+  that the pool didn't put there is a `Conflict`, left alone.
+- An address the provider can't report on is an `Error`, and its node keeps it, so a provider outage doesn't make
+  pods unready or move addresses.
+- A pod waits for its address before it starts. FreeSWITCH and Kamailio both read it once, at start, and a pool binds
+  it only once the pod is on its node, which takes seconds on AWS; started sooner, they would advertise the node's
+  private address for their whole life. Kamailio's entrypoint already waits when the address is `required`; a
+  FreeSWITCH fleet that draws from a pool and requires its address gets an init container (`wait-for-address`, in
+  the FreeSWITCH image) that waits for the downward-API file, which the kubelet fills in within seconds of the
+  annotation (checked on kind). Fleets on other sources get no such container, so their pod template is unchanged.
+- The pool rereads its provider 5 s after binding or unbinding, and every 5 minutes otherwise, to see changes made
+  outside the operator. Deleting a pool leaves its addresses where they are, since they may be carrying calls.
 
 **Datapath: how the address reaches the node.** Providers don't differ only in API calls, and the difference
 changes what the fleets render:
@@ -249,8 +275,9 @@ changes what the fleets render:
 | Kamailio | `listen` on the private address, `advertise` the public one | `listen` on the address, plus the private listener FreeSWITCH uses |
 | Replies and outbound traffic | leave from the address through the translation | leave from the address only because the process binds to it |
 
-So each pod gets two annotations: `sip.instruments.com/external-address` (what it advertises) and
-`sip.instruments.com/bind-address` (what it binds RTP, or Kamailio's peer-facing listener, to). FreeSWITCH's SIP
+So with the first `Local` provider (MetalLB), each pod gets a second annotation beside
+`sip.instruments.com/external-address` (what it advertises): `sip.instruments.com/bind-address` (what it binds RTP,
+or Kamailio's peer-facing listener, to). `NAT` pods bind their node's own address, as they do today. FreeSWITCH's SIP
 profile stays on the private address either way: Kamailio dispatches to it there, and peers only ever signal through
 Kamailio.
 
@@ -261,13 +288,22 @@ still has it). Failover (loop 5) moves addresses on its own only for `Authoritat
 
 **Rules for every provider.**
 - The operator never allocates or releases an address: peers allow-list them, so the pool is a fixed list. It only
-  binds and unbinds, and only addresses listed in, or tagged for, the pool. On AWS it associates with
-  `AllowReassociation=false`, so it never takes an address from something it doesn't know about.
-- After a restart it reads bindings back from the provider before acting, and an address bound somewhere the pool
-  didn't put it marks the pool `Degraded` rather than being moved.
-- Providers are turned on with a manager flag (`--address-providers=metallb,aws`), so the operator holds the
-  permissions of the providers in use only: EC2 address calls through IRSA or Pod Identity for AWS, Services in
-  MetalLB's namespace for MetalLB.
+  binds and unbinds, and only addresses listed in the pool.
+- A pool is checked against the provider, not against its own status: after a restart it reads bindings back
+  before acting.
+- Providers are turned on with a manager flag (`--address-providers=aws`), so the operator holds the permissions
+  of the providers in use only. A pool whose provider isn't enabled reports `ProviderUnavailable`.
+
+**AWS Elastic IPs.** The pool lists existing allocation IDs (see
+[`config/samples`](config/samples/sip_v1alpha1_sipaddresspool.yaml)). A node is named by the instance in its
+provider ID. Binding associates the Elastic IP with the primary private address of the instance's primary network
+interface, naming the interface, since AWS refuses an instance ID alone once an instance has a second interface (EKS
+nodes with the VPC CNI usually do). It uses `AllowReassociation=false`, so it never takes an address from anything
+else, and it refuses an instance that already holds an Elastic IP outside the pool. An address associated with an
+interface that belongs to no instance (a NAT gateway, a load balancer) is a `Conflict`; an allocation ID that doesn't
+exist is an `Error` on that address alone. The manager's service account needs `ec2:DescribeAddresses`,
+`ec2:DescribeNetworkInterfaces`, `ec2:AssociateAddress` and `ec2:DisassociateAddress`, through IRSA or EKS Pod
+Identity.
 
 **MetalLB.** MetalLB only announces addresses that belong to a `LoadBalancer` Service, and a Service can't carry
 FreeSWITCH's 16k-port RTP range. So for each binding the pool makes one Service for the SIP port only, pinned to its
@@ -276,7 +312,7 @@ MetalLB then announces the address from that pod's node and won't give it to any
 edge nodes (a DaemonSet with `NET_ADMIN`) adds the address as a /32 on a dummy interface while it is bound there,
 so every RTP port is delivered locally, and removes it on unbind. On kind, MetalLB in L2 mode on the Docker network
 lets the bench reach pooled addresses, so the pool, replacements and media to the pooled address are all checked
-in CI before EKS.
+in CI.
 
 ### 5. Failover with fencing (v1, M4)
 
@@ -557,7 +593,7 @@ which version runs where.
 | M2 | `KamailioCluster`: managed Kamailio, authenticated JSON-RPC, restart list; sipbench fleet scenarios (drain mid-call, rolling update with live calls, run as scenarios rather than by hand), with call records kept per run so concurrent runners don't clear each other's; opt-in liveness (hang detection) with a lax default | done |
 | M2b | Bench tooling for the remaining conformance cases: a raw-message sender (RFC 4475 torture tests; first sets in: proxy validation, stray requests and responses, lexical variants, the request-side torture and size cases; responses from a node still need a stand-in node), netem impairment (first set in: loss, burst loss, delay, jitter, reordering and duplication on the carrier-edge link through tc, and named SIP messages dropped or held, over signalling, media, DTMF, one-way audio and a short blackhole; MOS, RFC 3550 jitter and the proxy-node and edge-backend links still to come), and runner features (re-INVITE, hand-set headers, DTMF before answer, full INVITE records) | in progress |
 | M2c | [Metrics and alerts](#metrics-and-alerts): every component exposes metrics an OpenTelemetry Collector scrapes (its prometheus receiver) and sends on over OTLP: Kamailio's `/metrics` (its statistics, refusals, silent drops), FreeSWITCH through an exporter beside each node (sessions, calls, paused, SIP profile state and counters), and the operator's own (controller-runtime's, plus fleet, drain and dispatcher-reload metrics); alert rules with promtool tests; on kind a Collector sending to a Prometheus that evaluates the rules, and scenarios that check counters through it | in progress |
-| M3 | [`SIPAddressPool`](#4-external-addresses-v0-node-addresses-pool-in-m3), shared by both fleets, with providers behind one interface: the provider-neutral pool controller (tested against a fake provider), the `bind-address` split in both fleets' config, and MetalLB first (Service per binding, node agent for the address, on kind with sipbench checking replacement and media to the pooled address); then AWS Elastic IPs (unit-tested against a fake EC2 client) and the edge node group on EKS | planned |
+| M3 | [`SIPAddressPool`](#4-external-addresses-v0-node-addresses-pool-in-m3), shared by both fleets, with providers behind one interface. In: the provider-neutral pool controller (tested against a fake provider) and AWS Elastic IPs (unit-tested against a fake EC2 client). Still to come: the edge node group on EKS and a run there; MetalLB (Service per binding, node agent for the address, the `bind-address` split in both fleets' config, on kind with sipbench checking replacement and media to the pooled address) | in progress |
 | M4 | v1 failover with fencing and call recovery | planned |
 | M5 | Typed peer and ACL resources (loop 9), outbound registrations when a peer needs them (loop 8), sipbench peer mocks; reload without restart | planned |
 | M6 | Peers on the inside network (loop 10): FreeSWITCH inside profile and dispatcher set, Kamailio inside listener, sipbench VPN peer mock | planned |
