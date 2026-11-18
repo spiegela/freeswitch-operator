@@ -18,7 +18,7 @@ source_order,source,id,area,component,status,milestone,title
 1,sipbench scenarios,sb-drain-mid-call,resilience,operator,covered,,Node drained with a live call
 1,sipbench scenarios,sb-rolling-update-live-call,resilience,operator,covered,,Rolling update with a live call
 1,sipbench scenarios,sb-bad-config-stops-roll,resilience,operator,covered,,A config without a SIP profile on the SIP port stops the roll at one node
-1,sipbench scenarios,sb-silent-node-stays-in-rotation,resilience,proxy,covered,,A request every node discards doesn't take the nodes out of rotation
+1,sipbench scenarios,sb-silent-node-stays-in-rotation,resilience,proxy,planned,M2b,A request every node discards doesn't take the nodes out of rotation
 2,i3 Forum interop plan R2,i3f-1-directions,call-setup,edge,planned,M5,Every case is run in both directions
 2,i3 Forum interop plan R2,i3f-1-traces,headers,edge,planned,M5,SIP traces of each test call conform to the interconnection profile
 2,i3 Forum interop plan R2,i3f-2-cli,identity,edge,planned,M5,Caller ID is verifiable at the called end
@@ -183,7 +183,7 @@ source_order,source,id,area,component,status,milestone,title
 4,RFC 4475 torture messages,rfc4475-3.1.2.12,parsing,proxy,covered,,Date header with a non-GMT time zone
 4,RFC 4475 torture messages,rfc4475-3.1.2.13,parsing,proxy,partial,,Contact URI with headers not enclosed in <> (REGISTER)
 4,RFC 4475 torture messages,rfc4475-3.1.2.14,parsing,proxy,partial,,Spaces inside an addr-spec
-4,RFC 4475 torture messages,rfc4475-3.1.2.15,parsing,proxy,partial,,Unquoted display names with non-token characters
+4,RFC 4475 torture messages,rfc4475-3.1.2.15,parsing,proxy,covered,,Unquoted display names with non-token characters
 4,RFC 4475 torture messages,rfc4475-3.1.2.16,parsing,proxy,partial,,Unknown SIP version
 4,RFC 4475 torture messages,rfc4475-3.1.2.17,parsing,proxy,covered,,Request-line method differs from CSeq method
 4,RFC 4475 torture messages,rfc4475-3.1.2.18,parsing,proxy,covered,,Unknown method with a mismatched CSeq method
