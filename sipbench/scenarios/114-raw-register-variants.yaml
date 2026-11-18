@@ -1,0 +1,107 @@
+name: raw-register-variants
+area: proxy-validation
+description: >
+  REGISTERs with unusual but legal content: escaped nulls in user parts, an Authorization in a scheme nobody knows,
+  an unknown Contact parameter, an unknown parameter inside the Contact URI, and an escaped Route header inside it.
+  The edge has no registrar, so a REGISTER from a peer is handled like any other new request: it goes to a node,
+  which challenges it (401). Kamailio must not refuse any of these for their syntax. Two are refused: a REGISTER
+  whose From is an http URI gets 400 from Kamailio (its sanity check parses From and To as SIP URIs), and one whose
+  Contact URI carries headers without <> gets 400 from the node; both are recorded as gaps in the conformance
+  record.
+requires: [proxy, mock]
+raw:
+  # RFC 4475 3.1.1.4: %00 in user parts, and two Contact values.
+  - id: escaped-nulls
+    message: |
+      REGISTER sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sb-%00-null@{{edge}}>;tag={{tag}}
+      To: <sip:sb-%00-null@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 REGISTER
+      Contact: <sip:sb-%00-null@{{local}}>
+      Contact: <sip:sb-%00-two@{{local}}>
+      Content-Length: 0
+    expect: {status: 401, headers: {User-Agent: sipbench-edge}}
+  # RFC 4475 3.3.7: an Authorization header in a scheme nobody knows.
+  - id: unknown-auth-scheme
+    message: |
+      REGISTER sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{edge}}>;tag={{tag}}
+      To: <sip:sipbench@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 REGISTER
+      Contact: <sip:sipbench@{{local}}>
+      Authorization: SipbenchScheme opaque="abc", realm="x"
+      Content-Length: 0
+    expect: {status: 401, headers: {User-Agent: sipbench-edge}}
+  # RFC 4475 3.3.12: an unknown parameter on the Contact value.
+  - id: contact-parameter
+    message: |
+      REGISTER sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{edge}}>;tag={{tag}}
+      To: <sip:sipbench@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 REGISTER
+      Contact: <sip:sipbench@{{local}}>;x-sb-param=1
+      Content-Length: 0
+    expect: {status: 401, headers: {User-Agent: sipbench-edge}}
+  # RFC 4475 3.3.13: an unknown parameter inside the Contact URI.
+  - id: contact-uri-parameter
+    message: |
+      REGISTER sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{edge}}>;tag={{tag}}
+      To: <sip:sipbench@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 REGISTER
+      Contact: <sip:sipbench@{{local}};x-sb-param=1>
+      Content-Length: 0
+    expect: {status: 401, headers: {User-Agent: sipbench-edge}}
+  # RFC 4475 3.3.14: an escaped Route header inside the Contact URI.
+  - id: escaped-route-in-contact
+    message: |
+      REGISTER sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{edge}}>;tag={{tag}}
+      To: <sip:sipbench@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 REGISTER
+      Contact: <sip:sipbench@{{local}}?Route=%3Csip:evil.example.com%3E>
+      Content-Length: 0
+    expect: {status: 401, headers: {User-Agent: sipbench-edge}}
+  # RFC 4475 3.3.4: tel, http and mailto URIs in To, From and Contact. A proxy shouldn't object; Kamailio's sanity
+  # check answers 400 for the http From (a gap).
+  - id: non-sip-schemes
+    message: |
+      REGISTER sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <http://example.com/sipbench>;tag={{tag}}
+      To: <tel:+15555550100>
+      Call-ID: {{callId}}
+      CSeq: 1 REGISTER
+      Contact: <mailto:sipbench@example.com>
+      Content-Length: 0
+    expect: {status: 400, headers: {Server: kamailio}}
+  # RFC 4475 3.1.2.13: a Contact URI with headers, not in <>. Kamailio passes it on and the node answers 400
+  # (Kamailio should refuse it itself: a gap).
+  - id: contact-headers-without-brackets
+    message: |
+      REGISTER sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{edge}}>;tag={{tag}}
+      To: <sip:sipbench@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 REGISTER
+      Contact: sip:sipbench@{{local}}?Route=%3Csip:evil.example.com%3E
+      Content-Length: 0
+    expect: {status: 400}

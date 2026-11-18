@@ -422,9 +422,12 @@ cases:
       An INVITE with escaped characters, escaped delimiters, unknown parameters, header or method parameters in its
       Contact URI, or transport, header or method parameters in its From and To URIs, is relayed with those URIs
       unchanged.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender (or hand-set Contact, From and To) and a mock recording what reaches it.
+    status: partial
+    scenarios: [raw-legal-variants]
+    gap: >
+      INVITEs with escaped and unknown Contact parts, URI headers, and transport and method parameters in From and
+      To get through and the calls complete (checked); the relayed copies aren't inspected for the URIs arriving
+      unchanged.
 
   - id: etsi-SIP_MG_PR_V_006
     ref: SIP_MG_PR_V_006, SIP_MG_PR_I_006
@@ -458,7 +461,9 @@ cases:
     expect: A 299 or a 200 with an unknown reason phrase from a node is relayed to the peer as a success.
     status: planned
     milestone: M2b
-    gap: Needs a node stand-in behind Kamailio that sends hand-crafted responses.
+    gap: >
+      Needs a stand-in node: a raw sender the dispatcher list treats as a FreeSWITCH node, answering relayed
+      requests with crafted responses (the real nodes, a back-to-back agent, rebuild every response they send).
 
   - id: etsi-SIP_MG_PR_V_015
     ref: >-
@@ -470,9 +475,13 @@ cases:
       Kamailio relays a 65,535-byte INVITE and one preceded by blank lines on TCP. Over UDP, a request whose body
       is shorter than Content-Length gets 400 and a response like that is dropped; extra bytes past
       Content-Length are cut off and the message relayed.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender over UDP and TCP.
+    status: partial
+    scenarios: [raw-large-messages, raw-content-length, raw-trailing-octets]
+    gap: >
+      An INVITE of about 60 KB over UDP and 64 KB over TCP, and one after blank lines over TCP, are relayed
+      (checked); a body shorter than Content-Length over UDP gets 400 (checked). Not checked: the exact 65,535 bytes
+      (a UDP datagram carries at most 65,507), a short-bodied response being dropped. Deviation, not decided: octets
+      past Content-Length get 400 rather than being cut off.
 
   - id: etsi-SIP_MG_PR_I_005
     ref: SIP_MG_PR_I_005
@@ -703,7 +712,7 @@ cases:
       unknown or misplaced headers, or lexical variants still gets 200.
     status: planned
     milestone: M2b
-    gap: The mock needs to send hand-crafted responses and requests (raw-message sender).
+    gap: Needs the mock backend to answer with crafted responses (it builds well-formed ones only).
 
   - id: etsi-SIP_MG_OE_V_015
     ref: SIP_MG_OE_V_015, SIP_MG_OE_I_009, SIP_MG_OE_I_010
@@ -713,13 +722,13 @@ cases:
     expect: >
       Over UDP, FreeSWITCH accepts and ACKs a 65,535-byte 2xx, discards one whose body is shorter than its
       Content-Length, and ignores bytes past Content-Length.
-    status: planned
-    milestone: M2b
-    gap: The mock needs a raw-message sender over UDP.
 
   # ---------------------------------------------------------------------------------------------------------
   # Terminating endpoint (clause 5.3.2, 5.4.2, 5.5.4): FreeSWITCH as UAS toward carriers
   # ---------------------------------------------------------------------------------------------------------
+    status: planned
+    milestone: M2b
+    gap: Needs the mock backend to answer with crafted responses (it builds well-formed ones only).
   - id: etsi-SIP_CC_TE_CE_V_001
     ref: SIP_CC_TE_CE_V_001, SIP_CC_TE_CE_V_007
     title: FreeSWITCH answers an INVITE with an SDP offer, answer in the 2xx
@@ -929,9 +938,8 @@ cases:
       An INVITE from a carrier with escaped or odd Contact URIs, unknown or misplaced headers, mixed case, folding,
       compact forms, multi-value or several Via headers, a lowercase SIP version, or stray parameters in From and
       To, passes Kamailio and is answered 2xx by FreeSWITCH, call bridged.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender for the INVITE (sipgo normalises what it sends).
+    status: covered
+    scenarios: [raw-legal-variants, raw-lexical-variants]
 
   - id: etsi-SIP_MG_TE_V_006
     ref: SIP_MG_TE_V_006
@@ -952,9 +960,12 @@ cases:
       A 65,535-byte INVITE over UDP and one led by blank lines over TCP get answered 2xx; missing Call-ID, or a
       body shorter than Content-Length over UDP, gets 400 (from Kamailio, before FreeSWITCH); bytes past
       Content-Length are ignored.
-    status: planned
-    milestone: M2b
-    gap: Needs a raw-message sender over UDP and TCP.
+    status: partial
+    scenarios: [raw-large-messages, raw-content-length, raw-missing-headers, raw-trailing-octets]
+    gap: >
+      Large INVITEs over UDP and TCP and one led by blank lines are answered 2xx (checked); a short body over UDP
+      gets 400 from Kamailio (checked). Deviations, not decided: a missing Call-ID is dropped unanswered rather than
+      400, and octets past Content-Length get 400 rather than being ignored.
 
   - id: etsi-SIP_CC_TE_CE_V_034
     ref: >-

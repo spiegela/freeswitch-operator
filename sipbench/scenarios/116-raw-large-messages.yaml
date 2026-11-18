@@ -1,0 +1,203 @@
+name: raw-large-messages
+area: proxy-validation
+description: >
+  Message size and stream framing. An INVITE of about 60 KB over UDP (close to the most a UDP datagram carries) and
+  one of about 64 KB over TCP, each with a large SDP body, are relayed and the calls complete; so is an INVITE sent
+  over TCP after blank lines, which a stream may carry between messages. Kamailio needs its receive limits raised
+  for this (msg_recv_max_size and tcp_rd_buf_size): by default it drops a datagram over 32 KB unread and overruns
+  its TCP read buffer well short of 64 KB.
+requires: [proxy, mock]
+raw:
+  - id: large-udp
+    waitMs: 5000
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+      a=x-sipbench-pad0:{{pad:1000}}
+      a=x-sipbench-pad1:{{pad:1000}}
+      a=x-sipbench-pad2:{{pad:1000}}
+      a=x-sipbench-pad3:{{pad:1000}}
+      a=x-sipbench-pad4:{{pad:1000}}
+      a=x-sipbench-pad5:{{pad:1000}}
+      a=x-sipbench-pad6:{{pad:1000}}
+      a=x-sipbench-pad7:{{pad:1000}}
+      a=x-sipbench-pad8:{{pad:1000}}
+      a=x-sipbench-pad9:{{pad:1000}}
+      a=x-sipbench-pad10:{{pad:1000}}
+      a=x-sipbench-pad11:{{pad:1000}}
+      a=x-sipbench-pad12:{{pad:1000}}
+      a=x-sipbench-pad13:{{pad:1000}}
+      a=x-sipbench-pad14:{{pad:1000}}
+      a=x-sipbench-pad15:{{pad:1000}}
+      a=x-sipbench-pad16:{{pad:1000}}
+      a=x-sipbench-pad17:{{pad:1000}}
+      a=x-sipbench-pad18:{{pad:1000}}
+      a=x-sipbench-pad19:{{pad:1000}}
+      a=x-sipbench-pad20:{{pad:1000}}
+      a=x-sipbench-pad21:{{pad:1000}}
+      a=x-sipbench-pad22:{{pad:1000}}
+      a=x-sipbench-pad23:{{pad:1000}}
+      a=x-sipbench-pad24:{{pad:1000}}
+      a=x-sipbench-pad25:{{pad:1000}}
+      a=x-sipbench-pad26:{{pad:1000}}
+      a=x-sipbench-pad27:{{pad:1000}}
+      a=x-sipbench-pad28:{{pad:1000}}
+      a=x-sipbench-pad29:{{pad:1000}}
+      a=x-sipbench-pad30:{{pad:1000}}
+      a=x-sipbench-pad31:{{pad:1000}}
+      a=x-sipbench-pad32:{{pad:1000}}
+      a=x-sipbench-pad33:{{pad:1000}}
+      a=x-sipbench-pad34:{{pad:1000}}
+      a=x-sipbench-pad35:{{pad:1000}}
+      a=x-sipbench-pad36:{{pad:1000}}
+      a=x-sipbench-pad37:{{pad:1000}}
+      a=x-sipbench-pad38:{{pad:1000}}
+      a=x-sipbench-pad39:{{pad:1000}}
+      a=x-sipbench-pad40:{{pad:1000}}
+      a=x-sipbench-pad41:{{pad:1000}}
+      a=x-sipbench-pad42:{{pad:1000}}
+      a=x-sipbench-pad43:{{pad:1000}}
+      a=x-sipbench-pad44:{{pad:1000}}
+      a=x-sipbench-pad45:{{pad:1000}}
+      a=x-sipbench-pad46:{{pad:1000}}
+      a=x-sipbench-pad47:{{pad:1000}}
+      a=x-sipbench-pad48:{{pad:1000}}
+      a=x-sipbench-pad49:{{pad:1000}}
+      a=x-sipbench-pad50:{{pad:1000}}
+      a=x-sipbench-pad51:{{pad:1000}}
+      a=x-sipbench-pad52:{{pad:1000}}
+      a=x-sipbench-pad53:{{pad:1000}}
+      a=x-sipbench-pad54:{{pad:1000}}
+      a=x-sipbench-pad55:{{pad:1000}}
+      a=x-sipbench-pad56:{{pad:1000}}
+      a=x-sipbench-pad57:{{pad:1000}}
+    expect: {status: 200, backend: {answered: true}}
+  - id: large-tcp
+    transport: tcp
+    waitMs: 5000
+    message: |
+      INVITE sip:agent@{{edge}};transport=tcp SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}};transport=tcp>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+      a=x-sipbench-pad0:{{pad:1000}}
+      a=x-sipbench-pad1:{{pad:1000}}
+      a=x-sipbench-pad2:{{pad:1000}}
+      a=x-sipbench-pad3:{{pad:1000}}
+      a=x-sipbench-pad4:{{pad:1000}}
+      a=x-sipbench-pad5:{{pad:1000}}
+      a=x-sipbench-pad6:{{pad:1000}}
+      a=x-sipbench-pad7:{{pad:1000}}
+      a=x-sipbench-pad8:{{pad:1000}}
+      a=x-sipbench-pad9:{{pad:1000}}
+      a=x-sipbench-pad10:{{pad:1000}}
+      a=x-sipbench-pad11:{{pad:1000}}
+      a=x-sipbench-pad12:{{pad:1000}}
+      a=x-sipbench-pad13:{{pad:1000}}
+      a=x-sipbench-pad14:{{pad:1000}}
+      a=x-sipbench-pad15:{{pad:1000}}
+      a=x-sipbench-pad16:{{pad:1000}}
+      a=x-sipbench-pad17:{{pad:1000}}
+      a=x-sipbench-pad18:{{pad:1000}}
+      a=x-sipbench-pad19:{{pad:1000}}
+      a=x-sipbench-pad20:{{pad:1000}}
+      a=x-sipbench-pad21:{{pad:1000}}
+      a=x-sipbench-pad22:{{pad:1000}}
+      a=x-sipbench-pad23:{{pad:1000}}
+      a=x-sipbench-pad24:{{pad:1000}}
+      a=x-sipbench-pad25:{{pad:1000}}
+      a=x-sipbench-pad26:{{pad:1000}}
+      a=x-sipbench-pad27:{{pad:1000}}
+      a=x-sipbench-pad28:{{pad:1000}}
+      a=x-sipbench-pad29:{{pad:1000}}
+      a=x-sipbench-pad30:{{pad:1000}}
+      a=x-sipbench-pad31:{{pad:1000}}
+      a=x-sipbench-pad32:{{pad:1000}}
+      a=x-sipbench-pad33:{{pad:1000}}
+      a=x-sipbench-pad34:{{pad:1000}}
+      a=x-sipbench-pad35:{{pad:1000}}
+      a=x-sipbench-pad36:{{pad:1000}}
+      a=x-sipbench-pad37:{{pad:1000}}
+      a=x-sipbench-pad38:{{pad:1000}}
+      a=x-sipbench-pad39:{{pad:1000}}
+      a=x-sipbench-pad40:{{pad:1000}}
+      a=x-sipbench-pad41:{{pad:1000}}
+      a=x-sipbench-pad42:{{pad:1000}}
+      a=x-sipbench-pad43:{{pad:1000}}
+      a=x-sipbench-pad44:{{pad:1000}}
+      a=x-sipbench-pad45:{{pad:1000}}
+      a=x-sipbench-pad46:{{pad:1000}}
+      a=x-sipbench-pad47:{{pad:1000}}
+      a=x-sipbench-pad48:{{pad:1000}}
+      a=x-sipbench-pad49:{{pad:1000}}
+      a=x-sipbench-pad50:{{pad:1000}}
+      a=x-sipbench-pad51:{{pad:1000}}
+      a=x-sipbench-pad52:{{pad:1000}}
+      a=x-sipbench-pad53:{{pad:1000}}
+      a=x-sipbench-pad54:{{pad:1000}}
+      a=x-sipbench-pad55:{{pad:1000}}
+      a=x-sipbench-pad56:{{pad:1000}}
+      a=x-sipbench-pad57:{{pad:1000}}
+      a=x-sipbench-pad58:{{pad:1000}}
+      a=x-sipbench-pad59:{{pad:1000}}
+      a=x-sipbench-pad60:{{pad:1000}}
+      a=x-sipbench-pad61:{{pad:1000}}
+      a=x-sipbench-pad62:{{pad:1000}}
+    expect: {status: 200, backend: {answered: true}}
+  - id: blank-lines-first-tcp
+    transport: tcp
+    message: |2
+
+
+      INVITE sip:agent@{{edge}};transport=tcp SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}};transport=tcp>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 200, backend: {answered: true}}
