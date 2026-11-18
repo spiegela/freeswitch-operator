@@ -424,3 +424,50 @@ func TestJSONRPCNotifierSendsTheToken(t *testing.T) {
 		t.Fatalf("Authorization headers %q", got)
 	}
 }
+
+func TestBuildStatefulSetExporter(t *testing.T) {
+	fsc := &sipv1alpha1.FreeswitchCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "edge", Namespace: "telephony"},
+		Spec:       sipv1alpha1.FreeswitchClusterSpec{Image: "freeswitch:test"},
+	}
+	if n := len(buildStatefulSet(fsc, configLayout{mountPath: configDir}).Spec.Template.Spec.InitContainers); n != 0 {
+		t.Fatalf("no spec.metrics: %d init containers, want none", n)
+	}
+
+	fsc.Spec.Metrics = &sipv1alpha1.FreeswitchMetricsSpec{
+		ExporterImage: "freeswitch-exporter:test",
+		EventSocket: sipv1alpha1.EventSocketSpec{PasswordSecretRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "esl"}, Key: "password",
+		}},
+	}
+	spec := buildStatefulSet(fsc, configLayout{mountPath: configDir}).Spec.Template.Spec
+	if len(spec.InitContainers) != 1 {
+		t.Fatalf("init containers = %d, want the exporter", len(spec.InitContainers))
+	}
+	c := spec.InitContainers[0]
+	if c.Name != "exporter" || c.Image != "freeswitch-exporter:test" {
+		t.Errorf("exporter container %q image %q", c.Name, c.Image)
+	}
+	if c.RestartPolicy == nil || *c.RestartPolicy != corev1.ContainerRestartPolicyAlways {
+		t.Error("the exporter must be a native sidecar (restartPolicy Always), so it outlives FreeSWITCH's drain")
+	}
+	if len(c.Ports) != 1 || c.Ports[0].Name != "metrics" || c.Ports[0].ContainerPort != 9282 || c.Ports[0].HostPort != 9282 {
+		t.Errorf("ports = %+v, want metrics on 9282", c.Ports)
+	}
+	env := map[string]corev1.EnvVar{}
+	for _, e := range c.Env {
+		env[e.Name] = e
+	}
+	if env["ESL_PORT"].Value != "8021" || env["METRICS_PORT"].Value != "9282" {
+		t.Errorf("env = %+v", c.Env)
+	}
+	if env["POD_IP"].ValueFrom == nil || env["POD_IP"].ValueFrom.FieldRef.FieldPath != "status.podIP" {
+		t.Error("the exporter must listen on the pod's own address")
+	}
+	if ref := env["ESL_PASSWORD"].ValueFrom; ref == nil || ref.SecretKeyRef == nil || ref.SecretKeyRef.Name != "esl" {
+		t.Error("ESL_PASSWORD must come from the Secret")
+	}
+	if c.SecurityContext == nil || c.SecurityContext.RunAsNonRoot == nil || !*c.SecurityContext.RunAsNonRoot {
+		t.Error("the exporter runs as non-root")
+	}
+}

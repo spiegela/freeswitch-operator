@@ -32,6 +32,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
@@ -125,6 +126,30 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(err).NotTo(HaveOccurred())
 		return res
 	}
+
+	It("takes spec.metrics with or without a sip section, and refuses a metrics port on the SIP port", func() {
+		ns := newNamespace(ctx)
+		// Unstructured, so the sip section can be left out entirely: the Go type always sends sip: {}.
+		obj := func(name string, spec map[string]any) *unstructured.Unstructured {
+			u := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": sipv1alpha1.GroupVersion.String(), "kind": "FreeswitchCluster",
+				"metadata": map[string]any{"name": name, "namespace": ns},
+				"spec":     spec,
+			}}
+			return u
+		}
+		Expect(k8sClient.Create(ctx, obj("no-sip", map[string]any{
+			"image": "example/freeswitch:1", "metrics": map[string]any{"exporterImage": "example/exporter:1"},
+		}))).To(Succeed())
+		Expect(k8sClient.Create(ctx, obj("other-port", map[string]any{
+			"image": "example/freeswitch:1", "sip": map[string]any{"port": int64(5080)},
+			"metrics": map[string]any{"exporterImage": "example/exporter:1", "port": int64(5060)},
+		}))).To(Succeed())
+		err := k8sClient.Create(ctx, obj("clash", map[string]any{
+			"image": "example/freeswitch:1", "metrics": map[string]any{"exporterImage": "example/exporter:1", "port": int64(5060)},
+		}))
+		Expect(err).To(MatchError(ContainSubstring("metrics.port must differ from sip.port")))
+	})
 
 	It("creates the fleet's objects with the shape SIP media needs", func() {
 		ns := newNamespace(ctx)

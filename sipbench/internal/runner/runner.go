@@ -74,7 +74,10 @@ type Config struct {
 	Caps map[string]bool
 	// Fleet is the FreeSWITCH fleet scenario actions act on; with it, add "fleet" to Caps.
 	Fleet fleet.Fleet
-	Log   *slog.Logger
+	// PrometheusURL is the metrics backend the scenarios' metric checks query (Prometheus's HTTP API), e.g.
+	// http://prometheus.monitoring.svc:9090. Empty: the checks are reported as not checked.
+	PrometheusURL string
+	Log           *slog.Logger
 }
 
 // Runner runs scenarios. Create one with New and call Start before Run. Run may be called concurrently: each call
@@ -165,6 +168,8 @@ type Result struct {
 	Raw      []RawResult   `json:"raw,omitempty"`
 	// Timeline is what the scenario's actions did, when, as "+12.3s action: what happened".
 	Timeline []string `json:"timeline,omitempty"`
+	// Metrics is what each metric check saw.
+	Metrics []MetricResult `json:"metrics,omitempty"`
 }
 
 // CallResult is what the runner saw of one call.
@@ -194,6 +199,11 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 		res.Status = statusSkip
 		res.Reason = "needs " + strings.Join(missing, ", ")
 		return res
+	}
+	// Metric baselines before anything is sent, and outside the scenario's own deadline: settling one takes a
+	// scrape interval or more. The checks themselves come last.
+	if len(s.Metrics) > 0 {
+		res.Metrics = r.metricBaselines(ctx, s.Metrics)
 	}
 	timeout := 60 * time.Second
 	if s.TimeoutMs > 0 {
@@ -296,6 +306,12 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 		}
 	}
 	for _, f := range crossChecks(s.Calls, results) {
+		fail("%s", f)
+	}
+	// The scenario's own deadline may be near; the metrics backend gets its own minute.
+	mctx, mcancel := context.WithTimeout(context.WithoutCancel(ctx), metricWait+5*time.Second)
+	defer mcancel()
+	for _, f := range r.metricChecks(mctx, res.Metrics) {
 		fail("%s", f)
 	}
 	res.Calls = results

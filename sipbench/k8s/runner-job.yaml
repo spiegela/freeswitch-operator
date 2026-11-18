@@ -35,6 +35,7 @@ spec:
             - {name: SIPBENCH_TARGET, value: "0.0.0.0:5090"}
             - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma,proxy"}  # proxy: the edge address is Kamailio
             - {name: SIPBENCH_FLEET, value: "telephony/edge"}    # namespace/name; empty skips the fleet scenarios
+            - {name: SIPBENCH_PROMETHEUS, value: "http://prometheus.monitoring.svc:9090"}  # metric checks; empty skips them
             - {name: SIPBENCH_RUN, value: ""}             # a regexp picking scenarios by name; hack/kind.sh bench sets it
             - {name: SIPBENCH_JSON, value: ""}            # "-" prints the JSON report after the summary; hack/kind.sh bench sets it
           ports:

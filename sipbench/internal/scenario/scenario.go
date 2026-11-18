@@ -39,11 +39,25 @@ type Scenario struct {
 	Raw []Raw `yaml:"raw,omitempty"`
 	// Actions run one after another while the calls are up: the scenario's timeline.
 	Actions []Action `yaml:"actions,omitempty"`
+	// Metrics are counters the edge should have moved by the end of the scenario, read from the metrics backend
+	// the runner queries (-prometheus). Without one they aren't checked, and the result says so.
+	Metrics []MetricCheck `yaml:"metrics,omitempty"`
 	// TimeoutMs bounds the whole scenario. Default 60000.
 	TimeoutMs int `yaml:"timeoutMs,omitempty"`
 
 	// File is where the scenario was loaded from.
 	File string `yaml:"-"`
+}
+
+// MetricCheck is one counter checked through the metrics backend: its value must rise by at least Increase from
+// before the scenario to after it.
+type MetricCheck struct {
+	// Query is PromQL giving one number, such as sum(kamailio_rejected_requests_total{reason="uri_scheme"}). No
+	// result counts as 0, so a series that first appears during the scenario counts from zero.
+	Query string `yaml:"query"`
+	// Increase is the least the value must rise by. The runner waits for the baseline to settle before the
+	// scenario and for the rise after it, so a scenario run just before can't count toward it.
+	Increase float64 `yaml:"increase"`
 }
 
 // Backend configures the mock backend for a scenario.
@@ -330,6 +344,9 @@ func (s *Scenario) Validate() error {
 	if err := s.validateRaw(); err != nil {
 		return err
 	}
+	if err := s.validateMetrics(); err != nil {
+		return err
+	}
 	ids := map[string]bool{}
 	for i, c := range s.Calls {
 		if c.ID == "" {
@@ -385,6 +402,18 @@ func (s *Scenario) Validate() error {
 	if s.Target != nil {
 		if err := script.Validate(s.Target.Steps, true); err != nil {
 			return fmt.Errorf("target: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Scenario) validateMetrics() error {
+	for i, m := range s.Metrics {
+		if strings.TrimSpace(m.Query) == "" {
+			return fmt.Errorf("metrics %d: query is required", i+1)
+		}
+		if m.Increase <= 0 {
+			return fmt.Errorf("metrics %d: increase must be above 0", i+1)
 		}
 	}
 	return nil

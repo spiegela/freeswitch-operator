@@ -5,6 +5,9 @@ description: >
   BYE inside a dialog and a CANCEL. Kamailio doesn't fall back to routing on the To header: the INVITE never
   reaches the backend.
 requires: [proxy, mock]
+# Each refusal is counted, where an alert rule or a dashboard can see scanners.
+metrics:
+  - {query: 'sum(kamailio_rejected_requests_total{reason="uri_scheme"})', increase: 4}
 raw:
   - id: invite-udp
     message: |

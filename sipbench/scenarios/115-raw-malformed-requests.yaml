@@ -10,6 +10,10 @@ description: >
   From URI with a comma, but every node would discard them unanswered, so Kamailio's script answers them 400
   itself. RFC 4475 would have most of these answered 400; each gap is in the conformance record.
 requires: [proxy, mock]
+# The four refused for their From or To are counted as display_name, and none reaches the silent-drop path that
+# KamailioSilentDropsRequest alerts on.
+metrics:
+  - {query: 'sum(kamailio_rejected_requests_total{reason="display_name"})', increase: 4}
 raw:
   # RFC 4475 3.1.2.4: a CSeq number past 2^32.
   - id: cseq-too-large

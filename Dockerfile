@@ -22,10 +22,20 @@ COPY . .
 # the docker BUILDPLATFORM arg will be linux/arm64 when for Apple x86 it will be linux/amd64. Therefore,
 # by leaving it empty we can ensure that the container and binary shipped on it will have the same platform.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o freeswitch-exporter ./cmd/freeswitch-exporter
+
+# The FreeSWITCH exporter, a separate image (docker build --target exporter) so that a new operator release
+# doesn't change the FreeSWITCH pod template, which would roll every fleet.
+FROM gcr.io/distroless/static:nonroot AS exporter
+WORKDIR /
+COPY --from=builder /workspace/freeswitch-exporter .
+USER 65532:65532
+ENTRYPOINT ["/freeswitch-exporter"]
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM gcr.io/distroless/static:nonroot
+# It stays the last stage, so a plain docker build makes the manager.
+FROM gcr.io/distroless/static:nonroot AS manager
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532

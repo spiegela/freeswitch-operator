@@ -231,6 +231,16 @@ put back. Every action but `hangup` needs the `fleet` capability, and a scenario
 `requires: [fleet]`. The runner's access is in `k8s/runner-rbac.yaml`. Results carry a `timeline` of what each
 action did and when.
 
+### Metrics: counters the edge should move
+
+`metrics:` lists counters a scenario should raise, each a PromQL query giving one number and the least it must rise
+by: `{query: 'sum(kamailio_rejected_requests_total{reason="uri_scheme"})', increase: 4}`. No result counts as 0.
+The runner queries the Prometheus HTTP API named by `-prometheus` (`SIPBENCH_PROMETHEUS`; on kind the Prometheus
+the Collector sends to, see the top-level README). Before the scenario it waits for each value to hold still for
+12 s, so a count from the scenario before can't land in this one; after it, it waits up to a minute for the rise.
+Without `-prometheus` the checks are reported as not checked and don't fail the scenario. Results carry `metrics`:
+each query's value before and after.
+
 ## mockbackend
 
 Routes live in `backends/mock.yaml` and are picked by the Request-URI user; unmatched users go to

@@ -1,0 +1,167 @@
+# promtool test rules edge-alerts_test.yaml (make check-alerts)
+rule_files:
+  - edge-alerts.yaml
+evaluation_interval: 1m
+
+tests:
+  # One silent drop of each cause: each alert fires, and neither is mistaken for the other.
+  - interval: 1m
+    input_series:
+      - series: 'kamailio_silent_drops_total{job="kamailio",namespace="telephony",fleet="proxy",pod="proxy-kamailio-0",cause="nodes"}'
+        values: '0 0 1 1 1 1 1 1 1 1 1'
+      - series: 'kamailio_silent_drops_total{job="kamailio",namespace="telephony",fleet="proxy",pod="proxy-kamailio-0",cause="request"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'kamailio_silent_drops_total{job="kamailio",namespace="telephony",fleet="proxy",pod="proxy-kamailio-1",cause="request"}'
+        values: '0 0 0 0 0 0 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: KamailioSilentDropsFleetSilent
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: KamailioSilentDropsFleetSilent
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: telephony, fleet: proxy}
+            exp_annotations:
+              summary: "Calls through telephony/proxy are failing: every FreeSWITCH node tried stayed silent"
+              description: >
+                Calls that got 408 in 5 minutes because no FreeSWITCH node answered anything at all meanwhile: 1.
+                The fleet itself may be down or cut off from Kamailio. Check the FreeswitchCluster's members and
+                freeswitch_up.
+      - eval_time: 3m
+        alertname: KamailioSilentDropsRequest
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: KamailioSilentDropsRequest
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: telephony, fleet: proxy}
+            exp_annotations:
+              summary: "FreeSWITCH nodes behind telephony/proxy are discarding requests without an answer"
+              description: >
+                Requests that got 408 in 5 minutes although the nodes answered other requests meanwhile: 2. Each is
+                a malformed request Kamailio doesn't refuse yet, or an attack; the Kamailio pods' logs name its
+                source address and Call-ID.
+      # Five minutes after the last drop, both have cleared.
+      - eval_time: 10m
+        alertname: KamailioSilentDropsFleetSilent
+        exp_alerts: []
+
+  # A rolling update: draining is expected; stuck with nothing draining is not.
+  - interval: 1m
+    input_series:
+      - series: 'freeswitch_operator_fleet_outdated_members{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge"}'
+        values: '2x40'
+      # edge-2 drains for the first 10 minutes, then its replacement never becomes ready.
+      - series: 'freeswitch_operator_fleet_members{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge",state="Draining"}'
+        values: '1x9 0x30'
+      - series: 'freeswitch_operator_fleet_condition{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge",condition="Degraded"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: EdgeRollStalled
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: EdgeFleetDegraded
+        exp_alerts: []
+      - eval_time: 24m
+        alertname: EdgeRollStalled
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: EdgeRollStalled
+        exp_alerts:
+          - exp_labels: {severity: warning, job: freeswitch-operator, kind: FreeswitchCluster, namespace: telephony, name: edge}
+            exp_annotations:
+              summary: "The rolling update of FreeswitchCluster telephony/edge has stopped"
+              description: >
+                2 members are on an old template and none is draining: the operator is waiting for a replacement
+                that doesn't become ready (often a config change that leaves no SIP profile running), or for a
+                missing or invalid ConfigMap (see the Degraded condition). The rest of the fleet keeps serving.
+      - eval_time: 26m
+        alertname: EdgeFleetDegraded
+        exp_alerts:
+          - exp_labels: {severity: warning, job: freeswitch-operator, kind: FreeswitchCluster, namespace: telephony, name: edge, condition: Degraded}
+            exp_annotations:
+              summary: "FreeswitchCluster telephony/edge has had fewer ready members than replicas for 15 minutes"
+              description: A pod is not becoming ready (bad config, image, or no node to run on), and the fleet has no spare.
+
+  # A drain against maxDrainSeconds of 300: at 80% (240 s) it warns.
+  - interval: 1m
+    input_series:
+      - series: 'freeswitch_operator_fleet_drain_started_timestamp_seconds{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge",pod="edge-1"}'
+        values: '60x10'
+      - series: 'freeswitch_operator_fleet_max_drain_seconds{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge"}'
+        values: '300x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: EdgeDrainNearLimit
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: EdgeDrainNearLimit
+        exp_alerts:
+          - exp_labels: {severity: warning, job: freeswitch-operator, kind: FreeswitchCluster, namespace: telephony, name: edge, pod: edge-1}
+            exp_annotations:
+              summary: "edge-1 has drained for over 80% of maxDrainSeconds"
+              description: >
+                It still has calls (or Kamailio transactions) up. When maxDrainSeconds runs out they are cut.
+
+  # A fleet with no member taking calls, and the operator gone.
+  - interval: 1m
+    input_series:
+      - series: 'freeswitch_operator_fleet_condition{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge",condition="Available"}'
+        values: '1 1 0 0 0 0'
+      - series: 'freeswitch_operator_fleet_desired_replicas{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge"}'
+        values: '3x5'
+      - series: 'up{job="freeswitch-operator",instance="10.244.1.5:8443"}'
+        values: '1 1 0x20'
+    alert_rule_test:
+      # Available goes false at 2m; after 1m more it fires.
+      - eval_time: 2m
+        alertname: EdgeFleetUnavailable
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: EdgeFleetUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, job: freeswitch-operator, kind: FreeswitchCluster, namespace: telephony, name: edge, condition: Available}
+            exp_annotations:
+              summary: "FreeswitchCluster telephony/edge has no member taking calls"
+      - eval_time: 11m
+        alertname: FreeswitchOperatorDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: FreeswitchOperatorDown
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: The freeswitch-operator has served no metrics for 10 minutes
+              description: >
+                Without it, fleets keep running but nothing updates the dispatcher lists, rolls or drains, and the
+                other freeswitch_operator alerts go quiet.
+
+  # FreeSWITCH down past the startup grace, and a node near its session limit.
+  - interval: 1m
+    input_series:
+      - series: 'freeswitch_up{job="freeswitch",namespace="telephony",fleet="edge",pod="edge-0"}'
+        values: '1 0 0 0 0 0'
+      - series: 'freeswitch_sessions_active{job="freeswitch",namespace="telephony",fleet="edge",pod="edge-2"}'
+        values: '850x10'
+      - series: 'freeswitch_sessions_limit{job="freeswitch",namespace="telephony",fleet="edge",pod="edge-2"}'
+        values: '1000x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: FreeswitchDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: FreeswitchDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: freeswitch, namespace: telephony, fleet: edge, pod: edge-0}
+            exp_annotations:
+              summary: "FreeSWITCH on edge-0 does not answer its event socket"
+              description: >
+                The exporter beside it could not reach FreeSWITCH for 3 minutes. Readiness has taken the node out of
+                dispatch; calls it held may be stuck or gone.
+      - eval_time: 6m
+        alertname: FreeswitchSessionsNearLimit
+        exp_alerts:
+          - exp_labels: {severity: warning, job: freeswitch, namespace: telephony, fleet: edge, pod: edge-2}
+            exp_annotations:
+              summary: "edge-2 is above 80% of its session limit"
+              description: Sessions beyond max-sessions are refused. Add nodes or raise the limit.

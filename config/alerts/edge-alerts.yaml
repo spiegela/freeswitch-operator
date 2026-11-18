@@ -1,0 +1,171 @@
+# Alert rules for the edge, in Prometheus's rule-file format: load them into Prometheus, Grafana Mimir or Amazon
+# Managed Service for Prometheus as they are (prometheus-operator users wrap the groups in a PrometheusRule).
+# `make check-alerts` checks them and runs edge-alerts_test.yaml with promtool.
+#
+# Labels come from the scrape config (deploy/kind/monitoring/collector.yaml is the reference): Kamailio and
+# FreeSWITCH series carry job (kamailio | freeswitch), namespace, pod and fleet (the KamailioCluster's or
+# FreeswitchCluster's name); the operator's carry job="freeswitch-operator" and name each fleet with kind, namespace
+# and name. Severity is critical (calls are failing now), warning (calls are at risk or a fix is stuck) or info.
+groups:
+  - name: kamailio
+    rules:
+      - alert: KamailioSilentDropsFleetSilent
+        expr: sum by (namespace, fleet) (increase(kamailio_silent_drops_total{cause="nodes"}[5m])) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "Calls through {{ $labels.namespace }}/{{ $labels.fleet }} are failing: every FreeSWITCH node tried stayed silent"
+          description: >
+            Calls that got 408 in 5 minutes because no FreeSWITCH node answered anything at all meanwhile:
+            {{ $value | humanize }}. The fleet itself may be down or cut off from Kamailio. Check the
+            FreeswitchCluster's members and freeswitch_up.
+
+      - alert: KamailioSilentDropsRequest
+        expr: sum by (namespace, fleet) (increase(kamailio_silent_drops_total{cause="request"}[5m])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "FreeSWITCH nodes behind {{ $labels.namespace }}/{{ $labels.fleet }} are discarding requests without an answer"
+          description: >
+            Requests that got 408 in 5 minutes although the nodes answered other requests meanwhile:
+            {{ $value | humanize }}. Each is a malformed request Kamailio doesn't refuse yet, or an attack; the
+            Kamailio pods' logs name its source address and Call-ID.
+
+      - alert: KamailioNodeSilentTimeouts
+        expr: sum by (namespace, fleet, pod) (increase(kamailio_node_silent_timeouts_total[10m])) > 3
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.pod }} keeps finding FreeSWITCH nodes silent"
+          description: >
+            New calls that waited 5 s in 10 minutes for a node that never answered, before failing over:
+            {{ $value | humanize }}. Callers wait longer; a node may be overloaded or dropping packets.
+
+      - alert: KamailioRefusingManyRequests
+        expr: sum by (namespace, fleet, reason) (rate(kamailio_rejected_requests_total[5m])) > 1
+        for: 10m
+        labels: {severity: info}
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.fleet }} refuses more than one request a second ({{ $labels.reason }})"
+          description: >
+            Malformed requests keep arriving: usually a scanner, sometimes a peer with a broken stack. The Kamailio
+            pods' logs name the sources.
+
+      - alert: KamailioMetricsDown
+        expr: up{job="kamailio"} == 0
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.pod }} does not serve metrics"
+          description: The pod exists but its /metrics did not answer for 2 minutes; Kamailio may be hung.
+
+  - name: freeswitch
+    rules:
+      - alert: FreeswitchDown
+        expr: freeswitch_up == 0
+        # A starting node gets two minutes to come up before the kubelet restarts it.
+        for: 3m
+        labels: {severity: critical}
+        annotations:
+          summary: "FreeSWITCH on {{ $labels.pod }} does not answer its event socket"
+          description: >
+            The exporter beside it could not reach FreeSWITCH for 3 minutes. Readiness has taken the node out of
+            dispatch; calls it held may be stuck or gone.
+
+      - alert: FreeswitchExporterDown
+        expr: up{job="freeswitch"} == 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.pod }} does not serve FreeSWITCH metrics"
+          description: The exporter sidecar did not answer for 5 minutes, so FreeswitchDown can't fire for this node.
+
+      - alert: FreeswitchSIPProfileDown
+        expr: freeswitch_sofia_profile_up == 0
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "SIP profile {{ $labels.profile }} is not running on {{ $labels.pod }}"
+          description: >
+            If it is the profile Kamailio dispatches to, readiness has taken the node out of dispatch; if it is the
+            backend's, calls on this node can't reach the backend.
+
+      - alert: FreeswitchSessionsNearLimit
+        expr: freeswitch_sessions_active / freeswitch_sessions_limit > 0.8
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.pod }} is above 80% of its session limit"
+          description: Sessions beyond max-sessions are refused. Add nodes or raise the limit.
+
+  - name: freeswitch-operator
+    rules:
+      - alert: EdgeFleetUnavailable
+        expr: >
+          freeswitch_operator_fleet_condition{condition="Available"} == 0
+          and on (kind, namespace, name) freeswitch_operator_fleet_desired_replicas > 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.kind }} {{ $labels.namespace }}/{{ $labels.name }} has no member taking calls"
+
+      - alert: EdgeFleetDegraded
+        # A pod draining for a roll or a node drain is expected to be out; only a shortfall with nothing draining
+        # counts.
+        expr: >
+          freeswitch_operator_fleet_condition{condition="Degraded"} == 1
+          unless on (kind, namespace, name) freeswitch_operator_fleet_members{state="Draining"} > 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.kind }} {{ $labels.namespace }}/{{ $labels.name }} has had fewer ready members than replicas for 15 minutes"
+          description: A pod is not becoming ready (bad config, image, or no node to run on), and the fleet has no spare.
+
+      - alert: EdgeRollStalled
+        expr: >
+          freeswitch_operator_fleet_outdated_members > 0
+          unless on (kind, namespace, name) freeswitch_operator_fleet_members{state="Draining"} > 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "The rolling update of {{ $labels.kind }} {{ $labels.namespace }}/{{ $labels.name }} has stopped"
+          description: >
+            {{ $value | humanize }} members are on an old template and none is draining: the operator is waiting for a
+            replacement that doesn't become ready (often a config change that leaves no SIP profile running), or
+            for a missing or invalid ConfigMap (see the Degraded condition). The rest of the fleet keeps serving.
+
+      - alert: EdgeDrainNearLimit
+        expr: >
+          time() - freeswitch_operator_fleet_drain_started_timestamp_seconds
+          > on (kind, namespace, name) group_left () 0.8 * freeswitch_operator_fleet_max_drain_seconds
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.pod }} has drained for over 80% of maxDrainSeconds"
+          description: >
+            It still has calls (or Kamailio transactions) up. When maxDrainSeconds runs out they are cut.
+
+      - alert: EdgeDispatcherReloadPending
+        expr: freeswitch_operator_dispatcher_pending_reload == 1
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Kamailio has not loaded the dispatcher list of {{ $labels.kind }} {{ $labels.namespace }}/{{ $labels.name }}"
+          description: >
+            The list changed over 5 minutes ago (plus reloadDelaySeconds) and not every Kamailio holds it: new nodes
+            get no calls, and only probing keeps removed ones out. See the operator's logs and
+            freeswitch_operator_dispatcher_reloads_total.
+
+      - alert: EdgeDispatchSetConflict
+        expr: freeswitch_operator_fleet_condition{condition="SetConflict"} == 1
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "KamailioCluster {{ $labels.namespace }}/{{ $labels.name }} leaves a fleet out of its dispatcher list"
+          description: A fleet in spec.dispatch is missing, has no spec.dispatcher, or reuses another's setID; its condition says which.
+
+      - alert: FreeswitchOperatorDown
+        expr: absent(up{job="freeswitch-operator"} == 1)
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: The freeswitch-operator has served no metrics for 10 minutes
+          description: >
+            Without it, fleets keep running but nothing updates the dispatcher lists, rolls or drains, and the
+            other freeswitch_operator alerts go quiet.

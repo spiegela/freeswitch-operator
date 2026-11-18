@@ -1,0 +1,132 @@
+# The OpenTelemetry Collector: its prometheus receiver scrapes every component the operator runs, and the OTLP
+# exporter sends the metrics on. In production the OTLP endpoint is your metrics backend; here it is the Prometheus
+# beside it (prometheus.yaml).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+---
+# Pod and EndpointSlice discovery.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: edge-otel-collector
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, endpoints]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: edge-otel-collector
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: edge-otel-collector}
+subjects:
+  - {kind: ServiceAccount, name: otel-collector, namespace: monitoring}
+---
+# The operator serves its metrics over HTTPS to callers allowed GET /metrics (config/rbac/metrics_reader_role.yaml).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: edge-otel-collector-operator-metrics
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: freeswitch-operator-metrics-reader}
+subjects:
+  - {kind: ServiceAccount, name: otel-collector, namespace: monitoring}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector
+data:
+  # The collector expands ${...} itself, so relabeling's $1 is written $$1.
+  config.yaml: |
+    receivers:
+      prometheus:
+        config:
+          global:
+            scrape_interval: 10s
+            scrape_timeout: 5s
+          scrape_configs:
+            # Kamailio and the FreeSWITCH exporters: pods of a fleet the operator runs, on their port named
+            # "metrics" (the exporter is a native sidecar, so an init container's port). Each series gets its
+            # namespace, pod, node and fleet (the KamailioCluster's or FreeswitchCluster's name).
+            - job_name: kamailio
+              kubernetes_sd_configs: [{role: pod}]
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_name]
+                  regex: kamailio;metrics
+                  action: keep
+                - {source_labels: [__meta_kubernetes_namespace], target_label: namespace}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+                - {source_labels: [__meta_kubernetes_pod_node_name], target_label: node}
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: fleet}
+            - job_name: freeswitch
+              kubernetes_sd_configs: [{role: pod}]
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_name]
+                  regex: freeswitch;metrics
+                  action: keep
+                - {source_labels: [__meta_kubernetes_namespace], target_label: namespace}
+                - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+                - {source_labels: [__meta_kubernetes_pod_node_name], target_label: node}
+                - {source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_instance], target_label: fleet}
+            # The operator: HTTPS with this pod's service account token. Its series name each fleet with kind,
+            # namespace and name themselves, so no target labels are added (a namespace one would clash).
+            - job_name: freeswitch-operator
+              scheme: https
+              authorization:
+                credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              tls_config:
+                # The operator's certificate is self-signed unless cert-manager provides one.
+                insecure_skip_verify: true
+              kubernetes_sd_configs:
+                - role: endpointslice
+                  namespaces: {names: [freeswitch-operator-system]}
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_service_label_control_plane, __meta_kubernetes_endpointslice_port_name]
+                  regex: controller-manager;https
+                  action: keep
+    processors:
+      batch: {}
+    exporters:
+      otlphttp/prometheus:
+        # Prometheus's OTLP receiver; the exporter appends /v1/metrics.
+        endpoint: http://prometheus.monitoring.svc:9090/api/v1/otlp
+        tls: {insecure: true}
+    service:
+      pipelines:
+        metrics:
+          receivers: [prometheus]
+          processors: [batch]
+          exporters: [otlphttp/prometheus]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  labels: {app.kubernetes.io/name: otel-collector}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: otel-collector}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: otel-collector}
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.140.0@sha256:ffc818ee108d0b934fd14207fd87ff247c9b64f344ed349d0b66c166c18a2312
+          imagePullPolicy: IfNotPresent
+          args: ["--config=/etc/otelcol/config.yaml"]
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/otelcol, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: otel-collector}

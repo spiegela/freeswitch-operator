@@ -73,11 +73,16 @@ type KamailioClusterReconciler struct {
 func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
+	fleet := fleetRef{kind: kindKamailio, namespace: req.Namespace, name: req.Name}
 	var kc sipv1alpha1.KamailioCluster
 	if err := r.Get(ctx, req.NamespacedName, &kc); err != nil {
+		if apierrors.IsNotFound(err) {
+			forgetFleet(fleet)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if kc.DeletionTimestamp != nil {
+		forgetFleet(fleet)
 		return ctrl.Result{}, nil
 	}
 	cfg := resolveKamailio(&kc)
@@ -145,14 +150,18 @@ func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if p := decision.Replace; p != nil {
 		log.Info("replacing Kamailio pod for rolling update", "pod", p.Name, "revision", podRevision(p), "updateRevision", sts.Status.UpdateRevision)
 		uid := p.UID
-		if err := r.Delete(ctx, p, client.Preconditions{UID: &uid}); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, err
+		if err := r.Delete(ctx, p, client.Preconditions{UID: &uid}); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
+		} else {
+			fleetPodReplacements.WithLabelValues(fleet.labels()...).Inc()
 		}
 	} else if decision.Waiting != "" {
 		log.V(1).Info("rolling update waiting", "reason", decision.Waiting, "outdated", decision.Outdated)
 	}
 
-	requeue, err := r.syncDispatcher(ctx, &kc, cfg, token, sets, pods, status)
+	requeue, err := r.syncDispatcher(ctx, &kc, fleet, cfg, token, sets, pods, status)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -170,6 +179,10 @@ func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	} else {
 		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionSetConflict, Status: metav1.ConditionFalse, Reason: "AllFleetsDispatched", Message: "every fleet in spec.dispatch is in the dispatcher list", ObservedGeneration: kc.Generation})
 	}
+	recordFleet(fleet, fleetObservation{
+		desired: cfg.replicas, pods: pods, outdated: decision.Outdated, conditions: status.Conditions,
+		maxDrainSeconds: cfg.maxDrainSeconds, now: r.now(),
+	})
 
 	if !equalJSON(&kc.Status, status) {
 		kc.Status = *status
@@ -438,15 +451,18 @@ func combineDispatcherLists(sets []dispatchSet) (string, map[int32][]string) {
 // syncDispatcher writes the combined dispatcher list when it changes, takes destinations that left out of every
 // Kamailio pod at once, and has the pods reload once the kubelet has had time to update the mounted file, checking
 // that each did. It returns how long to wait before the reload is due or retried, or zero.
-func (r *KamailioClusterReconciler) syncDispatcher(ctx context.Context, kc *sipv1alpha1.KamailioCluster, cfg kamailioSettings, token string, sets []dispatchSet, pods []corev1.Pod, status *sipv1alpha1.KamailioClusterStatus) (time.Duration, error) {
+func (r *KamailioClusterReconciler) syncDispatcher(ctx context.Context, kc *sipv1alpha1.KamailioCluster, fleet fleetRef, cfg kamailioSettings, token string, sets []dispatchSet, pods []corev1.Pod, status *sipv1alpha1.KamailioClusterStatus) (time.Duration, error) {
 	log := logf.FromContext(ctx)
 	content, want := combineDispatcherLists(sets)
 	hash := contentHash(content)
 
 	status.Sets = make([]sipv1alpha1.DispatchSet, 0, len(sets))
+	bySet := map[int32]int{}
 	for _, s := range sets {
 		status.Sets = append(status.Sets, sipv1alpha1.DispatchSet{FreeswitchCluster: s.cluster, SetID: s.setID, Destinations: int32(len(want[s.setID]))})
+		bySet[s.setID] = len(want[s.setID])
 	}
+	recordDestinations(fleet, bySet)
 
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: kamailioDispatcherName(kc), Namespace: kc.Namespace}}
 	var previous string
@@ -477,10 +493,13 @@ func (r *KamailioClusterReconciler) syncDispatcher(ctx context.Context, kc *sipv
 			return 0, err
 		}
 		log.Info("combined dispatcher list updated", "sets", len(sets), "hash", hash)
+		dispatcherListUpdates.WithLabelValues(fleet.labels()...).Inc()
 		if notifier != nil {
 			for _, s := range sets {
 				for _, uri := range removedURIs(parseDispatcherURIs(previous, s.setID), want[s.setID]) {
-					if err := notifier.SetInactive(ctx, s.setID, uri); err != nil {
+					err := notifier.SetInactive(ctx, s.setID, uri)
+					recordSetInactive(fleet, err)
+					if err != nil {
 						// Kamailio's probing and the paused node's 503s still protect calls; keep going.
 						log.Error(err, "could not mark destination inactive", "set", s.setID, "uri", uri)
 					}
@@ -501,6 +520,9 @@ func (r *KamailioClusterReconciler) syncDispatcher(ctx context.Context, kc *sipv
 	if newlyActive(status.Members, pods) {
 		status.DispatcherReloadedHash = ""
 	}
+	defer func() {
+		recordPendingReload(fleet, notifier != nil && status.DispatcherReloadedHash != status.DispatcherHash)
+	}()
 	if notifier == nil || status.DispatcherReloadedHash == status.DispatcherHash {
 		return 0, nil
 	}
@@ -510,7 +532,9 @@ func (r *KamailioClusterReconciler) syncDispatcher(ctx context.Context, kc *sipv
 			return wait, nil
 		}
 	}
-	if err := notifier.Reload(ctx, want); err != nil {
+	err := notifier.Reload(ctx, want)
+	recordReload(fleet, err)
+	if err != nil {
 		if onlyListNotLoaded(err) {
 			log.Info("a Kamailio pod has not loaded the new dispatcher list yet; will reload again", "detail", err.Error())
 			return 10 * time.Second, nil
