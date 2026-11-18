@@ -22,7 +22,7 @@ func testKamailioCluster() *sipv1alpha1.KamailioCluster {
 
 func TestResolveKamailioDefaults(t *testing.T) {
 	cfg := resolveKamailio(testKamailioCluster())
-	if cfg.replicas != 2 || cfg.sipPort != 5060 || cfg.rpcPort != 5070 || cfg.maxDrainSeconds != 40 || cfg.reloadDelaySecs != 75 || !cfg.requireAddress {
+	if cfg.replicas != 2 || cfg.sipPort != 5060 || cfg.rpcPort != 5070 || cfg.metricsPort != 5071 || cfg.maxDrainSeconds != 40 || cfg.reloadDelaySecs != 75 || !cfg.requireAddress {
 		t.Fatalf("defaults %+v", cfg)
 	}
 	kc := testKamailioCluster()
@@ -92,7 +92,7 @@ func TestKamailioPodMountsAndPorts(t *testing.T) {
 	for _, p := range c.Ports {
 		ports[p.Name] = p.HostPort
 	}
-	if ports["sip-udp"] != 5060 || ports["rpc"] != 5070 {
+	if ports["sip-udp"] != 5060 || ports["rpc"] != 5070 || ports["metrics"] != 5071 {
 		t.Fatalf("ports %v", ports)
 	}
 }

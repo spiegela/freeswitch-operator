@@ -7,12 +7,13 @@
 #
 # Set per pod by start.sh with -A:
 #   PUBLIC_ADDR    the address advertised in Via and Record-Route
-#   PRIVATE_ADDR   the pod's own address, the only one JSON-RPC listens on
+#   PRIVATE_ADDR   the pod's own address, the only one JSON-RPC and the metrics listen on
 #
 # Dispatcher sets, in priority order:{{range .Sets}} {{.}}{{else}} none{{end}}
 
 #!define SIP_PORT {{.SIPPort}}
 #!define RPC_PORT {{.RPCPort}}
+#!define METRICS_PORT {{.MetricsPort}}
 # How long a FreeSWITCH node has to answer anything (it sends 100 Trying to an INVITE at once): after this a new
 # call fails over to the next node, and a dispatcher probe counts as failed. It is tm's fr_timer, which the probes
 # use (dispatcher has no timeout of its own).
@@ -21,6 +22,9 @@
 #!define RELAY_FR_TIMER 32000
 #!define FR_INV_TIMER 60000
 #!define DISPATCHER_LIST "{{.DispatcherList}}"
+# A name-addr whose display name, if any, is well formed (RFC 3261 25.1): a quoted string, or words of token
+# characters (ASCII only: FreeSWITCH discards an unquoted name with anything else in it, UTF-8 included).
+#!define NAME_ADDR "^[ \t]*(\"([^\"\\\\]|\\\\.)*\"[ \t]*|[-A-Za-z0-9.!%*_+`'~ \t]*)<"
 
 debug=2
 log_stderror=yes
@@ -37,6 +41,8 @@ listen=udp:0.0.0.0:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
 listen=tcp:0.0.0.0:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
 # JSON-RPC for the operator, on the pod's own address only; every request needs the bearer token.
 listen=tcp:PRIVATE_ADDR:RPC_PORT
+# Prometheus metrics (GET /metrics), on the pod's own address only. Read-only, so no token.
+listen=tcp:PRIVATE_ADDR:METRICS_PORT
 
 loadmodule "kex.so"
 loadmodule "corex.so"
@@ -53,6 +59,7 @@ loadmodule "sanity.so"
 loadmodule "dispatcher.so"
 loadmodule "xhttp.so"
 loadmodule "jsonrpcs.so"
+loadmodule "xhttp_prom.so"
 
 # Set to 1 over JSON-RPC by the pod's drain: new calls from peers then get 503 and go to another Kamailio.
 modparam("pv", "shvset", "draining=i:0")
@@ -69,6 +76,9 @@ modparam("dispatcher", "ds_inactive_threshold", 2)
 modparam("dispatcher", "ds_ping_reply_codes", "class=2;code=403;code=404;code=405")
 modparam("dispatcher", "xavp_dst", "_dsdst_")
 
+# A failed check answers the request and returns false, rather than ending the script there, so it can be counted.
+modparam("sanity", "autodrop", 0)
+
 modparam("rr", "enable_full_lr", 1)
 modparam("rr", "append_fromtag", 1)
 modparam("tm", "fr_timer", DS_FR_TIMER)
@@ -76,6 +86,23 @@ modparam("tm", "fr_inv_timer", FR_INV_TIMER)
 # Pass a 503 on as 503 (by default tm turns a final 503 into 500): when every node is full, carriers see the same
 # 503 they get when no node is up, and reroute.
 modparam("tm", "remap_503_500", 0)
+
+# Kamailio's own statistics (tm, sl, core, ...) as kamailio_* metrics, kept however long they go unchanged, and the
+# counters below. A rejected request's source and Call-ID go to the log, not into labels.
+#   kamailio_rejected_requests_total{reason}  requests refused before any node saw them: display_name (400 here),
+#                                             sanity (sanity's own 4xx), uri_scheme (416)
+#   kamailio_node_silent_timeouts_total       a node didn't answer a request within DS_FR_TIMER
+#   kamailio_silent_drops_total{cause}        every node tried stayed silent and the caller got 408: cause request
+#                                             when a node answered another call meanwhile (the nodes are up and
+#                                             discarded this request, a malformed one most likely), nodes when none
+#                                             did (the fleet itself may be down)
+modparam("xhttp_prom", "xhttp_prom_stats", "all")
+modparam("xhttp_prom", "xhttp_prom_timeout", 0)
+modparam("xhttp_prom", "prom_counter", "name=rejected_requests_total; label=reason")
+modparam("xhttp_prom", "prom_counter", "name=node_silent_timeouts_total;")
+modparam("xhttp_prom", "prom_counter", "name=silent_drops_total; label=cause")
+# When a node last answered anything relayed to it (any reply, 100 Trying included), in seconds since the epoch.
+modparam("pv", "shvset", "node_answered=i:0")
 
 modparam("jsonrpcs", "pretty_format", 1)
 # HTTP only (via xhttp). The default leaves HTTP off, and jsonrpc_dispatch() then drops each request unanswered.
@@ -92,12 +119,14 @@ request_route {
 	# The method is any token (RFC 3261 25.1: % and the like included), and a Request-URI that doesn't start with a
 	# scheme at all (one in <>, say) isn't an unsupported scheme: sanity answers it 400 instead.
 	if ($(mb{line.at,0}) =~ "^[^ ]+ +[A-Za-z][A-Za-z0-9+.-]*:" && !($(mb{line.at,0}) =~ "^[^ ]+ +(sips?|tel):")) {
+		prom_counter_inc("rejected_requests_total", "1", "uri_scheme");
 		sl_send_reply("416", "Unsupported URI Scheme");
 		exit;
 	}
 	# 18407 adds the Proxy-Require check (512) to the module's default checks: a request requiring an extension
 	# we don't support gets 420 (sanity's proxy_require list is empty).
 	if (!sanity_check("18407", "7")) {
+		prom_counter_inc("rejected_requests_total", "1", "sanity");
 		exit;
 	}
 
@@ -160,6 +189,15 @@ request_route {
 		sl_send_reply("503", "Draining");
 		exit;
 	}
+
+	# FreeSWITCH discards a request whose From or To it can't parse without answering, so every node in turn would
+	# stay silent on it while the caller waits for 408. Refuse those here instead.
+	if (!route(DISPLAY_NAMES)) {
+		prom_counter_inc("rejected_requests_total", "1", "display_name");
+		xlog("L_WARN", "refused $rm from $si:$sp with a malformed display name (Call-ID $ci)\n");
+		sl_send_reply("400", "Malformed Display Name");
+		exit;
+	}
 {{- if .Sets}}
 
 	# From a peer: the first set with an active node, round-robin within it, failing over on 503 or no answer to
@@ -169,6 +207,8 @@ request_route {
 		exit;
 	}
 	t_set_fr(FR_INV_TIMER, DS_FR_TIMER);
+	$avp(arrived) = $TV(s);
+	t_on_reply("NODE_REPLY");
 	t_on_failure("DS_FAILOVER");
 	route(RELAY);
 {{- else}}
@@ -189,11 +229,35 @@ route[ANY_ACTIVE] {
 	return -1;
 }
 
+# Whether From and To are well formed where Kamailio's parser is lenient and FreeSWITCH's isn't: a display name
+# (NAME_ADDR), or, for a bare addr-spec, no comma or question mark (RFC 3261 20: a URI with either must be in <>).
+route[DISPLAY_NAMES] {
+	if ($hdr(From) =~ "<") {
+		if (!($hdr(From) =~ NAME_ADDR)) {
+			return -1;
+		}
+	} else if ($hdr(From) =~ "[,?]") {
+		return -1;
+	}
+	if ($hdr(To) =~ "<") {
+		if (!($hdr(To) =~ NAME_ADDR)) {
+			return -1;
+		}
+	} else if ($hdr(To) =~ "[,?]") {
+		return -1;
+	}
+	return 1;
+}
+
 route[RELAY] {
 	if (!t_relay()) {
 		sl_reply_error();
 	}
 	exit;
+}
+
+onreply_route[NODE_REPLY] {
+	$shv(node_answered) = $TV(s);
 }
 
 # A paused (draining) FreeSWITCH answers new calls with 503; a dead one doesn't answer. Either way, try the next.
@@ -208,16 +272,44 @@ failure_route[DS_FAILOVER] {
 	if (t_check_status("503")) {
 		ds_mark_dst("ip");
 	}
+	if (t_branch_timeout() && !t_branch_replied()) {
+		prom_counter_inc("node_silent_timeouts_total", "1");
+	}
 	if (t_check_status("503") || (t_branch_timeout() && !t_branch_replied())) {
 		if (ds_next_dst()) {
+			t_on_reply("NODE_REPLY");
 			t_on_failure("DS_FAILOVER");
 			route(RELAY);
+		}
+		if (t_branch_timeout() && !t_branch_replied()) {
+			route(SILENT_DROP);
 		}
 	}
 }
 
-# JSON-RPC, only on the RPC port and only with the pod's token. A pod without a token refuses everything.
+# The last node tried stayed silent and there is no other: the caller gets 408. If a node has answered anything
+# since this request arrived, the nodes are up and discarded it, the signature of a request they can't parse.
+route[SILENT_DROP] {
+	if ($shv(node_answered) > $avp(arrived)) {
+		prom_counter_inc("silent_drops_total", "1", "request");
+		xlog("L_WARN", "every FreeSWITCH node stayed silent on $rm from $si:$sp while answering others (Call-ID $ci)\n");
+	} else {
+		prom_counter_inc("silent_drops_total", "1", "nodes");
+		xlog("L_WARN", "no FreeSWITCH node answered $rm from $si:$sp, or anything else since it arrived (Call-ID $ci)\n");
+	}
+}
+
+# Metrics on the metrics port; JSON-RPC only on the RPC port and only with the pod's token. A pod without a token
+# refuses every RPC.
 event_route[xhttp:request] {
+	if ($Rp == METRICS_PORT) {
+		if (prom_check_uri()) {
+			prom_dispatch();
+			exit;
+		}
+		xhttp_reply("404", "Not Found", "text/plain", "not found\n");
+		exit;
+	}
 	if ($Rp != RPC_PORT) {
 		xhttp_reply("403", "Forbidden", "text/plain", "forbidden\n");
 		exit;

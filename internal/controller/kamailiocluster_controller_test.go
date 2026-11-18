@@ -315,14 +315,17 @@ var _ = Describe("KamailioCluster controller", func() {
 		Expect(meta.IsStatusConditionTrue(getProxy(ns).Status.Conditions, conditionProgressing)).To(BeTrue())
 	})
 
-	It("refuses an RPC port equal to the SIP port", func() {
+	It("refuses an RPC or metrics port equal to another", func() {
 		ns := newNamespace(ctx)
 		err := k8sClient.Create(ctx, newProxy(ns, func(kc *sipv1alpha1.KamailioCluster) { kc.Spec.RPC.Port = 5060 }))
+		Expect(apierrors.IsInvalid(err)).To(BeTrue(), "%v", err)
+		err = k8sClient.Create(ctx, newProxy(ns, func(kc *sipv1alpha1.KamailioCluster) { kc.Spec.Metrics.Port = 5070 }))
 		Expect(apierrors.IsInvalid(err)).To(BeTrue(), "%v", err)
 		Expect(k8sClient.Create(ctx, newProxy(ns, nil))).To(Succeed())
 		kc := getProxy(ns)
 		Expect(kc.Spec.SIP.Port).To(Equal(int32(5060)))
 		Expect(kc.Spec.RPC.Port).To(Equal(int32(5070)))
+		Expect(kc.Spec.Metrics.Port).To(Equal(int32(5071)))
 		Expect(kc.Spec.ReloadDelaySeconds).To(Equal(int32(75)))
 	})
 })

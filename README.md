@@ -234,13 +234,27 @@ priority order; each must set `spec.dispatcher`, whose `setID` becomes that flee
     set has an active node, `503` while none has or while the pod drains, so peers route elsewhere.
 
   It also inserts `Max-Forwards: 70` when missing, refuses requests that require an extension it doesn't support
-  (`420`), and takes messages up to 64 KB over UDP and TCP (Kamailio's defaults stop at 32 KB). Requests it relays onward wait RFC 3261's 32 s; a new call fails over after 5 s without any answer, and the
-  dispatcher's probes use the same 5 s. A `503` takes a node out of rotation at once; silence alone doesn't, since a
+  (`420`), and takes messages up to 64 KB over UDP and TCP (Kamailio's defaults stop at 32 KB). It answers `400`
+  itself to a From or To that every FreeSWITCH node would discard without a word: a display name outside quotes with
+  anything but token characters in it (a comma, `@`, UTF-8), or a bare URI with a comma or question mark. Requests it
+  relays onward wait RFC 3261's 32 s; a new call fails over after 5 s without any answer, and the dispatcher's probes
+  use the same 5 s. A `503` takes a node out of rotation at once; silence alone doesn't, since a
   node is also silent when it discards a request it can't parse (one malformed INVITE would otherwise empty the
   fleet), so a node that has stopped answering leaves rotation after two missed probes, 10 to 20 s. A `503` from the
   last node is passed on as `503`. `make check-kamailio-cfg`
   runs `kamailio -c` on rendered cases in the pinned image, in the lint workflow. Peer data (loop 9) and
   registrations (loop 8) join the config in M5.
+- **Metrics.** Each pod serves Prometheus metrics at `/metrics` on `spec.metrics.port` (default 5071), on its own
+  address only and without a token, for a Prometheus server or an OpenTelemetry Collector to scrape: Kamailio's own
+  statistics (`kamailio_tm_*`, `kamailio_sl_*`, `kamailio_core_*`, ...) and the edge's counters:
+  - `kamailio_rejected_requests_total{reason}`: refused before any node saw it; `display_name` (the `400` above),
+    `sanity` (sanity's own `4xx`), `uri_scheme` (`416`).
+  - `kamailio_node_silent_timeouts_total`: a node didn't answer within 5 s.
+  - `kamailio_silent_drops_total{cause}`: every node tried stayed silent and the caller got `408`. `cause="request"`
+    when a node answered something else meanwhile: the nodes are up and discarded this request, a malformed one we
+    don't yet refuse, or an attack. `cause="nodes"` when none did: the fleet itself may be down. Both want an alert.
+
+  Each refusal and silent drop is also logged with its source address and Call-ID; neither goes into a label.
 - **Most changes are live; a short list restarts.** The restart list is the rendered config and the pod template:
   listening ports, loaded modules and their parameters, the routing script, and the order of `spec.dispatch` (the
   sets are in the routing). A change to one of those makes a new snapshot and a new template, and the fleet rolls one
@@ -270,7 +284,8 @@ priority order; each must set `spec.dispatcher`, whose `setID` becomes that flee
   same FreeSWITCH fleet. That is for isolation: a lane whose bad config or overload can't reach the other, or that
   upgrades on its own schedule. Behaviour alone isn't a reason for one, and neither is a peer on the inside network
   (loop 10 covers those in the one fleet).
-- **Not yet:** TLS, rate limiting of scanners (`pike`) and allow-listing peers. Kamailio listens on `0.0.0.0` and
+- **Not yet:** TLS, rate limiting of scanners (`pike`), allow-listing peers, and refusing a source whose requests the
+  nodes keep discarding (it needs known peers exempted, so a carrier isn't cut off for a few bad calls; M5). Kamailio listens on `0.0.0.0` and
   advertises the public address, so a reply leaves from whatever address the kernel picks; with the address pool (M3)
   it should listen on each address explicitly.
 

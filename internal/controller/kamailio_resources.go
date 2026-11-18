@@ -30,6 +30,7 @@ type kamailioSettings struct {
 	replicas        int32
 	sipPort         int32
 	rpcPort         int32
+	metricsPort     int32
 	addressSource   sipv1alpha1.ExternalAddressSource
 	requireAddress  bool
 	maxDrainSeconds int64
@@ -42,6 +43,7 @@ func resolveKamailio(kc *sipv1alpha1.KamailioCluster) kamailioSettings {
 		replicas:        2,
 		sipPort:         5060,
 		rpcPort:         5070,
+		metricsPort:     5071,
 		addressSource:   sipv1alpha1.ExternalAddressNodeExternalIP,
 		requireAddress:  true,
 		maxDrainSeconds: 40,
@@ -55,6 +57,9 @@ func resolveKamailio(kc *sipv1alpha1.KamailioCluster) kamailioSettings {
 	}
 	if s.RPC.Port != 0 {
 		out.rpcPort = s.RPC.Port
+	}
+	if s.Metrics.Port != 0 {
+		out.metricsPort = s.Metrics.Port
 	}
 	if s.ExternalAddress.Source != "" {
 		out.addressSource = s.ExternalAddress.Source
@@ -129,6 +134,7 @@ func buildKamailioService(kc *sipv1alpha1.KamailioCluster) *corev1.Service {
 				{Name: portSIPUDP, Protocol: corev1.ProtocolUDP, Port: cfg.sipPort, TargetPort: intstr.FromInt32(cfg.sipPort)},
 				{Name: portSIPTCP, Protocol: corev1.ProtocolTCP, Port: cfg.sipPort, TargetPort: intstr.FromInt32(cfg.sipPort)},
 				{Name: "rpc", Protocol: corev1.ProtocolTCP, Port: cfg.rpcPort, TargetPort: intstr.FromInt32(cfg.rpcPort)},
+				{Name: "metrics", Protocol: corev1.ProtocolTCP, Port: cfg.metricsPort, TargetPort: intstr.FromInt32(cfg.metricsPort)},
 			},
 		},
 	}
@@ -209,6 +215,7 @@ func buildKamailioStatefulSet(kc *sipv1alpha1.KamailioCluster, configName, confi
 			{Name: portSIPUDP, Protocol: corev1.ProtocolUDP, ContainerPort: cfg.sipPort, HostPort: cfg.sipPort},
 			{Name: portSIPTCP, Protocol: corev1.ProtocolTCP, ContainerPort: cfg.sipPort, HostPort: cfg.sipPort},
 			{Name: "rpc", Protocol: corev1.ProtocolTCP, ContainerPort: cfg.rpcPort, HostPort: cfg.rpcPort},
+			{Name: "metrics", Protocol: corev1.ProtocolTCP, ContainerPort: cfg.metricsPort, HostPort: cfg.metricsPort},
 		},
 		VolumeMounts: mounts,
 		ReadinessProbe: &corev1.Probe{
