@@ -89,7 +89,9 @@ request_route {
 	}
 	# RFC 3261 8.2.2.1: a Request-URI scheme we don't support (anything but sip, sips and tel) gets 416. Matched on
 	# the request line itself: a URI Kamailio can't parse has no $ru, and sanity would answer 400 Bad Request URI.
-	if (!($(mb{line.at,0}) =~ "^[A-Za-z]+ +(sips?|tel):")) {
+	# The method is any token (RFC 3261 25.1: % and the like included), and a Request-URI that doesn't start with a
+	# scheme at all (one in <>, say) isn't an unsupported scheme: sanity answers it 400 instead.
+	if ($(mb{line.at,0}) =~ "^[^ ]+ +[A-Za-z][A-Za-z0-9+.-]*:" && !($(mb{line.at,0}) =~ "^[^ ]+ +(sips?|tel):")) {
 		sl_send_reply("416", "Unsupported URI Scheme");
 		exit;
 	}
