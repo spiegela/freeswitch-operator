@@ -233,8 +233,8 @@ priority order; each must set `spec.dispatcher`, whose `setID` becomes that flee
   - OPTIONS keepalives from peers (no user part), answered by Kamailio itself: `200` with an `Allow` header while any
     set has an active node, `503` while none has or while the pod drains, so peers route elsewhere.
 
-  It also inserts `Max-Forwards: 70` when missing and refuses requests that require an extension it doesn't support
-  (`420`). Requests it relays onward wait RFC 3261's 32 s; a new call fails over after 5 s without any answer, and the
+  It also inserts `Max-Forwards: 70` when missing, refuses requests that require an extension it doesn't support
+  (`420`), and takes messages up to 64 KB over UDP and TCP (Kamailio's defaults stop at 32 KB). Requests it relays onward wait RFC 3261's 32 s; a new call fails over after 5 s without any answer, and the
   dispatcher's probes use the same 5 s. A `503` takes a node out of rotation at once; silence alone doesn't, since a
   node is also silent when it discards a request it can't parse (one malformed INVITE would otherwise empty the
   fleet), so a node that has stopped answering leaves rotation after two missed probes, 10 to 20 s. A `503` from the
