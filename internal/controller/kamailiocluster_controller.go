@@ -110,6 +110,7 @@ func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		Name:           kc.Name,
 		SIPPort:        cfg.sipPort,
 		RPCPort:        cfg.rpcPort,
+		MetricsPort:    cfg.metricsPort,
 		DispatcherList: kamailioDispatcher,
 		Sets:           setIDs,
 	})

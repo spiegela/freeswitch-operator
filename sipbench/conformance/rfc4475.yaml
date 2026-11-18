@@ -367,12 +367,8 @@ cases:
     area: parsing
     component: proxy
     expect: 400 from Kamailio; if it is liberal and relays, the relayed From and To are well formed.
-    status: partial
+    status: covered
     scenarios: [raw-malformed-requests]
-    gap: >
-      Deviation, not decided: Kamailio's parser accepts the From and relays the INVITE; each node discards it
-      unanswered, so after trying every node Kamailio answers 408 (checked). The nodes stay in rotation and the next
-      call goes through (checked).
 
   - id: rfc4475-3.1.2.16
     ref: "3.1.2.16"

@@ -37,6 +37,18 @@ type KamailioRPCSpec struct {
 	Port int32 `json:"port,omitempty"`
 }
 
+// KamailioMetricsSpec configures the port Kamailio serves Prometheus metrics on.
+type KamailioMetricsSpec struct {
+	// port for GET /metrics, in the Prometheus text format, for a Prometheus server or an OpenTelemetry
+	// Collector's prometheus receiver to scrape. It listens on the pod's own address only and needs no token: it
+	// serves counters, nothing that changes Kamailio.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=5071
+	// +optional
+	Port int32 `json:"port,omitempty"`
+}
+
 // KamailioDrainSpec configures how a Kamailio pod stops.
 type KamailioDrainSpec struct {
 	// maxDrainSeconds is how long a stopping pod waits for its open transactions to finish, answering new
@@ -57,6 +69,7 @@ type DispatchTarget struct {
 
 // KamailioClusterSpec defines the desired state of KamailioCluster.
 // +kubebuilder:validation:XValidation:rule="self.sip.port != self.rpc.port",message="sip.port and rpc.port must differ"
+// +kubebuilder:validation:XValidation:rule="self.metrics.port != self.sip.port && self.metrics.port != self.rpc.port",message="metrics.port must differ from sip.port and rpc.port"
 type KamailioClusterSpec struct {
 	// replicas is the number of Kamailio pods, one per node.
 	// +kubebuilder:validation:Minimum=0
@@ -101,6 +114,11 @@ type KamailioClusterSpec struct {
 	// +kubebuilder:default={}
 	// +optional
 	RPC KamailioRPCSpec `json:"rpc,omitzero"`
+
+	// metrics configures the Prometheus metrics port.
+	// +kubebuilder:default={}
+	// +optional
+	Metrics KamailioMetricsSpec `json:"metrics,omitzero"`
 
 	// externalAddress says what each pod advertises in Via and Record-Route. A pod reads it once, when it
 	// starts. With source None it is the node's own address.
