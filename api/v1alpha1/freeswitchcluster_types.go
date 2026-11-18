@@ -178,6 +178,53 @@ type LivenessSpec struct {
 	FailureThreshold int32 `json:"failureThreshold,omitempty"`
 }
 
+// FreeswitchMetricsSpec runs a Prometheus exporter in each FreeSWITCH pod. It reads FreeSWITCH over its event
+// socket on 127.0.0.1 (sessions, calls, whether inbound calls are paused, each SIP profile's state and call
+// counters) and serves them at /metrics on the pod's own address, for a Prometheus server or an OpenTelemetry
+// Collector's prometheus receiver to scrape. It runs as a native sidecar, so it keeps reporting while the node
+// drains and stops only after FreeSWITCH has.
+type FreeswitchMetricsSpec struct {
+	// exporterImage is the image of the operator's freeswitch-exporter; pin it by digest. The exporter is part of
+	// the pod template, so changing the image rolls the fleet one drained node at a time, like any other
+	// template change.
+	// +kubebuilder:validation:MinLength=1
+	ExporterImage string `json:"exporterImage"`
+
+	// exporterImagePullPolicy for the exporter container.
+	// +optional
+	ExporterImagePullPolicy corev1.PullPolicy `json:"exporterImagePullPolicy,omitempty"`
+
+	// port for GET /metrics. With host networking it is a port on the node: keep it closed to the outside.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=9282
+	// +optional
+	Port int32 `json:"port,omitempty"`
+
+	// eventSocket is where the exporter reaches FreeSWITCH.
+	// +optional
+	EventSocket EventSocketSpec `json:"eventSocket,omitzero"`
+
+	// resources for the exporter container. Unset: a small request (10m CPU, 16Mi) and a 64Mi memory limit.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
+// EventSocketSpec says how to reach FreeSWITCH's event socket (mod_event_socket) from inside the pod.
+type EventSocketSpec struct {
+	// port the event socket listens on at 127.0.0.1 (or on all addresses).
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=8021
+	// +optional
+	Port int32 `json:"port,omitempty"`
+
+	// passwordSecretRef names a key of a Secret in this namespace holding the event socket password. Unset means
+	// FreeSWITCH's default, ClueCon, which fs_cli (and so the operator's probe and drain scripts) also use.
+	// +optional
+	PasswordSecretRef *corev1.SecretKeySelector `json:"passwordSecretRef,omitempty"`
+}
+
 // DispatcherSpec describes the Kamailio dispatcher set that sends calls to this fleet.
 type DispatcherSpec struct {
 	// setID is the dispatcher set for this fleet. Sets 1-99 are for fleets; the operator assigns sets it creates
@@ -220,6 +267,7 @@ type DispatcherSpec struct {
 }
 
 // FreeswitchClusterSpec defines the desired state of FreeswitchCluster.
+// +kubebuilder:validation:XValidation:rule="!has(self.metrics) || self.metrics.port != (has(self.sip) && has(self.sip.port) ? self.sip.port : 5060)",message="metrics.port must differ from sip.port"
 type FreeswitchClusterSpec struct {
 	// replicas is the number of FreeSWITCH nodes. Each runs on its own Kubernetes node. Keep one spare.
 	// +kubebuilder:validation:Minimum=0
@@ -290,6 +338,10 @@ type FreeswitchClusterSpec struct {
 	// dispatcher, when set, makes the operator maintain a Kamailio dispatcher list for this fleet.
 	// +optional
 	Dispatcher *DispatcherSpec `json:"dispatcher,omitempty"`
+
+	// metrics, when set, runs a Prometheus exporter beside FreeSWITCH in each pod.
+	// +optional
+	Metrics *FreeswitchMetricsSpec `json:"metrics,omitempty"`
 }
 
 // Member is one FreeSWITCH pod as the operator sees it.

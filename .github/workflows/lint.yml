@@ -34,3 +34,5 @@ jobs:
         run: make lint
       - name: Check the Kamailio config template with kamailio -c
         run: make check-kamailio-cfg
+      - name: Check the alert rules and run their tests with promtool
+        run: make check-alerts

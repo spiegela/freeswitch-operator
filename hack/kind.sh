@@ -3,8 +3,8 @@
 # behind and in front.
 #
 #   hack/kind.sh up        create the cluster (deploy/kind/kind-config.yaml)
-#   hack/kind.sh deploy    build and load the images, install the operator, apply deploy/kind, wait for both fleets
-#                          and for every Kamailio to load the dispatcher list
+#   hack/kind.sh deploy    build and load the images, install the operator, apply deploy/kind/monitoring and
+#                          deploy/kind, wait for both fleets and for every Kamailio to load the dispatcher list
 #   hack/kind.sh bench [re] run sipbench through Kamailio; an optional regexp picks scenarios by name, and
 #                          SIPBENCH_REPORT=<file> saves the run's JSON report there (for the report card)
 #   hack/kind.sh status    both fleets, their members and the dispatcher list each Kamailio has loaded
@@ -59,9 +59,10 @@ deploy() {
   say "building images"
   make -C "$ROOT" kustomize >/dev/null
   docker build -q -t freeswitch-operator:dev "$ROOT"
+  docker build -q --target exporter -t freeswitch-exporter:dev "$ROOT"
   docker build -q -t sipbench:dev "$ROOT/sipbench"
   say "loading images into kind"
-  "$KIND" load docker-image --name "$CLUSTER" freeswitch-operator:dev sipbench:dev
+  "$KIND" load docker-image --name "$CLUSTER" freeswitch-operator:dev freeswitch-exporter:dev sipbench:dev
   say "pulling pinned images on the nodes"
   pull_pinned
 
@@ -75,6 +76,12 @@ deploy() {
   # M1 ran Kamailio from deploy/examples/kamailio, by hand; it holds the proxy nodes' SIP and RPC ports.
   "${KUBECTL[@]}" -n "$NS" delete deployment/kamailio service/kamailio configmap/kamailio-config \
     --ignore-not-found --wait=true
+
+  say "applying monitoring (OpenTelemetry Collector, Prometheus with the alert rules)"
+  "$KUSTOMIZE" build "$ROOT/deploy/kind/monitoring" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -
+  "${KUBECTL[@]}" -n monitoring rollout restart deployment/otel-collector
+  "${KUBECTL[@]}" -n monitoring rollout status deployment/prometheus --timeout=180s
+  "${KUBECTL[@]}" -n monitoring rollout status deployment/otel-collector --timeout=180s
 
   say "applying the edge"
   "$KUSTOMIZE" build "$ROOT/deploy/kind" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -

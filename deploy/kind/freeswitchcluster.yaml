@@ -38,6 +38,10 @@ spec:
   drain:
     # Short, so a stuck drain shows up quickly here. Production allows hours.
     maxDrainSeconds: 300
+  metrics:
+    # Built from this tree and loaded into kind (hack/kind.sh); in production, pin a published image by digest.
+    exporterImage: freeswitch-exporter:dev
+    exporterImagePullPolicy: Never
   dispatcher:
     setID: 1
     configMapName: edge-dispatcher

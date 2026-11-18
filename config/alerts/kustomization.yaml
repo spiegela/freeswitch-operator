@@ -1,0 +1,8 @@
+# The edge's alert rules as a ConfigMap (edge-alerts-<hash>, key edge-alerts.yaml) for a Prometheus to mount;
+# deploy/kind/monitoring uses it. The hash in the name rolls a Prometheus that mounts it when the rules change.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+configMapGenerator:
+  - name: edge-alerts
+    files:
+      - edge-alerts.yaml

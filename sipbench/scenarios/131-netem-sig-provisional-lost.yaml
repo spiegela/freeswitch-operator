@@ -1,0 +1,23 @@
+name: netem-sig-provisional-lost
+area: impairment
+description: >
+  The edge's first 100 and first 180 are lost on the way out, so the caller resends its INVITE. The edge absorbs
+  every copy into the one transaction and answers it with its latest provisional (the 180 again): the backend
+  sees one leg, and the call is answered with one To tag.
+requires: [mock, sip-trace]
+impairments:
+  - {link: carrier-edge, direction: from-edge, traffic: sip, drop: first 100 and first 180}
+calls:
+  - id: a
+    to: ringing
+    steps:
+      - tone: {hz: 600, ms: 1500}
+      - hangup: {}
+    expect:
+      status: 200
+      tonesHeard: [1000]
+      sip:
+        - {out: INVITE, min: 2}
+        - {in: 180 INVITE, min: 2, deliveredWithinMs: 1000, oneToTag: true}
+        - {in: 200 INVITE, min: 1, oneToTag: true}
+      backend: {calls: 1, answered: true, tonesHeard: [600]}

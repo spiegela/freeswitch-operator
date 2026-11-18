@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -30,6 +31,7 @@ import (
 
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/esl"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/fleet"
+	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/netem"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/script"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/uas"
@@ -74,7 +76,12 @@ type Config struct {
 	Caps map[string]bool
 	// Fleet is the FreeSWITCH fleet scenario actions act on; with it, add "fleet" to Caps.
 	Fleet fleet.Fleet
-	Log   *slog.Logger
+	// PrometheusURL is the metrics backend the scenarios' metric checks query (Prometheus's HTTP API), e.g.
+	// http://prometheus.monitoring.svc:9090. Empty: the checks are reported as not checked.
+	PrometheusURL string
+	// TCExec runs the tc and ip commands that impair the network; nil runs them for real (see netem.Shaper).
+	TCExec func(ctx context.Context, args ...string) error
+	Log    *slog.Logger
 }
 
 // Runner runs scenarios. Create one with New and call Start before Run. Run may be called concurrently: each call
@@ -92,8 +99,10 @@ type Runner struct {
 	seq     atomic.Int64
 }
 
-// New returns a runner for cfg.
+// New returns a runner for cfg. It confines the process's RTP to netem.RTPPortBase..RTPPortLast, so tc can tell
+// the runner's media from its signalling.
 func New(cfg Config) *Runner {
+	media.RTPPortStart, media.RTPPortEnd = netem.RTPPortBase, netem.RTPPortLast+1
 	log := cfg.Log
 	if log == nil {
 		log = slog.Default()
@@ -165,6 +174,10 @@ type Result struct {
 	Raw      []RawResult   `json:"raw,omitempty"`
 	// Timeline is what the scenario's actions did, when, as "+12.3s action: what happened".
 	Timeline []string `json:"timeline,omitempty"`
+	// Impairments are the network conditions the scenario ran under.
+	Impairments []string `json:"impairments,omitempty"`
+	// Metrics is what each metric check saw.
+	Metrics []MetricResult `json:"metrics,omitempty"`
 }
 
 // CallResult is what the runner saw of one call.
@@ -179,9 +192,46 @@ type CallResult struct {
 	Digits          string            `json:"digits"`
 	EndedBy         string            `json:"endedBy,omitempty"`
 	MediaFrames     int64             `json:"mediaFrames"`
-	Error           string            `json:"error,omitempty"`
-	Backend         []uas.Call        `json:"backend,omitempty"`
-	Target          []uas.Call        `json:"target,omitempty"`
+	// SetupMs is from sending the INVITE to its final response; DurationMs from answer to the call's end.
+	SetupMs    int64 `json:"setupMs,omitempty"`
+	DurationMs int64 `json:"durationMs,omitempty"`
+	// ToneCoverage is, per tone heard, the share of its 20 ms frames that arrived (see tone.Detector.Coverage).
+	ToneCoverage map[string]float64 `json:"toneCoverage,omitempty"`
+	// EchoMs is, per tone the caller played and heard back, the time from playing it to hearing it.
+	EchoMs map[string]int `json:"echoMs,omitempty"`
+	// RTP is the stream the caller received, by sequence number.
+	RTP *RTPStats `json:"rtp,omitempty"`
+	// SIP is every SIP message that crossed the caller's socket, when the scenario records them.
+	SIP     []netem.TraceEntry `json:"sip,omitempty"`
+	Error   string             `json:"error,omitempty"`
+	Backend []uas.Call         `json:"backend,omitempty"`
+	Target  []uas.Call         `json:"target,omitempty"`
+}
+
+// RTPStats is what the caller received of the edge's RTP.
+type RTPStats struct {
+	Packets  uint64  `json:"packets"`
+	Expected uint64  `json:"expected"`
+	Lost     int64   `json:"lost"` // negative when duplicates outnumber losses
+	LossPct  float64 `json:"lossPct"`
+}
+
+func rtpStats(med *diago.DialogMedia) *RTPStats {
+	sess := med.RTPSession()
+	if sess == nil {
+		return nil
+	}
+	st := sess.ReadStats()
+	if st.PacketsCount == 0 {
+		return &RTPStats{}
+	}
+	// Calls are far shorter than a sequence number cycle (65536 packets, 21 minutes at 20 ms).
+	expected := uint64(st.LastSequenceNumber-st.FirstPktSequenceNumber) + 1
+	lost := int64(expected) - int64(st.PacketsCount) //nolint:gosec // counts of one call's packets
+	return &RTPStats{
+		Packets: st.PacketsCount, Expected: expected, Lost: lost,
+		LossPct: math.Round(float64(max(lost, 0))/float64(expected)*10000) / 100,
+	}
 }
 
 // Run runs one scenario.
@@ -194,6 +244,11 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 		res.Status = statusSkip
 		res.Reason = "needs " + strings.Join(missing, ", ")
 		return res
+	}
+	// Metric baselines before anything is sent, and outside the scenario's own deadline: settling one takes a
+	// scrape interval or more. The checks themselves come last.
+	if len(s.Metrics) > 0 {
+		res.Metrics = r.metricBaselines(ctx, s.Metrics)
 	}
 	timeout := 60 * time.Second
 	if s.TimeoutMs > 0 {
@@ -243,6 +298,19 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 		}()
 	}
 
+	// Network impairments, in place before the first message.
+	for _, im := range s.Impaired {
+		res.Impairments = append(res.Impairments, im.String())
+	}
+	imp, err := r.impair(ctx, s)
+	if err != nil {
+		res.Status, res.Reason = statusFail, "impairing the network: "+err.Error()
+		return res
+	}
+	if imp != nil {
+		defer imp.remove()
+	}
+
 	if s.Options != nil {
 		code, err := r.options(ctx)
 		switch {
@@ -276,28 +344,22 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 			res.Status = statusFail
 		}
 	}()
+	if imp != nil && len(s.Calls) > 0 {
+		imp.schedule(ctx, states[s.Calls[0].ID], tl)
+	}
 	results := r.placeCalls(ctx, s, states, tl)
+	if imp != nil {
+		imp.remove() // before reading the mock's records, which may cross the impaired link
+	}
 
 	// Give the ends a moment to finish recording after the last BYE.
 	time.Sleep(500 * time.Millisecond)
 
-	for i, c := range s.Calls {
-		cr := &results[i]
-		if r.cfg.MockURL != "" {
-			calls, err := r.mockCalls(ctx, cr.BenchCall)
-			if err != nil {
-				fail("call %s: reading backend records: %v", c.ID, err)
-			}
-			cr.Backend = calls
-		}
-		cr.Target = r.tstore.Calls(cr.BenchCall)
-		for _, f := range check(c, *cr, r.cfg.MockURL != "") {
-			fail("call %s: %s", c.ID, f)
-		}
-	}
-	for _, f := range crossChecks(s.Calls, results) {
-		fail("%s", f)
-	}
+	res.Failures = append(res.Failures, r.checkCalls(ctx, s, results)...)
+	// The scenario's own deadline may be near; the metrics backend gets its own minute.
+	mctx, mcancel := context.WithTimeout(context.WithoutCancel(ctx), metricWait+5*time.Second)
+	defer mcancel()
+	res.Failures = append(res.Failures, r.metricChecks(mctx, res.Metrics)...)
 	res.Calls = results
 	if len(res.Failures) > 0 {
 		res.Status = statusFail
@@ -305,6 +367,28 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 		res.Status = statusPass
 	}
 	return res
+}
+
+// checkCalls adds what the ends recorded to each call's result and returns every expectation that failed: each
+// call's own, then those across calls and across repeats.
+func (r *Runner) checkCalls(ctx context.Context, s *scenario.Scenario, results []CallResult) []string {
+	var failures []string
+	for i, c := range s.Calls {
+		cr := &results[i]
+		if r.cfg.MockURL != "" {
+			calls, err := r.mockCalls(ctx, cr.BenchCall)
+			if err != nil {
+				failures = append(failures, fmt.Sprintf("call %s: reading backend records: %v", c.ID, err))
+			}
+			cr.Backend = calls
+		}
+		cr.Target = r.tstore.Calls(cr.BenchCall)
+		for _, f := range check(c, *cr, r.cfg.MockURL != "") {
+			failures = append(failures, fmt.Sprintf("call %s: %s", c.ID, f))
+		}
+	}
+	failures = append(failures, crossChecks(s.Calls, results)...)
+	return append(failures, groupChecks(s.Calls, results)...)
 }
 
 // placeCalls places every call, each after its action and start delay, runs the timeline alongside, and waits for
@@ -343,9 +427,9 @@ func (r *Runner) placeCalls(ctx context.Context, s *scenario.Scenario, states ma
 // call places one call and returns what the runner saw.
 func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splitting it scatters the steps
 	ctx context.Context, s *scenario.Scenario, c scenario.Call, st *callState,
-) CallResult {
+) (cr CallResult) {
 	bench := st.bench
-	cr := CallResult{ID: c.ID, BenchCall: bench, TonesHeard: []float64{}}
+	cr = CallResult{ID: c.ID, BenchCall: bench, TonesHeard: []float64{}}
 	log := r.log.With("scenario", s.Name, "call", c.ID)
 
 	codecs := []media.Codec{}
@@ -377,24 +461,23 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 		cr.Error = err.Error()
 		return cr
 	}
-	// diago closes the transport when callCtx ends; closing the UA as well double-closes it.
-	bind := r.cfg.CallerBindHost
-	if bind == "" {
-		bind = "0.0.0.0"
-	}
-	dg := diago.NewDiago(ua,
-		diago.WithTransport(diago.Transport{Transport: transportUDP, BindHost: bind, BindPort: 0}),
-		diago.WithMediaConfig(diago.MediaConfig{Codecs: codecs}),
-		diago.WithLogger(log),
-	)
+	// callerDiago closes the socket and the UA when callCtx ends.
 	callCtx, cancelCall := context.WithCancel(ctx)
 	defer cancelCall()
-	if err := dg.ServeBackground(callCtx, func(d *diago.DialogServerSession) {
+	refuse := func(d *diago.DialogServerSession) {
 		_ = d.Respond(sip.StatusForbidden, "Caller does not take calls", nil)
-	}); err != nil {
+	}
+	var trace *netem.Trace
+	if s.NeedsTrace() {
+		trace = netem.NewTrace()
+		defer func() { cr.SIP = trace.Entries() }()
+	}
+	dg, err := r.callerDiago(callCtx, ua, codecs, log, netem.NewSIPRules(s.Impaired), trace)
+	if err != nil {
 		cr.Error = "listen: " + err.Error()
 		return cr
 	}
+	dg.HandleFunc(refuse)
 
 	recipient := sip.Uri{Scheme: "sip", User: c.To, Host: host, Port: port}
 	d, err := dg.NewDialog(recipient, diago.NewDialogOptions{Transport: transportUDP})
@@ -433,7 +516,9 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 		inviteCtx, cancel = context.WithTimeout(callCtx, time.Duration(c.CancelAfterMs)*time.Millisecond)
 		defer cancel()
 	}
+	invited := time.Now()
 	med, err := d.Invite(inviteCtx, opts)
+	cr.SetupMs = time.Since(invited).Milliseconds()
 	if err != nil {
 		var dr sipgo.ErrDialogResponse
 		switch {
@@ -460,6 +545,8 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 		cr.ResponseHeaders = responseHeaders(res)
 	}
 	st.answer()
+	answeredAt := time.Now()
+	var endedAt time.Time
 
 	detect := append(append([]float64{}, StandardTones...), c.DetectHz...)
 	detect = append(detect, c.Expect.TonesHeard...)
@@ -475,6 +562,7 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 	endedLocal := false
 	hangup := func() error {
 		endedLocal = true
+		endedAt = time.Now()
 		hctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return d.Hangup(hctx)
@@ -531,7 +619,9 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 		cr.EndedBy = "local"
 	} else {
 		cr.EndedBy = "remote"
+		endedAt = time.Now()
 	}
+	cr.DurationMs = endedAt.Sub(answeredAt).Milliseconds()
 	// Let the last packets drain into the detector.
 	time.Sleep(100 * time.Millisecond)
 	cr.Codec = eng.Codec()
@@ -539,7 +629,107 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 	cr.AudioGapsMs = eng.MaxGapsMs()
 	cr.Digits = eng.Digits()
 	cr.MediaFrames = eng.FramesReceived()
+	cr.ToneCoverage = eng.ToneCoverage()
+	cr.EchoMs = eng.EchoMs()
+	cr.RTP = rtpStats(med)
 	return cr
+}
+
+// callerDiago serves the call's SIP on a socket of its own (netem.Conn), bound to the address toward the edge,
+// so the SIP layer can drop and hold named messages and record them all. With a trace, every request the call
+// sends leaves from that socket (pinnedClient); without one (no SIP-layer rules either), in-dialog requests may
+// leave from another, as sipgo chooses. It returns once the socket is registered with sipgo: diago's
+// ServeBackground reports ready before that, and a request sent in between makes sipgo try to bind the same
+// address again.
+func (r *Runner) callerDiago(
+	ctx context.Context, ua *sipgo.UserAgent, codecs []media.Codec, log *slog.Logger, rules *netem.SIPRules,
+	trace *netem.Trace,
+) (*diago.Diago, error) {
+	ip := net.ParseIP(r.cfg.CallerBindHost)
+	if ip == nil || ip.IsUnspecified() {
+		var err error
+		if ip, err = netem.LocalIPToward(r.cfg.Edge); err != nil {
+			return nil, err
+		}
+	}
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip})
+	if err != nil {
+		return nil, err
+	}
+	conn := netem.NewConn(pc, rules, trace)
+	context.AfterFunc(ctx, func() { _ = conn.Close(); _ = ua.Close() })
+	srv, err := sipgo.NewServer(ua, sipgo.WithServerLogger(log))
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+	opts := []diago.DiagoOption{
+		diago.WithServer(srv),
+		diago.WithTransport(diago.Transport{Transport: transportUDP, BindHost: ip.String(), BindPort: port}),
+		diago.WithMediaConfig(diago.MediaConfig{Codecs: codecs}),
+		diago.WithLogger(log),
+	}
+	if trace != nil {
+		client, err := pinnedClient(ua, log, sip.Addr{IP: ip, Port: port})
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		opts = append(opts, diago.WithClient(client))
+	}
+	dg := diago.NewDiago(ua, opts...)
+	go func() {
+		if err := srv.ServeUDP(conn); err != nil && ctx.Err() == nil {
+			log.Warn("caller socket stopped", "error", err)
+		}
+	}()
+	select {
+	case <-conn.Serving():
+		return dg, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// pinnedClient is a sipgo client whose every request leaves from laddr, the call's own socket. sipgo sets the
+// local address only on requests it builds itself; in-dialog requests (ACK, BYE) carry none, and go out on any
+// socket already talking to their destination, or a new one. Through Kamailio that destination (its
+// Record-Route) is an address the call's socket has not heard from, so without this the ACK and BYE would leave
+// from another port, past the SIP layer's impairments and trace. Pinned, they need the edge address to be that
+// node's own (netem.TraceCapability): sent through a Service VIP, the INVITE's NAT entry and the in-dialog
+// requests' direct one collide in conntrack.
+func pinnedClient(ua *sipgo.UserAgent, log *slog.Logger, laddr sip.Addr) (*sipgo.Client, error) {
+	opts := []sipgo.ClientOption{
+		sipgo.WithClientNAT(), sipgo.WithClientLogger(log), sipgo.WithClientConnectionAddr(laddr.String()),
+	}
+	inner, err := sipgo.NewClient(ua, opts...)
+	if err != nil {
+		return nil, err
+	}
+	outer, err := sipgo.NewClient(ua, opts...)
+	if err != nil {
+		return nil, err
+	}
+	outer.TxRequester = pinned{inner: inner, laddr: laddr}
+	return outer, nil
+}
+
+// pinned sends requests through inner with their local address set; the outer client has built them already.
+type pinned struct {
+	inner *sipgo.Client
+	laddr sip.Addr
+}
+
+func (p pinned) Request(ctx context.Context, req *sip.Request) (sip.ClientTransaction, error) {
+	if req.Laddr.IP == nil {
+		p.laddr.Copy(&req.Laddr)
+	}
+	built := func(*sipgo.Client, *sip.Request) error { return nil }
+	if req.IsAck() {
+		return nil, p.inner.WriteRequest(req, built)
+	}
+	return p.inner.TransactionRequest(ctx, req, built)
 }
 
 // options sends OPTIONS to the edge and returns the response code.

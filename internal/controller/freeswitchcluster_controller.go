@@ -88,12 +88,17 @@ type FreeswitchClusterReconciler struct {
 func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
+	fleet := fleetRef{kind: kindFreeswitch, namespace: req.Namespace, name: req.Name}
 	var fsc sipv1alpha1.FreeswitchCluster
 	if err := r.Get(ctx, req.NamespacedName, &fsc); err != nil {
+		if apierrors.IsNotFound(err) {
+			forgetFleet(fleet)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if fsc.DeletionTimestamp != nil {
 		// Owner references let the garbage collector remove everything; each pod still drains in preStop.
+		forgetFleet(fleet)
 		return ctrl.Result{}, nil
 	}
 	cfg := resolve(&fsc)
@@ -161,15 +166,19 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		p := decision.Replace
 		log.Info("replacing pod for rolling update", "pod", p.Name, "revision", podRevision(p), "updateRevision", sts.Status.UpdateRevision)
 		uid := p.UID
-		if err := r.Delete(ctx, p, client.Preconditions{UID: &uid}); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, err
+		if err := r.Delete(ctx, p, client.Preconditions{UID: &uid}); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
+		} else {
+			fleetPodReplacements.WithLabelValues(fleet.labels()...).Inc()
 		}
 	} else if decision.Waiting != "" {
 		log.V(1).Info("rolling update waiting", "reason", decision.Waiting, "outdated", decision.Outdated)
 	}
 
 	if cfg.dispatcher != nil {
-		after, err := r.syncDispatcher(ctx, &fsc, cfg, status)
+		after, err := r.syncDispatcher(ctx, &fsc, fleet, cfg, status)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -182,6 +191,10 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionDegraded, Status: metav1.ConditionTrue, Reason: "ConfigInvalid", Message: confErr.Error(), ObservedGeneration: gen})
 		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionReady, Status: metav1.ConditionFalse, Reason: "ConfigInvalid", Message: confErr.Error(), ObservedGeneration: gen})
 	}
+	recordFleet(fleet, fleetObservation{
+		desired: cfg.replicas, pods: pods, outdated: decision.Outdated, conditions: status.Conditions,
+		maxDrainSeconds: cfg.maxDrainSeconds, now: r.now(),
+	})
 	if !equalJSON(&fsc.Status, status) {
 		fsc.Status = *status
 		if err := r.Status().Update(ctx, &fsc); err != nil {
@@ -413,7 +426,7 @@ func syncExternalAddresses(ctx context.Context, c client.Client, source sipv1alp
 // syncDispatcher renders the dispatcher list from the ready endpoints, writes it when it changes, takes leaving
 // nodes out of a running Kamailio at once, and asks Kamailio to reload once the kubelet has had time to update
 // the mounted file. It returns how long to wait before the reload is due, or zero.
-func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, cfg settings, status *sipv1alpha1.FreeswitchClusterStatus) (time.Duration, error) {
+func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, fleet fleetRef, cfg settings, status *sipv1alpha1.FreeswitchClusterStatus) (time.Duration, error) {
 	log := logf.FromContext(ctx)
 	d := cfg.dispatcher
 
@@ -424,6 +437,7 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 	dests := readyDestinations(endpointSlices.Items, cfg.sipPort, string(cfg.dispatcherProto))
 	content := renderDispatcherList(cfg.dispatcherSetID, dests)
 	hash := contentHash(content)
+	recordDestinations(fleet, map[int32]int{cfg.dispatcherSetID: len(dests)})
 
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: d.ConfigMapName, Namespace: fsc.Namespace}}
 	var previous string
@@ -465,10 +479,13 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 			return 0, err
 		}
 		log.Info("dispatcher list updated", "destinations", len(dests), "hash", hash)
+		dispatcherListUpdates.WithLabelValues(fleet.labels()...).Inc()
 
 		if notifier != nil {
 			for _, uri := range removedURIs(parseDispatcherURIs(previous, cfg.dispatcherSetID), parseDispatcherURIs(content, cfg.dispatcherSetID)) {
-				if err := notifier.SetInactive(ctx, cfg.dispatcherSetID, uri); err != nil {
+				err := notifier.SetInactive(ctx, cfg.dispatcherSetID, uri)
+				recordSetInactive(fleet, err)
+				if err != nil {
 					// Kamailio's own probing and the paused node's 503s still protect calls; keep going.
 					log.Error(err, "could not mark destination inactive", "uri", uri)
 				}
@@ -482,7 +499,11 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 		status.DispatcherUpdatedAt = &at
 	}
 
-	if (notifier == nil && notifierErr == nil) || status.DispatcherReloadedHash == status.DispatcherHash {
+	// Without a Kamailio to notify, no reload is ever due. Every return below leaves the status saying whether
+	// one still is, and a reload that fails is retried, which sets the gauge again.
+	notifies := notifier != nil || notifierErr != nil
+	defer func() { recordPendingReload(fleet, notifies && status.DispatcherReloadedHash != status.DispatcherHash) }()
+	if !notifies || status.DispatcherReloadedHash == status.DispatcherHash {
 		return 0, nil
 	}
 	delay := time.Duration(cfg.reloadDelaySecs) * time.Second
@@ -496,7 +517,9 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 	}
 	// The reload is done only once every Kamailio holds the list just written: reloadDelaySeconds is a guess at
 	// how long the kubelet takes to update the mounted file, and a reload before that re-reads the old one.
-	if err := notifier.Reload(ctx, map[int32][]string{cfg.dispatcherSetID: parseDispatcherURIs(content, cfg.dispatcherSetID)}); err != nil {
+	err := notifier.Reload(ctx, map[int32][]string{cfg.dispatcherSetID: parseDispatcherURIs(content, cfg.dispatcherSetID)})
+	recordReload(fleet, err)
+	if err != nil {
 		if onlyListNotLoaded(err) {
 			log.Info("Kamailio has not loaded the new dispatcher list yet; will reload again", "detail", err.Error())
 			return 10 * time.Second, nil

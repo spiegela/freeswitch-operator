@@ -6,6 +6,16 @@
 #
 # SIPBENCH_FLEET names the FreeswitchCluster the fleet scenarios act on (the "fleet" capability), through the
 # sipbench-runner service account (runner-rbac.yaml). Empty, they skip.
+#
+# NET_ADMIN lets the runner impair its own traffic with tc (the "netem" capability, carrier-edge link only): it
+# changes this pod's network namespace and nothing else.
+#
+# The edge address is proxy-kamailio, the KamailioCluster's headless Service: it resolves to each Kamailio node's
+# own address, as a carrier reaches the hostNetwork edge, so a call's in-dialog requests (sent to Kamailio's
+# Record-Route, the same node address) can leave from the INVITE's socket. That is the "sip-trace" capability,
+# which the SIP-layer impairments and sip checks need. Through the kamailio-sip Service VIP they would collide in
+# conntrack with the VIP's NAT entry and be dropped, so with SIPBENCH_EDGE set to kamailio-sip:5060, take
+# sip-trace out of SIPBENCH_CAPS and those scenarios skip.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -29,13 +39,17 @@ spec:
           imagePullPolicy: IfNotPresent
           args: ["run", "scenarios"]
           env:
-            - {name: SIPBENCH_EDGE, value: "kamailio-sip:5060"}
+            - {name: SIPBENCH_EDGE, value: "proxy-kamailio:5060"}  # headless: a Kamailio node's own address
             - {name: SIPBENCH_MOCK, value: "http://mockbackend:8080"}
             - {name: SIPBENCH_ESL, value: ""}             # set but empty: no event socket
             - {name: SIPBENCH_TARGET, value: "0.0.0.0:5090"}
-            - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma,proxy"}  # proxy: the edge address is Kamailio
+            - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma,proxy,netem,sip-trace"}  # proxy: the edge address is Kamailio
             - {name: SIPBENCH_FLEET, value: "telephony/edge"}    # namespace/name; empty skips the fleet scenarios
+            - {name: SIPBENCH_PROMETHEUS, value: "http://prometheus.monitoring.svc:9090"}  # metric checks; empty skips them
             - {name: SIPBENCH_RUN, value: ""}             # a regexp picking scenarios by name; hack/kind.sh bench sets it
             - {name: SIPBENCH_JSON, value: ""}            # "-" prints the JSON report after the summary; hack/kind.sh bench sets it
+          securityContext:
+            capabilities:
+              add: [NET_ADMIN]
           ports:
             - {name: target-udp, containerPort: 5090, protocol: UDP}

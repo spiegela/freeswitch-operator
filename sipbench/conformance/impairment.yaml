@@ -53,8 +53,11 @@ cases:
       The carrier's retransmission 500 ms later starts the call as if nothing happened: one transaction at
       Kamailio, one leg at the backend, a 200 to the caller, and setup time no more than 600 ms over the clean
       baseline.
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-sig-invite-lost]
+    gap: >
+      Checks the resent INVITE gets 200 with one To-tag and one backend leg, with setup bounded at 1.2 s absolute
+      rather than 600 ms over a measured clean baseline.
 
   - id: imp-sig-provisional-lost
     ref: "rtpbench:invite-retransmit; RFC 3261 17.2.1"
@@ -65,8 +68,8 @@ cases:
     expect: >
       The caller resends the INVITE; Kamailio absorbs every copy into the existing transaction and answers each
       with the latest provisional, so the backend sees exactly one leg and the call is answered with one To-tag.
-    status: planned
-    milestone: M2b
+    status: covered
+    scenarios: [netem-sig-provisional-lost]
 
   - id: imp-sig-200-lost
     ref: "rtpbench:invite-retransmit; RFC 3261 13.3.1.4"
@@ -78,8 +81,8 @@ cases:
       FreeSWITCH resends the 200 (at T1, then doubling) through Kamailio until the caller's ACK arrives; the
       caller gets the 200 within 1.5 s of the first copy, every copy carries the same To-tag, the call is up with
       two-way audio, and the edge does not hang up for want of an ACK.
-    status: planned
-    milestone: M2b
+    status: covered
+    scenarios: [netem-sig-200-lost]
 
   - id: imp-sig-ack-lost-once
     ref: "rtpbench:invite-retransmit; RFC 3261 13.3.1.4"
@@ -90,8 +93,8 @@ cases:
     expect: >
       The edge resends its 200, the caller ACKs the copy, the edge stops resending within T1 of that ACK, and the
       call goes on with two-way audio: no BYE from the edge, one leg at the backend.
-    status: planned
-    milestone: M2b
+    status: covered
+    scenarios: [netem-sig-ack-lost-once]
 
   - id: imp-sig-ack-never
     ref: "RFC 3261 13.3.1.4 (64*T1)"
@@ -103,8 +106,12 @@ cases:
       The edge resends the 200 up to T2 apart, gives up between 32 and 34 s after the first 200, and ends the
       call: a BYE toward the caller and the backend leg released (the mock records endedBy remote) in the same
       second. No FreeSWITCH channel is left afterwards.
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-sig-ack-never]
+    gap: >
+      Checks the 200 resent, the BYE to the caller between 31.5 and 35 s after the INVITE, and the backend leg
+      released; that no FreeSWITCH channel is left needs the event socket or metrics, and the time between the BYE and
+      the backend's release is not compared.
 
   - id: imp-sig-bye-lost-in
     ref: "rtpbench:bye-lost; RFC 3261 17.1.2.2 (timer E)"
@@ -115,8 +122,11 @@ cases:
     expect: >
       The caller's retransmission 500 ms later ends the call: 200 to the BYE within 1 s of the first copy, the
       backend leg released within 1.5 s, and the backend sees one BYE, not two.
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-sig-bye-lost-in]
+    gap: >
+      Checks the resent BYE gets 200 and the backend leg is released; when the backend was released, and that it saw
+      one BYE, need the mock to record BYE arrivals.
 
   - id: imp-sig-bye-lost-out
     ref: "rtpbench:bye-lost; RFC 3261 17.1.2.2 (timer E)"
@@ -127,8 +137,11 @@ cases:
     expect: >
       When the backend hangs up, the edge's BYE to the caller is resent at T1; the caller receives it within 1 s
       of the backend's BYE and the edge stops resending once the 200 arrives (no copies after it).
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-sig-bye-lost-out]
+    gap: >
+      FreeSWITCH 1.10.10 resends the BYE about 1 s after the first copy, not at T1 (500 ms), so the scenario bounds
+      the resend at 1.5 s rather than 1 s; that no copy follows the 200 is checked.
 
   - id: imp-sig-bye-never
     ref: "RFC 3261 17.1.2.2 (timer F); RFC 3550 6.3.5"
@@ -153,8 +166,11 @@ cases:
       All 50 calls are answered and end cleanly; setup time p95 is within 1.6 s of the clean baseline (two lost
       copies); every call reaches the backend as exactly one leg, and none is left up 5 s after its BYE. At 20%
       loss each way at least 49 of 50 calls succeed, with the same no-duplicate and no-leftover rules.
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-sig-loss-random]
+    gap: >
+      Runs 5% only (not the 20% variant), and bounds setup time p95 at 1.7 s rather than against a measured baseline;
+      that no call is left up 5 s after its BYE is not checked.
 
   - id: imp-sig-delay-over-t1
     ref: "rtpbench:delay; RFC 3261 17.1.1.2"
@@ -166,8 +182,8 @@ cases:
       Round trips of 800 ms make the caller resend INVITEs and the edge resend 200s before anything is lost;
       every copy is absorbed: one leg per call at the backend, no 482 or second dialog, and setup time within
       2.5 round trips plus 200 ms of the backend's answer.
-    status: planned
-    milestone: M2b
+    status: covered
+    scenarios: [netem-sig-delay-over-t1]
 
   - id: imp-sig-bye-before-ack
     ref: "RFC 3261 13.3.1.4, 15"
@@ -178,8 +194,11 @@ cases:
     expect: >
       With the ACK held back 1 s and a BYE sent 200 ms after the 200, the edge accepts the BYE (200), releases
       both legs within 1 s, and ignores the late ACK; no 481 to the BYE and no channel left.
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-sig-bye-before-ack]
+    gap: >
+      Checks the BYE gets 200 (no 481) and the backend leg is released; the 1 s release bound and no channel left are
+      not checked.
 
   - id: imp-sig-cancel-crosses-200
     ref: "RFC 3261 9.1, 15"
@@ -317,8 +336,11 @@ cases:
       With no impairment, each direction through the edge shows 0 loss, RFC 3550 jitter of at most 5 ms, the
       edge's own added delay at most 20 ms (one packet), and an E-model MOS of 4.3 or more. Every impaired case
       compares against these figures.
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-media-baseline]
+    gap: >
+      Checks no loss, whole tones both ways and the echo round trip (under 120 ms through the edge twice); RFC 3550
+      jitter and the E-model MOS are not measured yet.
 
   - id: imp-media-y1541-class0
     ref: "i3f 7.1.2-7.1.4, 7.3.5; Y.1541 class 0"
@@ -329,8 +351,12 @@ cases:
     expect: >
       Each side hears the other's tone; measured loss per direction is within 0.1 point of the injected rate;
       MOS estimate 4.0 or more; the edge adds no more jitter than baseline.
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-media-y1541-class0]
+    gap: >
+      Checks tones both ways (the caller's in 90% of frames: it has no jitter buffer, and 50 ms of jitter reorders
+      its packets), and bounds the caller's measured loss at 1% rather than within 0.1 point of the rate; MOS and
+      the jitter the edge adds are not measured yet.
 
   - id: imp-media-lte
     ref: "rtpbench:lte; i3f 7.3.5"
@@ -341,8 +367,11 @@ cases:
     expect: >
       Tones heard both ways with at least 95% of 20 ms frames detected; measured loss 0.5-1.5% with mean loss
       runs near 2 packets; MOS estimate 3.5 or more; SSRC unchanged throughout.
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-media-lte]
+    gap: >
+      Checks tones both ways in 95% of frames, and bounds the caller's measured loss at 3% rather than 0.5-1.5% (a 30
+      s call holds only about 7 loss runs); mean loss run, SSRC and MOS are not measured yet.
 
   - id: imp-media-lte-bad
     ref: "rtpbench:lte-bad; i3f 7.3.5"
@@ -354,8 +383,11 @@ cases:
       Tones still recognised both ways (detected for at least 85% of their frames), no audio gap longer than
       200 ms, the call stays up, and the reported loss and MOS estimate match the injected profile (MOS is
       expected to be poor; the case checks the edge survives and measures, not that it sounds good).
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-media-lte-bad]
+    gap: >
+      Checks the call survives, tones both ways in 85% of frames, no gap over 500 ms (not 200 ms: a 2-packet loss run
+      plus 30 ms jitter already reaches 150 ms) and measured loss 2-12%; MOS is not measured yet.
 
   - id: imp-media-loss-random
     ref: "rtpbench:loss; G.1020"
@@ -367,8 +399,11 @@ cases:
       At 3% and then 5% independent loss, each tone is detected for at least (100 - 2 x loss)% of its frames;
       measured loss per direction is within 1 point of injected; the edge relays what arrives without stretching
       or restarting the stream (SSRC unchanged, RTP timestamps advance with the clock across gaps).
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-media-loss]
+    gap: >
+      Runs 5% only (not 3%); checks coverage on the caller's side and the caller's measured loss within 2 points; SSRC
+      and RTP timestamps across gaps are not checked.
 
   - id: imp-media-jitter
     ref: "rtpbench:jitter; RFC 3550 A.8"
@@ -393,8 +428,11 @@ cases:
       At 150 ms and at 400 ms one way, audio flows both ways and the echo round trip measures 2 x delay plus the
       baseline within 40 ms; the call is not ended for lateness; MOS estimate falls only by the E-model delay
       term (4.0 or more at 150 ms).
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-media-delay]
+    gap: >
+      Runs 400 ms only (not 150 ms); checks audio both ways and the echo round trip (800-920 ms); MOS is not measured
+      yet.
 
   - id: imp-media-reorder
     ref: "rtpbench:lte-bad (reordering); RFC 3550 A.1"
@@ -430,8 +468,11 @@ cases:
       Directions stay independent: the backend measures about 10% loss (within 2 points) and still hears the
       caller's tone; the caller measures baseline loss (0) on the backend's tone. The edge does not end or
       re-negotiate the call.
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-media-asymmetric]
+    gap: >
+      Checks the caller measures no loss and the backend hears the caller; the backend's own loss figure needs the
+      mock to report RTP loss, so it shows only as frames missing from the echoed tone.
 
   # --- DTMF under impairment ------------------------------------------------------------------------------------
 
@@ -444,8 +485,8 @@ cases:
     expect: >
       In 20 runs of the dtmf-both-ways exchange the backend records exactly 1234# and the caller exactly 4321
       every time: no digit missing, none doubled, order kept.
-    status: planned
-    milestone: M2b
+    status: covered
+    scenarios: [netem-dtmf-loss]
 
   - id: imp-dtmf-end-lost
     ref: "RFC 4733 2.5.1.4, 2.5.2.2"
@@ -468,8 +509,10 @@ cases:
     expect: >
       Event packets that arrive twice or out of order still give each digit once, in order (backend records
       1234#), with each digit's reported duration within 20 ms of what was sent.
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-dtmf-duplicate-reorder]
+    gap: >
+      Checks each digit arrives once and in order, 10 times; each digit's reported duration is not recorded.
 
   # --- One-way audio and blackholes ----------------------------------------------------------------------------
 
@@ -483,8 +526,11 @@ cases:
       SIP completes and the caller hears the backend, but the backend hears nothing (600 Hz not heard). The edge
       ends the call on its media timeout (60 s): BYE to both sides within 62 s of answer, with a media-timeout
       cause on record.
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-oneway-inbound-dead]
+    gap: >
+      Checks the backend never hears the caller and the edge ends the call 58-63 s after answer, both legs; the
+      media-timeout cause on record is not checked.
 
   - id: imp-oneway-outbound-dead
     ref: "rtpbench:hold"
@@ -495,8 +541,8 @@ cases:
     expect: >
       The caller hears nothing, the backend hears the caller. The edge still receives media, so it must not
       time the call out: the call lasts until the caller's BYE, and both legs end then.
-    status: planned
-    milestone: M2b
+    status: covered
+    scenarios: [netem-oneway-outbound-dead]
 
   - id: imp-blackhole-short
     ref: "rtpbench:ssrc-change, pause checks; RFC 3550 5.1"
@@ -507,8 +553,11 @@ cases:
     expect: >
       The call survives: no BYE either way, audio back both ways within 500 ms of the link returning, same SSRC
       and a timestamp jump that matches the 2 s gap. The gap is reported as a 2 s outage, not as random loss.
-    status: planned
-    milestone: M2b
+    status: partial
+    scenarios: [netem-blackhole-short]
+    gap: >
+      Checks no BYE either way and no tone missing over 2.5 s on either side; SSRC, the timestamp jump and reporting
+      the gap as an outage are not checked.
 
   - id: imp-blackhole-long
     ref: "RFC 3261 17.1.2.2 (timer F); RFC 3550 6.3.5"

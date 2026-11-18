@@ -1,0 +1,11 @@
+# Metrics on kind: an OpenTelemetry Collector scrapes Kamailio, the FreeSWITCH exporters and the operator, and
+# sends everything over OTLP to a Prometheus that evaluates the edge's alert rules (config/alerts). sipbench's
+# runner queries that Prometheus to check counters. hack/kind.sh deploy applies it before the edge.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: monitoring
+resources:
+  - namespace.yaml
+  - ../../../config/alerts
+  - collector.yaml
+  - prometheus.yaml

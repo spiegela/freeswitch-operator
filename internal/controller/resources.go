@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
@@ -16,7 +17,9 @@ import (
 )
 
 const (
-	containerName = "freeswitch"
+	containerName         = "freeswitch"
+	exporterContainerName = "exporter"
+	portMetrics           = "metrics"
 
 	// Volume and port names both fleets' pods use.
 	volumeScripts = "operator-scripts"
@@ -50,7 +53,8 @@ type settings struct {
 	dispatcherSetID int32
 	dispatcherProto sipv1alpha1.DispatcherTransport
 	reloadDelaySecs int32
-	liveness        *sipv1alpha1.LivenessSpec // nil: no liveness probe
+	liveness        *sipv1alpha1.LivenessSpec          // nil: no liveness probe
+	metrics         *sipv1alpha1.FreeswitchMetricsSpec // nil: no exporter; otherwise with defaults applied
 }
 
 func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
@@ -98,6 +102,15 @@ func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
 		}
 		if d.ReloadDelaySeconds != 0 {
 			out.reloadDelaySecs = d.ReloadDelaySeconds
+		}
+	}
+	if m := s.Metrics; m != nil {
+		out.metrics = m.DeepCopy()
+		if out.metrics.Port == 0 {
+			out.metrics.Port = 9282
+		}
+		if out.metrics.EventSocket.Port == 0 {
+			out.metrics.EventSocket.Port = 8021
 		}
 	}
 	if l := s.Liveness; l != nil {
@@ -318,8 +331,9 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 				TopologyKey:   corev1.LabelHostname,
 			}},
 		}},
-		Containers: []corev1.Container{container},
-		Volumes:    volumes,
+		Containers:     []corev1.Container{container},
+		InitContainers: exporterContainers(cfg.metrics),
+		Volumes:        volumes,
 	}
 
 	return &appsv1.StatefulSet{
@@ -341,4 +355,45 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 			},
 		},
 	}
+}
+
+// exporterContainers is the metrics exporter as a native sidecar (an init container that keeps running): it starts
+// before FreeSWITCH and the kubelet stops it only after FreeSWITCH has exited, so it reports through the whole
+// drain. Nil when spec.metrics is unset.
+func exporterContainers(m *sipv1alpha1.FreeswitchMetricsSpec) []corev1.Container {
+	if m == nil {
+		return nil
+	}
+	env := []corev1.EnvVar{
+		{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"}}},
+		{Name: "METRICS_PORT", Value: strconv.Itoa(int(m.Port))},
+		{Name: "ESL_PORT", Value: strconv.Itoa(int(m.EventSocket.Port))},
+	}
+	if ref := m.EventSocket.PasswordSecretRef; ref != nil {
+		env = append(env, corev1.EnvVar{Name: "ESL_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: ref}})
+	}
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
+		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},
+	}
+	if m.Resources != nil {
+		resources = *m.Resources
+	}
+	return []corev1.Container{{
+		Name:            exporterContainerName,
+		Image:           m.ExporterImage,
+		ImagePullPolicy: m.ExporterImagePullPolicy,
+		RestartPolicy:   ptr.To(corev1.ContainerRestartPolicyAlways),
+		Env:             env,
+		Resources:       resources,
+		// The host network makes this a port on the node; declaring it lets a scrape config find it by name.
+		Ports: []corev1.ContainerPort{{Name: portMetrics, Protocol: corev1.ProtocolTCP, ContainerPort: m.Port, HostPort: m.Port}},
+		SecurityContext: &corev1.SecurityContext{
+			RunAsNonRoot:             ptr.To(true),
+			RunAsUser:                ptr.To[int64](65532),
+			AllowPrivilegeEscalation: ptr.To(false),
+			ReadOnlyRootFilesystem:   ptr.To(true),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		},
+	}}
 }

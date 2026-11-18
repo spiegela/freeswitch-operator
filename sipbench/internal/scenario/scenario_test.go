@@ -128,6 +128,13 @@ func TestParseErrors(t *testing.T) {
 		"raw bad transport":  "name: x\nraw: [{id: r, transport: sctp, message: A, expect: {status: 200}}]",
 		"raw closed on udp":  "name: x\nraw: [{id: r, message: A, expect: {closed: true}}]",
 		"raw none and code":  "name: x\nraw: [{id: r, message: A, expect: {noResponse: true, status: 200}}]",
+		"netem unrequired": "name: x\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
+			"impairments: [{link: carrier-edge, direction: both, traffic: rtp, loss: 5%}]",
+		"drop unrequired": "name: x\nrequires: [netem]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
+			"impairments: [{link: carrier-edge, direction: to-edge, traffic: sip, drop: first INVITE}]",
+		"sip unrequired": "name: x\ncalls: [{id: a, to: b, expect: {status: 200, sip: [{out: INVITE, min: 2}]}}]",
+		"reorder alone": "name: x\nrequires: [netem]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
+			"impairments: [{link: carrier-edge, direction: both, traffic: rtp, reorder: 5%}]",
 	}
 	for name, y := range cases {
 		if _, err := Parse([]byte(y)); err == nil {

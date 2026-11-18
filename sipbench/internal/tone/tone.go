@@ -90,6 +90,7 @@ type Detector struct {
 	// For each frequency: when a frame last held it, and the longest wait between two such frames. Timed by
 	// arrival, so a stretch in which no packets came at all counts as a gap too.
 	last   map[float64]time.Time
+	first  map[float64]time.Time
 	maxGap map[float64]time.Duration
 	now    func() time.Time
 }
@@ -103,6 +104,7 @@ func NewDetector(freqs []float64) *Detector {
 		minRMS:    200,
 		frames:    map[float64]int{},
 		last:      map[float64]time.Time{},
+		first:     map[float64]time.Time{},
 		maxGap:    map[float64]time.Duration{},
 		now:       time.Now,
 	}
@@ -124,6 +126,9 @@ func (d *Detector) Feed(samples []int16) {
 						d.maxGap[f] = now.Sub(last)
 					}
 					d.last[f] = now
+					if _, ok := d.first[f]; !ok {
+						d.first[f] = now
+					}
 				}
 			}
 		}
@@ -163,5 +168,27 @@ func (d *Detector) Frames() map[float64]int {
 	defer d.mu.Unlock()
 	out := make(map[float64]int, len(d.frames))
 	maps.Copy(out, d.frames)
+	return out
+}
+
+// First returns when each frequency heard was first detected.
+func (d *Detector) First() map[float64]time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return maps.Clone(d.first)
+}
+
+// Coverage returns, for each frequency heard, the share of 20 ms frames between its first and last detection (by
+// arrival) in which it was present: 1 for a tone that arrived whole, less for one with frames lost on the way.
+// Duplicated packets can push it past 1.
+func (d *Detector) Coverage() map[float64]float64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	frame := time.Second / 50
+	out := make(map[float64]float64, len(d.first))
+	for f, first := range d.first {
+		span := d.last[f].Sub(first) + frame
+		out[f] = float64(d.frames[f]) * float64(frame) / float64(span)
+	}
 	return out
 }

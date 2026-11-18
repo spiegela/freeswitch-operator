@@ -46,3 +46,10 @@ spec:
     transport: udp
     # A KamailioCluster (sip_v1alpha1_kamailiocluster.yaml) reads this list and drives its own pods. Only a
     # Kamailio you run yourself needs jsonrpcURL here.
+  # A Prometheus exporter beside FreeSWITCH in each pod (see "Metrics and alerts" in the README). The exporter
+  # image is built from this repository (make docker-build-exporter); pin it by digest. Changing it rolls the fleet.
+  # metrics:
+  #   exporterImage: <registry>/freeswitch-exporter@sha256:<digest>
+  #   port: 9282
+  #   eventSocket:
+  #     passwordSecretRef: {name: edge-event-socket, key: password}

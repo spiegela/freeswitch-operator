@@ -398,6 +398,129 @@ spec:
                 x-kubernetes-validations:
                 - message: timeoutSeconds must not exceed periodSeconds
                   rule: self.timeoutSeconds <= self.periodSeconds
+              metrics:
+                description: metrics, when set, runs a Prometheus exporter beside
+                  FreeSWITCH in each pod.
+                properties:
+                  eventSocket:
+                    description: eventSocket is where the exporter reaches FreeSWITCH.
+                    properties:
+                      passwordSecretRef:
+                        description: |-
+                          passwordSecretRef names a key of a Secret in this namespace holding the event socket password. Unset means
+                          FreeSWITCH's default, ClueCon, which fs_cli (and so the operator's probe and drain scripts) also use.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      port:
+                        default: 8021
+                        description: port the event socket listens on at 127.0.0.1
+                          (or on all addresses).
+                        format: int32
+                        maximum: 65535
+                        minimum: 1
+                        type: integer
+                    type: object
+                  exporterImage:
+                    description: |-
+                      exporterImage is the image of the operator's freeswitch-exporter; pin it by digest. The exporter is part of
+                      the pod template, so changing the image rolls the fleet one drained node at a time, like any other
+                      template change.
+                    minLength: 1
+                    type: string
+                  exporterImagePullPolicy:
+                    description: exporterImagePullPolicy for the exporter container.
+                    type: string
+                  port:
+                    default: 9282
+                    description: 'port for GET /metrics. With host networking it is
+                      a port on the node: keep it closed to the outside.'
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  resources:
+                    description: 'resources for the exporter container. Unset: a small
+                      request (10m CPU, 16Mi) and a 64Mi memory limit.'
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                required:
+                - exporterImage
+                type: object
               nodeSelector:
                 additionalProperties:
                   type: string
@@ -548,6 +671,10 @@ spec:
             required:
             - image
             type: object
+            x-kubernetes-validations:
+            - message: metrics.port must differ from sip.port
+              rule: '!has(self.metrics) || self.metrics.port != (has(self.sip) &&
+                has(self.sip.port) ? self.sip.port : 5060)'
           status:
             description: status defines the observed state of FreeswitchCluster
             properties:

@@ -166,6 +166,16 @@ check-kamailio-cfg: ## Render the KamailioCluster config template's test cases a
 	  echo "kamailio -c $$name.cfg: ok"; \
 	done
 
+# The Prometheus image whose promtool checks the alert rules (and which deploy/kind/monitoring runs).
+PROMETHEUS_IMAGE ?= prom/prometheus:v3.7.3@sha256:49214755b6153f90a597adcbff0252cc61069f8ab69ce8411285cd4a560e8038
+
+.PHONY: check-alerts
+check-alerts: ## Check the edge's alert rules and run their unit tests with promtool (needs docker)
+	docker run --rm -v "$(CURDIR)/config/alerts:/alerts:ro" -w /alerts --entrypoint promtool $(PROMETHEUS_IMAGE) \
+	  check rules edge-alerts.yaml
+	docker run --rm -v "$(CURDIR)/config/alerts:/alerts:ro" -w /alerts --entrypoint promtool $(PROMETHEUS_IMAGE) \
+	  test rules edge-alerts_test.yaml
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint on the operator and on sipbench (its own module, same config)
 	"$(GOLANGCI_LINT)" run
@@ -197,6 +207,13 @@ run: manifests generate fmt vet ## Run a controller from your host.
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
 	$(CONTAINER_TOOL) build $(if $(BASE_IMAGE),--build-arg BASE_IMAGE=$(BASE_IMAGE)) -t ${IMG} .
+
+# The FreeSWITCH exporter's image, from the same Dockerfile (its exporter stage). FreeswitchCluster
+# spec.metrics.exporterImage names it.
+EXPORTER_IMG ?= freeswitch-exporter:dev
+.PHONY: docker-build-exporter
+docker-build-exporter: ## Build the FreeSWITCH exporter image (EXPORTER_IMG)
+	$(CONTAINER_TOOL) build $(if $(BASE_IMAGE),--build-arg BASE_IMAGE=$(BASE_IMAGE)) --target exporter -t ${EXPORTER_IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.

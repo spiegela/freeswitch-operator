@@ -103,6 +103,9 @@ spec:
     configMapName: edge-dispatcher  # v0. The operator writes dispatcher.list here
     jsonrpcURL: ""                  # v0, optional. Kamailio JSON-RPC endpoint (port 5070 in the example); a
                                     #   Service name reaches every ready Kamailio pod behind it
+  metrics:                          # M2c, optional. A Prometheus exporter beside FreeSWITCH in each pod
+    exporterImage: <registry>/freeswitch-exporter@sha256:…   # pin by digest; a change rolls the fleet
+    port: 9282                      # /metrics on the pod's (node's) own address
 status:
   readyReplicas: 2
   members:                          # v0. One entry per pod
@@ -361,6 +364,44 @@ FreeSWITCH advertises (loop 4) would send their RTP somewhere they can't reach.
 - **sipbench:** a peer mock on a second network checks that the SDP it receives carries an inside address and that
   audio flows both ways.
 
+## Metrics and alerts
+
+**Every component serves Prometheus metrics; an OpenTelemetry Collector scrapes them and sends them on over OTLP,
+and alert rules shipped here watch them.** Nothing in the edge depends on them: they are for people and alerts.
+
+- **Kamailio** serves its statistics and the edge's counters at `/metrics` on `spec.metrics.port` (default 5071):
+  refusals, silent node timeouts and silent drops (see [loop 7](#7-kamailio-as-a-managed-resource-m2)).
+- **FreeSWITCH**, with `spec.metrics` set on a `FreeswitchCluster`, gets an exporter in each pod
+  ([`cmd/freeswitch-exporter`](cmd/freeswitch-exporter)). It reads FreeSWITCH over the event socket at each scrape
+  and serves `/metrics` on the pod's own address (default port 9282): `freeswitch_up` (the socket answered; nothing
+  else is reported when it doesn't, so a dead node never shows stale numbers), `freeswitch_ready`, sessions
+  (active, peak, total, the limit and the rate limit), `freeswitch_calls` and `freeswitch_channels`,
+  `freeswitch_inbound_paused` (1 while the node drains), and per SIP profile its state and its calls and failed calls
+  in each direction. It runs as a native sidecar, so it keeps reporting while the node drains and stops only after
+  FreeSWITCH has. It is its own image, versioned apart from the operator: the exporter is part of the pod template,
+  so changing its image rolls the fleet, which an operator upgrade alone never does. It reads the event socket
+  password from `spec.metrics.eventSocket.passwordSecretRef`, or uses FreeSWITCH's default as `fs_cli` does.
+- **The operator** serves controller-runtime's metrics (reconciles, work queues, the Go runtime) on its HTTPS
+  metrics endpoint (`:8443`, for callers allowed `GET /metrics`: bind the `metrics-reader` ClusterRole), plus its own,
+  each naming a fleet by `kind`, `namespace` and `name`: `freeswitch_operator_fleet_members{state}` (Starting,
+  Active, Draining), `_fleet_desired_replicas`, `_fleet_outdated_members` (above zero during a roll),
+  `_fleet_condition{condition}`, `_fleet_pod_replacements_total`, `_fleet_drain_started_timestamp_seconds{pod}` and
+  `_fleet_max_drain_seconds` (a drain's age against its limit), `_fleet_drain_duration_seconds` (how long each drain
+  took), and for the dispatcher `_dispatcher_destinations{set}`, `_dispatcher_list_updates_total`,
+  `_dispatcher_reloads_total{result}`, `_dispatcher_set_inactive_total{result}` and `_dispatcher_pending_reload`
+  (a changed list not every Kamailio is confirmed to hold).
+- **Alert rules** live in [`config/alerts/edge-alerts.yaml`](config/alerts/edge-alerts.yaml), in Prometheus's
+  rule-file format, for Prometheus, Grafana Mimir or Amazon Managed Service for Prometheus;
+  `make check-alerts` checks them and runs their unit tests with promtool. Critical: silent drops with the whole
+  fleet silent, FreeSWITCH not answering, a fleet with no member taking calls. Warning: silent drops of single
+  requests (malformed traffic or an attack), repeated silent node timeouts, a SIP profile down, sessions near the
+  limit, a fleet short of members with nothing draining, a roll stalled with nothing draining, a drain past 80% of
+  its limit, a dispatcher reload pending for 5 minutes, a dispatch set conflict, the operator gone.
+- **The scrape config** in [`deploy/kind/monitoring`](deploy/kind/monitoring/collector.yaml) is the reference: pods
+  with a port named `metrics` in each fleet (the rules expect `job` = `kamailio` or `freeswitch`, and `namespace`,
+  `pod` and `fleet` labels) and the operator's metrics Service. On kind the Collector sends to a Prometheus with its
+  OTLP receiver on, which loads the rules; in production point its OTLP exporter at your backend.
+
 ## sipbench: the SIP test bench
 
 **sipbench proves call flows end to end through a real FreeSWITCH, with configurable mocks behind it, so each layer
@@ -428,8 +469,8 @@ which version runs where.
 | M0 | Repository, plan, operator scaffold, sipbench mock backend and runner running against FreeSWITCH in Docker | done |
 | M1 | v0 operator on kind: fleet, dispatcher list, drains and rolling updates; sipbench runs against it ([how](#the-edge-on-kind)) | done |
 | M2 | `KamailioCluster`: managed Kamailio, authenticated JSON-RPC, restart list; sipbench fleet scenarios (drain mid-call, rolling update with live calls, run as scenarios rather than by hand), with call records kept per run so concurrent runners don't clear each other's; opt-in liveness (hang detection) with a lax default | done |
-| M2b | Bench tooling for the remaining conformance cases: a raw-message sender (RFC 4475 torture tests; first sets in: proxy validation, stray requests and responses, lexical variants, the request-side torture and size cases; responses from a node still need a stand-in node), netem impairment (loss, jitter, reordering), and runner features (re-INVITE, hand-set headers, DTMF before answer, full INVITE records) | in progress |
-| M2c | Metrics and alerts, next: every component exposes metrics an OpenTelemetry Collector scrapes (its prometheus receiver) and sends on over OTLP. Kamailio's `/metrics` is in (its statistics, refusals, silent drops); to come: FreeSWITCH through an exporter beside each node (calls, sessions, profile state), the operator's own (controller-runtime's endpoint, plus fleet, drain and dispatcher-reload metrics), alert rules starting with `kamailio_silent_drops_total`, and a Collector on kind so the bench checks the counters | in progress |
+| M2b | Bench tooling for the remaining conformance cases: a raw-message sender (RFC 4475 torture tests; first sets in: proxy validation, stray requests and responses, lexical variants, the request-side torture and size cases; responses from a node still need a stand-in node), netem impairment (first set in: loss, burst loss, delay, jitter, reordering and duplication on the carrier-edge link through tc, and named SIP messages dropped or held, over signalling, media, DTMF, one-way audio and a short blackhole; MOS, RFC 3550 jitter and the proxy-node and edge-backend links still to come), and runner features (re-INVITE, hand-set headers, DTMF before answer, full INVITE records) | in progress |
+| M2c | [Metrics and alerts](#metrics-and-alerts): every component exposes metrics an OpenTelemetry Collector scrapes (its prometheus receiver) and sends on over OTLP: Kamailio's `/metrics` (its statistics, refusals, silent drops), FreeSWITCH through an exporter beside each node (sessions, calls, paused, SIP profile state and counters), and the operator's own (controller-runtime's, plus fleet, drain and dispatcher-reload metrics); alert rules with promtool tests; on kind a Collector sending to a Prometheus that evaluates the rules, and scenarios that check counters through it | in progress |
 | M3 | `SIPAddressPool` with an AWS Elastic IP provider, shared by both fleets; edge node group on EKS | planned |
 | M4 | v1 failover with fencing and call recovery | planned |
 | M5 | Typed peer and ACL resources (loop 9), outbound registrations when a peer needs them (loop 8), sipbench peer mocks; reload without restart | planned |
@@ -453,8 +494,11 @@ sipbench has its own instructions in [`sipbench/README.md`](sipbench/README.md).
 
 [`hack/kind.sh`](hack/kind.sh) runs the whole edge locally: a kind cluster with two proxy nodes and three tainted
 edge nodes ([`deploy/kind`](deploy/kind/)), the operator built from this tree, a two-node `KamailioCluster` on the
-proxy nodes, a three-node `FreeswitchCluster` running sipbench's FreeSWITCH configuration, and sipbench's mock
-backend behind it.
+proxy nodes, a three-node `FreeswitchCluster` running sipbench's FreeSWITCH configuration with the exporter beside
+it, sipbench's mock backend behind it, and in the `monitoring` namespace an OpenTelemetry Collector sending
+everything over OTLP to a Prometheus that evaluates the alert rules. Scenarios can name counters the edge should
+move (`metrics:` in a scenario); on kind the runner checks them through that Prometheus
+(`kubectl -n monitoring port-forward svc/prometheus 9090` to look yourself).
 
 ```sh
 make kind-up         # create the cluster (about 6 GB of Docker memory)
