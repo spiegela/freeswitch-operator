@@ -20,6 +20,7 @@ import (
 	"github.com/emiago/diago"
 	"github.com/emiago/diago/media"
 	"github.com/emiago/sipgo"
+	"github.com/emiago/sipgo/sip"
 
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/mock"
 )
@@ -67,6 +68,12 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// sipgo won't send a UDP message over 1,300 bytes, responses included (RFC 3261 18.1.1's switch to TCP is for
+	// requests; a response goes back the way its request came), and reads datagrams into 32 KB. A backend standing
+	// in for a real one must take and answer whatever a datagram can carry, or large INVITEs are never answered.
+	sip.UDPMTUSize = 1 << 17
+	sip.TransportBufferReadSize = 65535
 
 	ua, err := sipgo.NewUA(sipgo.WithUserAgent("sipbench-mockbackend"))
 	if err != nil {
