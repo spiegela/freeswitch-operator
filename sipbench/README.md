@@ -265,9 +265,9 @@ Two mechanisms, chosen by the knobs:
   privilege, but every request of the call, in-dialog ones included, must leave from that socket, and that needs
   the `sip-trace` capability, as `sip:` expectations do: the edge address must be a node's own. Behind a Service
   VIP (`kamailio-sip` on kind) the ACK and BYE go to the Kamailio pod's own address (its Record-Route), and from
-  the INVITE's socket they collide in conntrack with the VIP's NAT entry and are dropped. So the kind Job doesn't
-  offer `sip-trace`, and those scenarios skip there unless `SIPBENCH_EDGE` names `proxy-kamailio:5060`, the
-  headless Service, and the run adds `sip-trace`.
+  the INVITE's socket they collide in conntrack with the VIP's NAT entry and are dropped. So the kind Job's edge
+  address is `proxy-kamailio:5060`, the headless Service, which resolves to each Kamailio node's own address, and
+  it offers `sip-trace`.
 
 tc needs the `netem` capability and `NET_ADMIN`: compose's runner has `cap_add: [NET_ADMIN]`, and the Job in
 `k8s/runner-job.yaml` adds it to the container (it changes the runner pod's network namespace only). The image

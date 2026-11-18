@@ -1,5 +1,6 @@
-# One name for in-cluster callers (the sipbench runner) to reach Kamailio's SIP port. Peers outside reach each
-# Kamailio on its node's own address instead.
+# One load-balanced address for in-cluster callers to reach Kamailio's SIP port. The sipbench runner uses
+# proxy-kamailio (the headless Service: each node's own address) instead, as peers outside do, because a call that
+# sends its in-dialog requests from the INVITE's socket can't go through this VIP (see sipbench/k8s/runner-job.yaml).
 apiVersion: v1
 kind: Service
 metadata:
