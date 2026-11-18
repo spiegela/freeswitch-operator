@@ -296,6 +296,21 @@ spec:
                   type: object
                   x-kubernetes-map-type: atomic
                 type: array
+              metrics:
+                default: {}
+                description: metrics configures the Prometheus metrics port.
+                properties:
+                  port:
+                    default: 5071
+                    description: |-
+                      port for GET /metrics, in the Prometheus text format, for a Prometheus server or an OpenTelemetry
+                      Collector's prometheus receiver to scrape. It listens on the pod's own address only and needs no token: it
+                      serves counters, nothing that changes Kamailio.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                type: object
               nodeSelector:
                 additionalProperties:
                   type: string
@@ -449,6 +464,8 @@ spec:
             x-kubernetes-validations:
             - message: sip.port and rpc.port must differ
               rule: self.sip.port != self.rpc.port
+            - message: metrics.port must differ from sip.port and rpc.port
+              rule: self.metrics.port != self.sip.port && self.metrics.port != self.rpc.port
           status:
             description: status defines the observed state of KamailioCluster
             properties:

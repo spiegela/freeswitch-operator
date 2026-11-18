@@ -20,9 +20,11 @@ import (
 )
 
 // Fill builds a message from a template: each {{name}} is replaced from vars, line ends become CRLF when crlf is
-// set (YAML block scalars carry LF; a message with no blank line gets one at the end), and {{len}} becomes the length in bytes of the body, everything after the
-// first blank line, once the rest is filled in. An unknown placeholder is an error, so a typo can't go out as
-// literal braces.
+// set (YAML block scalars carry LF; a message with no blank line gets one at the end), and {{len}} becomes the
+// length in bytes of the body, everything after the first blank line that follows the start line, once the rest
+// is filled in (blank lines before the start line, as a stream may carry, don't count). Two placeholders need no
+// var: {{nul}} is a zero byte, for binary bodies, and {{pad:N}} is N bytes of filler ("x"), for messages of a
+// given size. An unknown placeholder is an error, so a typo can't go out as literal braces.
 func Fill(tmpl string, vars map[string]string, crlf bool) ([]byte, error) {
 	var out strings.Builder
 	rest := tmpl
@@ -38,9 +40,19 @@ func Fill(tmpl string, vars map[string]string, crlf bool) ([]byte, error) {
 		}
 		name := strings.TrimSpace(rest[i+2 : i+j])
 		out.WriteString(rest[:i])
-		switch v, ok := vars[name]; {
+		v, ok := vars[name]
+		n, isPad := strings.CutPrefix(name, "pad:")
+		switch {
 		case name == "len":
 			out.WriteString("{{len}}") // filled in last
+		case name == "nul":
+			out.WriteByte(0)
+		case isPad:
+			size, err := strconv.Atoi(n)
+			if err != nil || size < 0 {
+				return nil, fmt.Errorf("bad {{%s}}: want {{pad:N}} with N a byte count", name)
+			}
+			out.WriteString(strings.Repeat("x", size))
 		case ok:
 			out.WriteString(v)
 		default:
@@ -52,7 +64,7 @@ func Fill(tmpl string, vars map[string]string, crlf bool) ([]byte, error) {
 	if crlf {
 		msg = strings.ReplaceAll(strings.ReplaceAll(msg, "\r\n", "\n"), "\n", "\r\n")
 		// A header-only message written as a YAML block loses its closing blank line: put it back.
-		if !strings.Contains(msg, "\r\n\r\n") {
+		if !strings.Contains(strings.TrimLeft(msg, "\r\n"), "\r\n\r\n") {
 			msg = strings.TrimSuffix(msg, "\r\n") + "\r\n\r\n"
 		}
 	}
@@ -62,8 +74,9 @@ func Fill(tmpl string, vars map[string]string, crlf bool) ([]byte, error) {
 			sep = "\r\n\r\n"
 		}
 		body := ""
-		if k := strings.Index(msg, sep); k >= 0 {
-			body = msg[k+len(sep):]
+		lead := len(msg) - len(strings.TrimLeft(msg, "\r\n"))
+		if k := strings.Index(msg[lead:], sep); k >= 0 {
+			body = msg[lead+k+len(sep):]
 		}
 		msg = strings.ReplaceAll(msg, "{{len}}", strconv.Itoa(len(body)))
 	}

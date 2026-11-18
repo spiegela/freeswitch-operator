@@ -18,6 +18,7 @@ source_order,source,id,area,component,status,milestone,title
 1,sipbench scenarios,sb-drain-mid-call,resilience,operator,covered,,Node drained with a live call
 1,sipbench scenarios,sb-rolling-update-live-call,resilience,operator,covered,,Rolling update with a live call
 1,sipbench scenarios,sb-bad-config-stops-roll,resilience,operator,covered,,A config without a SIP profile on the SIP port stops the roll at one node
+1,sipbench scenarios,sb-silent-node-stays-in-rotation,resilience,proxy,planned,M2b,A request every node discards doesn't take the nodes out of rotation
 2,i3 Forum interop plan R2,i3f-1-directions,call-setup,edge,planned,M5,Every case is run in both directions
 2,i3 Forum interop plan R2,i3f-1-traces,headers,edge,planned,M5,SIP traces of each test call conform to the interconnection profile
 2,i3 Forum interop plan R2,i3f-2-cli,identity,edge,planned,M5,Caller ID is verifiable at the called end
@@ -105,11 +106,11 @@ source_order,source,id,area,component,status,milestone,title
 3,ETSI TS 102 027-2,etsi-SIP_CC_PR_TR_SE_V_024,timers,proxy,planned,M2b,Proxy's server side of a failed INVITE
 3,ETSI TS 102 027-2,etsi-SIP_QC_PR_V_001,keepalive,proxy,partial,,OPTIONS to the proxy itself is answered 200
 3,ETSI TS 102 027-2,etsi-SIP_QC_PR_V_006,keepalive,proxy,planned,M2b,Proxy's OPTIONS answer describes its capabilities
-3,ETSI TS 102 027-2,etsi-SIP_MG_PR_V_001,parsing,proxy,planned,M2b,Unusual but legal URI syntax is relayed untouched
+3,ETSI TS 102 027-2,etsi-SIP_MG_PR_V_001,parsing,proxy,partial,,Unusual but legal URI syntax is relayed untouched
 3,ETSI TS 102 027-2,etsi-SIP_MG_PR_V_006,headers,proxy,partial,,Header fields the proxy doesn't use are relayed unchanged
 3,ETSI TS 102 027-2,etsi-SIP_MG_PR_V_007,parsing,proxy,covered,,"Lexical variants (case, folding, compact forms) are accepted and relayed"
 3,ETSI TS 102 027-2,etsi-SIP_MG_PR_V_012,parsing,proxy,planned,M2b,Odd 2xx status code or reason phrase is relayed
-3,ETSI TS 102 027-2,etsi-SIP_MG_PR_V_015,parsing,proxy,planned,M2b,Message size and Content-Length framing
+3,ETSI TS 102 027-2,etsi-SIP_MG_PR_V_015,parsing,proxy,partial,,Message size and Content-Length framing
 3,ETSI TS 102 027-2,etsi-SIP_MG_PR_I_005,parsing,proxy,partial,,INVITE without Call-ID is refused with 400
 3,ETSI TS 102 027-2,etsi-SIP_CC_PR_MP_RQ_V_067,call-setup,proxy,not-applicable,,Parallel forking and response selection across forked branches
 3,ETSI TS 102 027-2,etsi-SIP_CC_PR_TR_CL_V_012,security,proxy,not-applicable,,Proxy digest challenge (407) for INVITE and OPTIONS
@@ -141,9 +142,9 @@ source_order,source,id,area,component,status,milestone,title
 3,ETSI TS 102 027-2,etsi-SIP_CC_TE_SM_V_001,call-setup,freeswitch,planned,M2b,Re-INVITE in an established call
 3,ETSI TS 102 027-2,etsi-SIP_QC_TE_V_001,keepalive,freeswitch,covered,,FreeSWITCH answers OPTIONS with 200
 3,ETSI TS 102 027-2,etsi-SIP_QC_TE_V_002,keepalive,freeswitch,planned,M2b,FreeSWITCH's OPTIONS answer is well formed and describes its capabilities
-3,ETSI TS 102 027-2,etsi-SIP_MG_TE_V_001,parsing,edge,planned,M2b,FreeSWITCH answers INVITEs with unusual but acceptable syntax
+3,ETSI TS 102 027-2,etsi-SIP_MG_TE_V_001,parsing,edge,covered,,FreeSWITCH answers INVITEs with unusual but acceptable syntax
 3,ETSI TS 102 027-2,etsi-SIP_MG_TE_V_006,error-handling,freeswitch,planned,M2b,Unsupported method gets 405 with Allow
-3,ETSI TS 102 027-2,etsi-SIP_MG_TE_V_014,parsing,edge,planned,M2b,"INVITE size, framing and missing Call-ID at the edge"
+3,ETSI TS 102 027-2,etsi-SIP_MG_TE_V_014,parsing,edge,partial,,"INVITE size, framing and missing Call-ID at the edge"
 3,ETSI TS 102 027-2,etsi-SIP_CC_TE_CE_V_034,security,freeswitch,not-applicable,,UAS digest challenge (401) for INVITE and OPTIONS
 3,ETSI TS 102 027-2,etsi-SIP_RG_RT_V_001,registration,freeswitch,planned,M5,"FreeSWITCH registers to a carrier, refreshes and unregisters"
 3,ETSI TS 102 027-2,etsi-SIP_RG_RT_V_007,registration,freeswitch,planned,M5,FreeSWITCH answers a registrar's digest challenge
@@ -156,53 +157,53 @@ source_order,source,id,area,component,status,milestone,title
 3,ETSI TS 102 027-2,etsi-SIP_MG_RD_V_001,parsing,proxy,not-applicable,,Redirect server message handling
 3,ETSI TS 102 027-2,etsi-SIP_RG_RT_V_006,call-setup,edge,not-applicable,,Purposes marked void
 4,RFC 4475 torture messages,rfc4475-3.1.1.1,parsing,proxy,partial,,"Short tortuous INVITE (folding, odd spacing and case, unknown headers and parameters)"
-4,RFC 4475 torture messages,rfc4475-3.1.1.2,parsing,proxy,planned,M2b,Unknown method and the widest legal character ranges
-4,RFC 4475 torture messages,rfc4475-3.1.1.3,parsing,proxy,planned,M2b,Legal % escaping in URIs
-4,RFC 4475 torture messages,rfc4475-3.1.1.4,parsing,proxy,planned,M2b,Escaped nulls in URI user parts (REGISTER)
-4,RFC 4475 torture messages,rfc4475-3.1.1.5,parsing,proxy,planned,M2b,% where it is not an escape (method that only looks like REGISTER)
-4,RFC 4475 torture messages,rfc4475-3.1.1.6,parsing,proxy,planned,M2b,No whitespace between display name and <
-4,RFC 4475 torture messages,rfc4475-3.1.1.7,parsing,proxy,planned,M2b,Very long header values and many parameters
+4,RFC 4475 torture messages,rfc4475-3.1.1.2,parsing,proxy,partial,,Unknown method and the widest legal character ranges
+4,RFC 4475 torture messages,rfc4475-3.1.1.3,parsing,proxy,partial,,Legal % escaping in URIs
+4,RFC 4475 torture messages,rfc4475-3.1.1.4,parsing,proxy,partial,,Escaped nulls in URI user parts (REGISTER)
+4,RFC 4475 torture messages,rfc4475-3.1.1.5,parsing,proxy,partial,,% where it is not an escape (method that only looks like REGISTER)
+4,RFC 4475 torture messages,rfc4475-3.1.1.6,parsing,proxy,covered,,No whitespace between display name and <
+4,RFC 4475 torture messages,rfc4475-3.1.1.7,parsing,proxy,partial,,Very long header values and many parameters
 4,RFC 4475 torture messages,rfc4475-3.1.1.8,parsing,proxy,partial,,Extra octets after the message in a UDP datagram
-4,RFC 4475 torture messages,rfc4475-3.1.1.9,parsing,proxy,planned,M2b,Semicolon parameters inside the Request-URI user part
-4,RFC 4475 torture messages,rfc4475-3.1.1.10,parsing,proxy,planned,M2b,Known and unknown transports in Via
-4,RFC 4475 torture messages,rfc4475-3.1.1.11,parsing,proxy,planned,M2b,Multipart MIME body with binary parts (MESSAGE)
+4,RFC 4475 torture messages,rfc4475-3.1.1.9,parsing,proxy,partial,,Semicolon parameters inside the Request-URI user part
+4,RFC 4475 torture messages,rfc4475-3.1.1.10,parsing,proxy,covered,,Known and unknown transports in Via
+4,RFC 4475 torture messages,rfc4475-3.1.1.11,parsing,proxy,partial,,Multipart MIME body with binary parts (MESSAGE)
 4,RFC 4475 torture messages,rfc4475-3.1.1.12,parsing,proxy,planned,M2b,Unusual reason phrase in a 200
 4,RFC 4475 torture messages,rfc4475-3.1.1.13,parsing,proxy,planned,M2b,Empty reason phrase
-4,RFC 4475 torture messages,rfc4475-3.1.2.1,parsing,proxy,planned,M2b,Extraneous separators in Via and Contact
+4,RFC 4475 torture messages,rfc4475-3.1.2.1,parsing,proxy,covered,,Extraneous separators in Via and Contact
 4,RFC 4475 torture messages,rfc4475-3.1.2.2,parsing,proxy,partial,,Content-Length larger than the body
 4,RFC 4475 torture messages,rfc4475-3.1.2.3,parsing,proxy,partial,,Negative Content-Length
-4,RFC 4475 torture messages,rfc4475-3.1.2.4,parsing,proxy,planned,M2b,"Request scalar fields out of range (CSeq, Max-Forwards, Expires)"
+4,RFC 4475 torture messages,rfc4475-3.1.2.4,parsing,proxy,covered,,"Request scalar fields out of range (CSeq, Max-Forwards, Expires)"
 4,RFC 4475 torture messages,rfc4475-3.1.2.5,parsing,proxy,planned,M2b,Response scalar fields out of range (a 503)
-4,RFC 4475 torture messages,rfc4475-3.1.2.6,parsing,proxy,planned,M2b,Unterminated quoted string in a display name
-4,RFC 4475 torture messages,rfc4475-3.1.2.7,parsing,proxy,planned,M2b,Request-URI enclosed in <>
-4,RFC 4475 torture messages,rfc4475-3.1.2.8,parsing,proxy,planned,M2b,Whitespace inside the Request-URI
-4,RFC 4475 torture messages,rfc4475-3.1.2.9,parsing,proxy,planned,M2b,Several spaces between request-line elements
-4,RFC 4475 torture messages,rfc4475-3.1.2.10,parsing,proxy,planned,M2b,Trailing spaces at the end of the request line
-4,RFC 4475 torture messages,rfc4475-3.1.2.11,parsing,proxy,planned,M2b,Escaped headers in the Request-URI
-4,RFC 4475 torture messages,rfc4475-3.1.2.12,parsing,proxy,planned,M2b,Date header with a non-GMT time zone
-4,RFC 4475 torture messages,rfc4475-3.1.2.13,parsing,proxy,planned,M2b,Contact URI with headers not enclosed in <> (REGISTER)
-4,RFC 4475 torture messages,rfc4475-3.1.2.14,parsing,proxy,planned,M2b,Spaces inside an addr-spec
-4,RFC 4475 torture messages,rfc4475-3.1.2.15,parsing,proxy,planned,M2b,Unquoted display names with non-token characters
+4,RFC 4475 torture messages,rfc4475-3.1.2.6,parsing,proxy,partial,,Unterminated quoted string in a display name
+4,RFC 4475 torture messages,rfc4475-3.1.2.7,parsing,proxy,covered,,Request-URI enclosed in <>
+4,RFC 4475 torture messages,rfc4475-3.1.2.8,parsing,proxy,partial,,Whitespace inside the Request-URI
+4,RFC 4475 torture messages,rfc4475-3.1.2.9,parsing,proxy,partial,,Several spaces between request-line elements
+4,RFC 4475 torture messages,rfc4475-3.1.2.10,parsing,proxy,partial,,Trailing spaces at the end of the request line
+4,RFC 4475 torture messages,rfc4475-3.1.2.11,parsing,proxy,partial,,Escaped headers in the Request-URI
+4,RFC 4475 torture messages,rfc4475-3.1.2.12,parsing,proxy,covered,,Date header with a non-GMT time zone
+4,RFC 4475 torture messages,rfc4475-3.1.2.13,parsing,proxy,partial,,Contact URI with headers not enclosed in <> (REGISTER)
+4,RFC 4475 torture messages,rfc4475-3.1.2.14,parsing,proxy,partial,,Spaces inside an addr-spec
+4,RFC 4475 torture messages,rfc4475-3.1.2.15,parsing,proxy,covered,,Unquoted display names with non-token characters
 4,RFC 4475 torture messages,rfc4475-3.1.2.16,parsing,proxy,partial,,Unknown SIP version
-4,RFC 4475 torture messages,rfc4475-3.1.2.17,parsing,proxy,planned,M2b,Request-line method differs from CSeq method
-4,RFC 4475 torture messages,rfc4475-3.1.2.18,parsing,proxy,planned,M2b,Unknown method with a mismatched CSeq method
+4,RFC 4475 torture messages,rfc4475-3.1.2.17,parsing,proxy,covered,,Request-line method differs from CSeq method
+4,RFC 4475 torture messages,rfc4475-3.1.2.18,parsing,proxy,covered,,Unknown method with a mismatched CSeq method
 4,RFC 4475 torture messages,rfc4475-3.1.2.19,parsing,proxy,planned,M2b,Response code above 699
-4,RFC 4475 torture messages,rfc4475-3.2.1,parsing,proxy,planned,M2b,z9hG4bK branch with nothing after the cookie
+4,RFC 4475 torture messages,rfc4475-3.2.1,parsing,proxy,covered,,z9hG4bK branch with nothing after the cookie
 4,RFC 4475 torture messages,rfc4475-3.3.1,parsing,proxy,partial,,"Missing Call-ID, From and To"
 4,RFC 4475 torture messages,rfc4475-3.3.2,parsing,proxy,covered,,Unknown scheme in the Request-URI
-4,RFC 4475 torture messages,rfc4475-3.3.3,parsing,proxy,planned,M2b,Registered but atypical scheme in the Request-URI
-4,RFC 4475 torture messages,rfc4475-3.3.4,parsing,proxy,planned,M2b,"Non-SIP schemes in To, From and Contact (REGISTER)"
+4,RFC 4475 torture messages,rfc4475-3.3.3,parsing,proxy,covered,,Registered but atypical scheme in the Request-URI
+4,RFC 4475 torture messages,rfc4475-3.3.4,parsing,proxy,partial,,"Non-SIP schemes in To, From and Contact (REGISTER)"
 4,RFC 4475 torture messages,rfc4475-3.3.5,parsing,proxy,covered,,Unsupported Proxy-Require and Require
-4,RFC 4475 torture messages,rfc4475-3.3.6,parsing,proxy,planned,M2b,Body of unknown Content-Type
-4,RFC 4475 torture messages,rfc4475-3.3.7,parsing,proxy,planned,M2b,Authorization with an unknown scheme (REGISTER)
-4,RFC 4475 torture messages,rfc4475-3.3.8,parsing,proxy,planned,M2b,Several values in single-valued headers
+4,RFC 4475 torture messages,rfc4475-3.3.6,parsing,proxy,covered,,Body of unknown Content-Type
+4,RFC 4475 torture messages,rfc4475-3.3.7,parsing,proxy,partial,,Authorization with an unknown scheme (REGISTER)
+4,RFC 4475 torture messages,rfc4475-3.3.8,parsing,proxy,partial,,Several values in single-valued headers
 4,RFC 4475 torture messages,rfc4475-3.3.9,parsing,proxy,partial,,Conflicting Content-Length values
 4,RFC 4475 torture messages,rfc4475-3.3.10,security,proxy,planned,M2b,200 whose second Via names the broadcast address
 4,RFC 4475 torture messages,rfc4475-3.3.11,parsing,proxy,covered,,Max-Forwards of zero
-4,RFC 4475 torture messages,rfc4475-3.3.12,parsing,proxy,planned,M2b,Contact parameter on a REGISTER
-4,RFC 4475 torture messages,rfc4475-3.3.13,parsing,proxy,planned,M2b,URI parameter in a REGISTER Contact
-4,RFC 4475 torture messages,rfc4475-3.3.14,parsing,proxy,planned,M2b,Escaped Route header in a REGISTER Contact URI
-4,RFC 4475 torture messages,rfc4475-3.3.15,parsing,proxy,planned,M2b,Accept that rules out SDP on an INVITE
+4,RFC 4475 torture messages,rfc4475-3.3.12,parsing,proxy,partial,,Contact parameter on a REGISTER
+4,RFC 4475 torture messages,rfc4475-3.3.13,parsing,proxy,partial,,URI parameter in a REGISTER Contact
+4,RFC 4475 torture messages,rfc4475-3.3.14,parsing,proxy,partial,,Escaped Route header in a REGISTER Contact URI
+4,RFC 4475 torture messages,rfc4475-3.3.15,parsing,proxy,covered,,Accept that rules out SDP on an INVITE
 4,RFC 4475 torture messages,rfc4475-3.4.1,parsing,proxy,covered,,"RFC 2543-style INVITE (no branch, no From tag, no Content-Length, no Max-Forwards)"
 5,Network impairment,imp-sig-invite-lost,impairment,proxy,planned,M2b,The carrier's first INVITE is lost on the way in
 5,Network impairment,imp-sig-provisional-lost,impairment,proxy,planned,M2b,The edge's 100 and 180 are lost on the way out

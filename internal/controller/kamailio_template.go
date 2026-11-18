@@ -20,6 +20,7 @@ type kamailioConfigData struct {
 	Name           string
 	SIPPort        int32
 	RPCPort        int32
+	MetricsPort    int32
 	DispatcherList string
 	// Sets are the dispatcher set IDs in priority order.
 	Sets []int32

@@ -189,3 +189,19 @@ cases:
       and restoring the config lets the roll finish.
     status: covered
     scenarios: [bad-config-stops-roll]
+
+  - id: sb-silent-node-stays-in-rotation
+    ref: silent-node-stays-in-rotation
+    title: A request every node discards doesn't take the nodes out of rotation
+    area: resilience
+    component: proxy
+    expect: >
+      When every node discards a request without answering, the caller gets 408 and the nodes stay in rotation: the
+      next call goes through. Only a 503, or failed probes, take a node out; otherwise one such request would empty
+      the fleet. Kamailio counts it in kamailio_silent_drops_total{cause="request"}.
+    status: planned
+    milestone: M2b
+    gap: >
+      Kamailio now refuses the one request found that every node discarded (a malformed From display name), and no
+      other found does the same, so nothing reaches this path from outside. Needs a stand-in node that stays silent on
+      a marked request. Checked by hand when the change went in (both outcomes, and both causes counted).

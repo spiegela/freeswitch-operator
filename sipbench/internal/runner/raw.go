@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -62,8 +63,9 @@ func (r *Runner) rawExchange(ctx context.Context, x scenario.Raw, bench string) 
 	if err != nil {
 		return fail(fmt.Errorf("message: %w", err))
 	}
-	// The request as we sent it, for the checks and the ACK; a deliberately malformed one may not parse.
-	req, _, reqErr := rawsip.Parse(msg)
+	// The request as we sent it, for the checks and the ACK; a deliberately malformed one may not parse. Blank
+	// lines ahead of the start line (legal over a stream) aren't part of it.
+	req, _, reqErr := rawsip.Parse(bytes.TrimLeft(msg, "\r\n"))
 
 	wait := msOr(x.WaitMs, 3*time.Second)
 	got := r.rawReceive(conn, msg, wait, x.Expect.Closed)

@@ -1,5 +1,5 @@
 {
-  "startedAt": "2026-11-18T04:20:16.613148209Z",
+  "startedAt": "2026-11-18T14:28:20.025825638Z",
   "edge": "freeswitch:5060",
   "capabilities": [
     "codec:pcma",
@@ -13,37 +13,37 @@
       "file": "scenarios/01-basic-two-way.yaml",
       "area": "basic",
       "status": "pass",
-      "durationNs": 3155384960,
+      "durationNs": 3154135334,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.1-basic-two-way-a-1",
+          "benchCall": "0ca4a166.1-basic-two-way-a-1",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
           "audioGapsMs": {
-            "1000": 25
+            "1000": 59
           },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 124,
+          "mediaFrames": 123,
           "backend": [
             {
-              "id": "32f6790c-5daa-1240-f6a2-000000000000__536dd3ea-fafb-46ef-a504-aae78a2294b7__3aem2m3ZcprSF",
-              "benchCall": "1f7ab2fa.1-basic-two-way-a-1",
+              "id": "24c56eb7-5dff-1240-6fa6-000000000000__61ebf88f-0266-4a64-bcc5-48d5d655d1b9__7Bc1NvBUcQQSr",
+              "benchCall": "0ca4a166.1-basic-two-way-a-1",
               "route": "agent",
               "from": "sipbench",
               "to": "agent",
               "requestUri": "sip:agent@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.1-basic-two-way-a-1"
+                "X-Sipbench-Call": "0ca4a166.1-basic-two-way-a-1"
               },
-              "startedAt": "2026-11-18T04:20:16.618440459Z",
-              "answeredAt": "2026-11-18T04:20:16.619092167Z",
-              "endedAt": "2026-11-18T04:20:19.164173918Z",
+              "startedAt": "2026-11-18T14:28:20.030791388Z",
+              "answeredAt": "2026-11-18T14:28:20.031337554Z",
+              "endedAt": "2026-11-18T14:28:22.593064958Z",
               "answered": true,
               "endedBy": "remote",
               "source": "172.19.0.3:5080",
@@ -52,7 +52,7 @@
                 600
               ],
               "audioGapsMs": {
-                "600": 26
+                "600": 25
               },
               "digits": "",
               "mediaFrames": 124
@@ -66,37 +66,37 @@
       "file": "scenarios/02-backend-hangup.yaml",
       "area": "basic",
       "status": "pass",
-      "durationNs": 2650927001,
+      "durationNs": 2636201918,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.2-backend-hangup-a-2",
+          "benchCall": "0ca4a166.2-backend-hangup-a-2",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
           "audioGapsMs": {
-            "1000": 24
+            "1000": 22
           },
           "digits": "",
           "endedBy": "remote",
           "mediaFrames": 99,
           "backend": [
             {
-              "id": "34d81a99-5daa-1240-f6a2-000000000000__a6434aca-ee8f-4f1b-97c2-46d78493e486__4K7c4Fm39yecB",
-              "benchCall": "1f7ab2fa.2-backend-hangup-a-2",
+              "id": "26a754f9-5dff-1240-6fa6-000000000000__af948450-3aab-4d89-b12d-78e294d4cb7c__8m5SQQvy9ZDcm",
+              "benchCall": "0ca4a166.2-backend-hangup-a-2",
               "route": "hangup",
               "from": "sipbench",
               "to": "hangup",
               "requestUri": "sip:hangup@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.2-backend-hangup-a-2"
+                "X-Sipbench-Call": "0ca4a166.2-backend-hangup-a-2"
               },
-              "startedAt": "2026-11-18T04:20:19.774180918Z",
-              "answeredAt": "2026-11-18T04:20:19.774895543Z",
-              "endedAt": "2026-11-18T04:20:21.796725003Z",
+              "startedAt": "2026-11-18T14:28:23.188812375Z",
+              "answeredAt": "2026-11-18T14:28:23.190048Z",
+              "endedAt": "2026-11-18T14:28:25.212205459Z",
               "answered": true,
               "endedBy": "local",
               "source": "172.19.0.3:5080",
@@ -105,10 +105,10 @@
                 600
               ],
               "audioGapsMs": {
-                "600": 25
+                "600": 22
               },
               "digits": "",
-              "mediaFrames": 98
+              "mediaFrames": 97
             }
           ]
         }
@@ -119,29 +119,29 @@
       "file": "scenarios/03-cancel.yaml",
       "area": "basic",
       "status": "pass",
-      "durationNs": 2506839793,
+      "durationNs": 2512188668,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.3-cancel-a-3",
+          "benchCall": "0ca4a166.3-cancel-a-3",
           "status": 487,
           "tonesHeard": [],
           "digits": "",
           "mediaFrames": 0,
           "backend": [
             {
-              "id": "366c6f64-5daa-1240-f6a2-000000000000__4647c275-299f-4efa-9ba9-bad9014fc537__5v055a56674yp",
-              "benchCall": "1f7ab2fa.3-cancel-a-3",
+              "id": "283959c8-5dff-1240-6fa6-000000000000__6cc0ef59-f3d8-4c8f-ab08-f6c97ac7b485__9XyjSjD2683yF",
+              "benchCall": "0ca4a166.3-cancel-a-3",
               "route": "noanswer",
               "from": "sipbench",
               "to": "noanswer",
               "requestUri": "sip:noanswer@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.3-cancel-a-3"
+                "X-Sipbench-Call": "0ca4a166.3-cancel-a-3"
               },
-              "startedAt": "2026-11-18T04:20:22.42408892Z",
-              "endedAt": "2026-11-18T04:20:24.459307462Z",
+              "startedAt": "2026-11-18T14:28:25.823298168Z",
+              "endedAt": "2026-11-18T14:28:27.873676335Z",
               "answered": false,
               "endedBy": "remote",
               "source": "172.19.0.3:5080",
@@ -158,11 +158,11 @@
       "file": "scenarios/10-busy-fallback.yaml",
       "area": "failures",
       "status": "pass",
-      "durationNs": 3614141460,
+      "durationNs": 3631508210,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.4-busy-fallback-a-4",
+          "benchCall": "0ca4a166.4-busy-fallback-a-4",
           "status": 200,
           "responseHeaders": {
             "x-fallback-reason": "USER_BUSY"
@@ -172,25 +172,25 @@
             1400
           ],
           "audioGapsMs": {
-            "1400": 25
+            "1400": 27
           },
           "digits": "",
           "endedBy": "remote",
           "mediaFrames": 150,
           "backend": [
             {
-              "id": "37eafb54-5daa-1240-f6a2-000000000000__86331aea-35e7-462f-9873-248db62f47cc__65Sy75Na4gUHj",
-              "benchCall": "1f7ab2fa.4-busy-fallback-a-4",
+              "id": "29b8a583-5dff-1240-6fa6-000000000000__b517912f-2242-4906-80da-6361fc175649__a7QBUDy53HtHB",
+              "benchCall": "0ca4a166.4-busy-fallback-a-4",
               "route": "busy",
               "from": "sipbench",
               "to": "busy",
               "requestUri": "sip:busy@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.4-busy-fallback-a-4"
+                "X-Sipbench-Call": "0ca4a166.4-busy-fallback-a-4"
               },
-              "startedAt": "2026-11-18T04:20:24.931049379Z",
-              "endedAt": "2026-11-18T04:20:24.931244338Z",
+              "startedAt": "2026-11-18T14:28:28.335097502Z",
+              "endedAt": "2026-11-18T14:28:28.335325002Z",
               "answered": false,
               "rejected": 486,
               "source": "172.19.0.3:5080",
@@ -208,7 +208,7 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 833
+      "durationNs": 1709
     },
     {
       "name": "raw-unknown-scheme",
@@ -216,7 +216,7 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 667
+      "durationNs": 792
     },
     {
       "name": "raw-proxy-require",
@@ -224,7 +224,7 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 250
+      "durationNs": 791
     },
     {
       "name": "raw-missing-headers",
@@ -232,7 +232,7 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 125
+      "durationNs": 417
     },
     {
       "name": "raw-unknown-version",
@@ -240,7 +240,7 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 125
+      "durationNs": 708
     },
     {
       "name": "raw-stray-requests",
@@ -248,7 +248,7 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 250
+      "durationNs": 792
     },
     {
       "name": "raw-stray-response",
@@ -256,7 +256,7 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 125
+      "durationNs": 375
     },
     {
       "name": "raw-100-trying",
@@ -264,7 +264,7 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 125
+      "durationNs": 416
     },
     {
       "name": "raw-lexical-variants",
@@ -272,7 +272,7 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 208
+      "durationNs": 416
     },
     {
       "name": "raw-rfc2543-invite",
@@ -280,18 +280,18 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 125
+      "durationNs": 416
     },
     {
       "name": "decline-fallback",
       "file": "scenarios/11-decline-fallback.yaml",
       "area": "failures",
       "status": "pass",
-      "durationNs": 3631240793,
+      "durationNs": 3632476293,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.5-decline-fallback-a-5",
+          "benchCall": "0ca4a166.5-decline-fallback-a-5",
           "status": 200,
           "responseHeaders": {
             "x-fallback-reason": "CALL_REJECTED"
@@ -301,25 +301,25 @@
             1400
           ],
           "audioGapsMs": {
-            "1400": 24
+            "1400": 28
           },
           "digits": "",
           "endedBy": "remote",
           "mediaFrames": 150,
           "backend": [
             {
-              "id": "3a1293d7-5daa-1240-f6a2-000000000000__7c9f4e8c-ddbc-4268-ae98-b2769ea42c30__7eKQ906D1SH4D",
-              "benchCall": "1f7ab2fa.5-decline-fallback-a-5",
+              "id": "2be28f65-5dff-1240-6fa6-000000000000__69ecb6b0-709e-4f30-824f-4bc3a2f3c1ea__BgH4v8e90tg4p",
+              "benchCall": "0ca4a166.5-decline-fallback-a-5",
               "route": "decline",
               "from": "sipbench",
               "to": "decline",
               "requestUri": "sip:decline@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.5-decline-fallback-a-5"
+                "X-Sipbench-Call": "0ca4a166.5-decline-fallback-a-5"
               },
-              "startedAt": "2026-11-18T04:20:28.546013173Z",
-              "endedAt": "2026-11-18T04:20:28.546323714Z",
+              "startedAt": "2026-11-18T14:28:31.965321837Z",
+              "endedAt": "2026-11-18T14:28:31.965618504Z",
               "answered": false,
               "rejected": 603,
               "source": "172.19.0.3:5080",
@@ -337,7 +337,7 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 1250
+      "durationNs": 1750
     },
     {
       "name": "raw-trailing-octets",
@@ -345,7 +345,7 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 208
+      "durationNs": 458
     },
     {
       "name": "raw-tortuous-invite",
@@ -353,18 +353,50 @@
       "area": "proxy-validation",
       "status": "skip",
       "reason": "needs proxy",
-      "durationNs": 292
+      "durationNs": 541
+    },
+    {
+      "name": "raw-legal-variants",
+      "file": "scenarios/113-raw-legal-variants.yaml",
+      "area": "proxy-validation",
+      "status": "skip",
+      "reason": "needs proxy",
+      "durationNs": 458
+    },
+    {
+      "name": "raw-register-variants",
+      "file": "scenarios/114-raw-register-variants.yaml",
+      "area": "proxy-validation",
+      "status": "skip",
+      "reason": "needs proxy",
+      "durationNs": 500
+    },
+    {
+      "name": "raw-malformed-requests",
+      "file": "scenarios/115-raw-malformed-requests.yaml",
+      "area": "proxy-validation",
+      "status": "skip",
+      "reason": "needs proxy",
+      "durationNs": 1083
+    },
+    {
+      "name": "raw-large-messages",
+      "file": "scenarios/116-raw-large-messages.yaml",
+      "area": "proxy-validation",
+      "status": "skip",
+      "reason": "needs proxy",
+      "durationNs": 625
     },
     {
       "name": "no-answer-fallback",
       "file": "scenarios/12-no-answer-fallback.yaml",
       "area": "failures",
       "status": "pass",
-      "durationNs": 9463584963,
+      "durationNs": 9069708880,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.6-no-answer-fallback-a-6",
+          "benchCall": "0ca4a166.6-no-answer-fallback-a-6",
           "status": 200,
           "responseHeaders": {
             "x-fallback-reason": "NO_ANSWER"
@@ -374,25 +406,25 @@
             1400
           ],
           "audioGapsMs": {
-            "1400": 24
+            "1400": 27
           },
           "digits": "",
           "endedBy": "remote",
           "mediaFrames": 150,
           "backend": [
             {
-              "id": "3c3c6dbf-5daa-1240-f6a2-000000000000__5ff73545-4b70-42c4-aff9-1122dd4ee4d1__8QcgBvQHy27pS",
-              "benchCall": "1f7ab2fa.6-no-answer-fallback-a-6",
+              "id": "2e0cf91a-5dff-1240-6fa6-000000000000__8b61b6e4-c869-4699-a348-5b727aafc468__cSaXy3Zcy36pj",
+              "benchCall": "0ca4a166.6-no-answer-fallback-a-6",
               "route": "noanswer",
               "from": "sipbench",
               "to": "noanswer",
               "requestUri": "sip:noanswer@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.6-no-answer-fallback-a-6"
+                "X-Sipbench-Call": "0ca4a166.6-no-answer-fallback-a-6"
               },
-              "startedAt": "2026-11-18T04:20:32.175797216Z",
-              "endedAt": "2026-11-18T04:20:38.031453427Z",
+              "startedAt": "2026-11-18T14:28:35.598641422Z",
+              "endedAt": "2026-11-18T14:28:41.018163675Z",
               "answered": false,
               "endedBy": "remote",
               "source": "172.19.0.3:5080",
@@ -409,11 +441,11 @@
       "file": "scenarios/13-unreachable-fallback.yaml",
       "area": "failures",
       "status": "pass",
-      "durationNs": 9024284879,
+      "durationNs": 8974952588,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.7-unreachable-fallback-a-7",
+          "benchCall": "0ca4a166.7-unreachable-fallback-a-7",
           "status": 200,
           "responseHeaders": {
             "x-fallback-reason": "NO_ANSWER"
@@ -423,7 +455,7 @@
             1400
           ],
           "audioGapsMs": {
-            "1400": 45
+            "1400": 26
           },
           "digits": "",
           "endedBy": "remote",
@@ -436,26 +468,26 @@
       "file": "scenarios/20-header-passthrough.yaml",
       "area": "headers",
       "status": "pass",
-      "durationNs": 1650060876,
+      "durationNs": 1649886001,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.8-header-passthrough-a-8",
+          "benchCall": "0ca4a166.8-header-passthrough-a-8",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
           "audioGapsMs": {
-            "1000": 23
+            "1000": 60
           },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 49,
+          "mediaFrames": 47,
           "backend": [
             {
-              "id": "4741af04-5daa-1240-f6a2-000000000000__3911900f-50ba-479e-98a9-67fa7b2ba233__aaZ1ejSrrmmvg",
-              "benchCall": "1f7ab2fa.8-header-passthrough-a-8",
+              "id": "38ce28b1-5dff-1240-6fa6-000000000000__25d41ba2-8c43-4402-a7e4-ae35f5f40499__eBXe2S1KrNKvS",
+              "benchCall": "0ca4a166.8-header-passthrough-a-8",
               "route": "agent",
               "from": "sipbench",
               "to": "agent",
@@ -464,12 +496,12 @@
                 "X-Campaign": "spring-renewals",
                 "X-Conversation-Id": "7d0c1f9e-5b8a-4c2e-9f3a-0e6b1d2c3a4f",
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.8-header-passthrough-a-8",
+                "X-Sipbench-Call": "0ca4a166.8-header-passthrough-a-8",
                 "X-Tenant": "example-tenant"
               },
-              "startedAt": "2026-11-18T04:20:50.665571794Z",
-              "answeredAt": "2026-11-18T04:20:50.666424086Z",
-              "endedAt": "2026-11-18T04:20:51.707714503Z",
+              "startedAt": "2026-11-18T14:28:53.64193975Z",
+              "answeredAt": "2026-11-18T14:28:53.642616833Z",
+              "endedAt": "2026-11-18T14:28:54.685266209Z",
               "answered": true,
               "endedBy": "remote",
               "source": "172.19.0.3:5080",
@@ -487,11 +519,11 @@
       "file": "scenarios/30-blind-transfer.yaml",
       "area": "transfers",
       "status": "pass",
-      "durationNs": 7653873670,
+      "durationNs": 7655094504,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.9-blind-transfer-a-9",
+          "benchCall": "0ca4a166.9-blind-transfer-a-9",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
@@ -499,16 +531,16 @@
             1800
           ],
           "audioGapsMs": {
-            "1000": 21,
-            "1800": 61
+            "1000": 28,
+            "1800": 25
           },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 339,
+          "mediaFrames": 345,
           "backend": [
             {
-              "id": "483d3a57-5daa-1240-f6a2-000000000000__68403f96-4eaa-4485-b4b6-f33b48b12635__BKrtgDavNXaFc",
-              "benchCall": "1f7ab2fa.9-blind-transfer-a-9",
+              "id": "39ca4a9a-5dff-1240-6fa6-000000000000__ac693e50-484e-4ebe-86ab-b3537668e56d__Fmp73mjQNy9eN",
+              "benchCall": "0ca4a166.9-blind-transfer-a-9",
               "route": "transfer",
               "from": "sipbench",
               "to": "transfer",
@@ -516,11 +548,11 @@
               "headers": {
                 "X-Conversation-Id": "2b9e4c71-0d3f-4a8e-b5c6-9f1e7a2d4c80",
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.9-blind-transfer-a-9"
+                "X-Sipbench-Call": "0ca4a166.9-blind-transfer-a-9"
               },
-              "startedAt": "2026-11-18T04:20:52.313745128Z",
-              "answeredAt": "2026-11-18T04:20:52.314491628Z",
-              "endedAt": "2026-11-18T04:20:53.355335837Z",
+              "startedAt": "2026-11-18T14:28:55.294454293Z",
+              "answeredAt": "2026-11-18T14:28:55.295379418Z",
+              "endedAt": "2026-11-18T14:28:56.336381251Z",
               "answered": true,
               "endedBy": "remote",
               "source": "172.19.0.3:5080",
@@ -529,7 +561,7 @@
                 600
               ],
               "audioGapsMs": {
-                "600": 20
+                "600": 29
               },
               "digits": "",
               "mediaFrames": 48,
@@ -544,8 +576,8 @@
           ],
           "target": [
             {
-              "id": "48dc86fb-5daa-1240-f6a2-000000000000__a5233134-2227-4dc1-ac46-9025adea97e6__SBtZSemSr49KS",
-              "benchCall": "1f7ab2fa.9-blind-transfer-a-9",
+              "id": "3a699509-5dff-1240-6fa6-000000000000__6f1575ad-0d23-4da9-aceb-72b329a1fac7__jygpBQp161eHg",
+              "benchCall": "0ca4a166.9-blind-transfer-a-9",
               "route": "target",
               "from": "sipbench",
               "to": "target",
@@ -553,11 +585,11 @@
               "headers": {
                 "X-Conversation-Id": "2b9e4c71-0d3f-4a8e-b5c6-9f1e7a2d4c80",
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.9-blind-transfer-a-9"
+                "X-Sipbench-Call": "0ca4a166.9-blind-transfer-a-9"
               },
-              "startedAt": "2026-11-18T04:20:53.35812742Z",
-              "answeredAt": "2026-11-18T04:20:53.358725379Z",
-              "endedAt": "2026-11-18T04:20:59.359837256Z",
+              "startedAt": "2026-11-18T14:28:56.338484585Z",
+              "answeredAt": "2026-11-18T14:28:56.339039168Z",
+              "endedAt": "2026-11-18T14:29:02.340074963Z",
               "answered": true,
               "endedBy": "remote",
               "source": "172.19.0.3:5060",
@@ -566,10 +598,10 @@
                 600
               ],
               "audioGapsMs": {
-                "600": 52
+                "600": 28
               },
               "digits": "",
-              "mediaFrames": 296
+              "mediaFrames": 297
             }
           ]
         }
@@ -580,39 +612,39 @@
       "file": "scenarios/40-dtmf-both-ways.yaml",
       "area": "dtmf",
       "status": "pass",
-      "durationNs": 5208584169,
+      "durationNs": 5215053044,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.10-dtmf-both-ways-a-10",
+          "benchCall": "0ca4a166.10-dtmf-both-ways-a-10",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": null,
           "digits": "4321",
           "endedBy": "local",
-          "mediaFrames": 214,
+          "mediaFrames": 218,
           "backend": [
             {
-              "id": "4ccd3a8d-5daa-1240-f6a2-000000000000__b6ec9fd3-68f6-438f-b8d0-6628a57aa7cd__cvHKj8tZj601Q",
-              "benchCall": "1f7ab2fa.10-dtmf-both-ways-a-10",
+              "id": "3e5a81d6-5dff-1240-6fa6-000000000000__16d6f1cd-8590-42e4-a7e6-1f16b6005b9f__gXF05F3tj7Z1g",
+              "benchCall": "0ca4a166.10-dtmf-both-ways-a-10",
               "route": "dtmf",
               "from": "sipbench",
               "to": "dtmf",
               "requestUri": "sip:dtmf@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.10-dtmf-both-ways-a-10"
+                "X-Sipbench-Call": "0ca4a166.10-dtmf-both-ways-a-10"
               },
-              "startedAt": "2026-11-18T04:20:59.968274632Z",
-              "answeredAt": "2026-11-18T04:20:59.968924548Z",
-              "endedAt": "2026-11-18T04:21:04.589950342Z",
+              "startedAt": "2026-11-18T14:29:02.950586213Z",
+              "answeredAt": "2026-11-18T14:29:02.951662088Z",
+              "endedAt": "2026-11-18T14:29:07.57610584Z",
               "answered": true,
               "endedBy": "remote",
               "source": "172.19.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [],
               "digits": "1234#",
-              "mediaFrames": 223
+              "mediaFrames": 220
             }
           ]
         }
@@ -623,37 +655,37 @@
       "file": "scenarios/50-codec-pcmu.yaml",
       "area": "codecs",
       "status": "pass",
-      "durationNs": 2149223042,
+      "durationNs": 2155064667,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.11-codec-pcmu-a-11",
+          "benchCall": "0ca4a166.11-codec-pcmu-a-11",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
           "audioGapsMs": {
-            "1000": 22
+            "1000": 59
           },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 75,
+          "mediaFrames": 72,
           "backend": [
             {
-              "id": "4fe7f674-5daa-1240-f6a2-000000000000__b280fc0f-6d00-444b-a8c3-043e43fa80ba__D5acm3B3FFQmK",
-              "benchCall": "1f7ab2fa.11-codec-pcmu-a-11",
+              "id": "41766b50-5dff-1240-6fa6-000000000000__64d5db92-6596-4776-8e7c-9f162a127f2f__H68r7amyFgpmc",
+              "benchCall": "0ca4a166.11-codec-pcmu-a-11",
               "route": "agent",
               "from": "sipbench",
               "to": "agent",
               "requestUri": "sip:agent@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.11-codec-pcmu-a-11"
+                "X-Sipbench-Call": "0ca4a166.11-codec-pcmu-a-11"
               },
-              "startedAt": "2026-11-18T04:21:05.176672176Z",
-              "answeredAt": "2026-11-18T04:21:05.177257134Z",
-              "endedAt": "2026-11-18T04:21:06.738284927Z",
+              "startedAt": "2026-11-18T14:29:08.166580507Z",
+              "answeredAt": "2026-11-18T14:29:08.167411715Z",
+              "endedAt": "2026-11-18T14:29:09.709689341Z",
               "answered": true,
               "endedBy": "remote",
               "source": "172.19.0.3:5080",
@@ -662,7 +694,7 @@
                 600
               ],
               "audioGapsMs": {
-                "600": 23
+                "600": 24
               },
               "digits": "",
               "mediaFrames": 74
@@ -676,37 +708,37 @@
       "file": "scenarios/51-codec-pcma.yaml",
       "area": "codecs",
       "status": "pass",
-      "durationNs": 2152224418,
+      "durationNs": 2156610209,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.12-codec-pcma-a-12",
+          "benchCall": "0ca4a166.12-codec-pcma-a-12",
           "status": 200,
           "codec": "PCMA",
           "tonesHeard": [
             1000
           ],
           "audioGapsMs": {
-            "1000": 60
+            "1000": 25
           },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 72,
+          "mediaFrames": 74,
           "backend": [
             {
-              "id": "51304cfb-5daa-1240-f6a2-000000000000__dd11de16-5ae4-44cc-bae1-50242406e11a__ee44Nyv6crD7e",
-              "benchCall": "1f7ab2fa.12-codec-pcma-a-12",
+              "id": "42beb8d5-5dff-1240-6fa6-000000000000__35d06db8-6412-4a56-83d5-e574293fb76c__jF2H9541cSc7Q",
+              "benchCall": "0ca4a166.12-codec-pcma-a-12",
               "route": "agent",
               "from": "sipbench",
               "to": "agent",
               "requestUri": "sip:agent@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.12-codec-pcma-a-12"
+                "X-Sipbench-Call": "0ca4a166.12-codec-pcma-a-12"
               },
-              "startedAt": "2026-11-18T04:21:07.328430802Z",
-              "answeredAt": "2026-11-18T04:21:07.32930801Z",
-              "endedAt": "2026-11-18T04:21:08.871697511Z",
+              "startedAt": "2026-11-18T14:29:10.318014008Z",
+              "answeredAt": "2026-11-18T14:29:10.318846841Z",
+              "endedAt": "2026-11-18T14:29:11.879997634Z",
               "answered": true,
               "endedBy": "remote",
               "source": "172.19.0.3:5080",
@@ -715,7 +747,7 @@
                 600
               ],
               "audioGapsMs": {
-                "600": 24
+                "600": 36
               },
               "digits": "",
               "mediaFrames": 74
@@ -730,44 +762,44 @@
       "area": "codecs",
       "status": "skip",
       "reason": "needs codec:g722",
-      "durationNs": 958
+      "durationNs": 1166
     },
     {
       "name": "admission-limit",
       "file": "scenarios/60-admission-limit.yaml",
       "area": "admission",
       "status": "pass",
-      "durationNs": 5954301668,
+      "durationNs": 5959226670,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.13-admission-limit-a-13",
+          "benchCall": "0ca4a166.13-admission-limit-a-13",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
           "audioGapsMs": {
-            "1000": 20
+            "1000": 22
           },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 250,
+          "mediaFrames": 249,
           "backend": [
             {
-              "id": "52789a4b-5daa-1240-f6a2-000000000000__f20271ee-482a-4e5f-8069-2ab3dc8c7224__FQXXQSDaa13Sa",
-              "benchCall": "1f7ab2fa.13-admission-limit-a-13",
+              "id": "4407fa63-5dff-1240-6fa6-000000000000__b04a32c7-5692-4f8c-a2a5-aff38032bd4e__KrUaB1N5912SK",
+              "benchCall": "0ca4a166.13-admission-limit-a-13",
               "route": "hold",
               "from": "sipbench",
               "to": "hold",
               "requestUri": "sip:hold@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.13-admission-limit-a-13"
+                "X-Sipbench-Call": "0ca4a166.13-admission-limit-a-13"
               },
-              "startedAt": "2026-11-18T04:21:09.479954928Z",
-              "answeredAt": "2026-11-18T04:21:09.480545553Z",
-              "endedAt": "2026-11-18T04:21:14.544429222Z",
+              "startedAt": "2026-11-18T14:29:12.475770551Z",
+              "answeredAt": "2026-11-18T14:29:12.476415134Z",
+              "endedAt": "2026-11-18T14:29:17.538951928Z",
               "answered": true,
               "endedBy": "remote",
               "source": "172.19.0.3:5080",
@@ -780,7 +812,7 @@
         },
         {
           "id": "b",
-          "benchCall": "1f7ab2fa.13-admission-limit-b-14",
+          "benchCall": "0ca4a166.13-admission-limit-b-14",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
@@ -791,22 +823,22 @@
           },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 247,
+          "mediaFrames": 248,
           "backend": [
             {
-              "id": "52a699d3-5daa-1240-f6a2-000000000000__da656090-c705-4b31-8929-92771b3e66c0__g0ppSmyD79Scp",
-              "benchCall": "1f7ab2fa.13-admission-limit-b-14",
+              "id": "4435ece8-5dff-1240-6fa6-000000000000__27d352f5-ebd2-4a2b-b28c-bb65f27592b5__m1m3cv686aScF",
+              "benchCall": "0ca4a166.13-admission-limit-b-14",
               "route": "hold",
               "from": "sipbench",
               "to": "hold",
               "requestUri": "sip:hold@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.13-admission-limit-b-14"
+                "X-Sipbench-Call": "0ca4a166.13-admission-limit-b-14"
               },
-              "startedAt": "2026-11-18T04:21:09.78136422Z",
-              "answeredAt": "2026-11-18T04:21:09.782008053Z",
-              "endedAt": "2026-11-18T04:21:14.823862597Z",
+              "startedAt": "2026-11-18T14:29:12.776955843Z",
+              "answeredAt": "2026-11-18T14:29:12.777652509Z",
+              "endedAt": "2026-11-18T14:29:17.842658012Z",
               "answered": true,
               "endedBy": "remote",
               "source": "172.19.0.3:5080",
@@ -819,7 +851,7 @@
         },
         {
           "id": "c",
-          "benchCall": "1f7ab2fa.13-admission-limit-c-15",
+          "benchCall": "0ca4a166.13-admission-limit-c-15",
           "status": 503,
           "tonesHeard": [],
           "digits": "",
@@ -832,44 +864,44 @@
       "file": "scenarios/70-options.yaml",
       "area": "health",
       "status": "pass",
-      "durationNs": 503393000
+      "durationNs": 503288500
     },
     {
       "name": "echo",
       "file": "scenarios/80-echo.yaml",
       "area": "basic",
       "status": "pass",
-      "durationNs": 3156539710,
+      "durationNs": 3152873168,
       "calls": [
         {
           "id": "a",
-          "benchCall": "1f7ab2fa.15-echo-a-16",
+          "benchCall": "0ca4a166.15-echo-a-16",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             600
           ],
           "audioGapsMs": {
-            "600": 58
+            "600": 59
           },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 120,
+          "mediaFrames": 121,
           "backend": [
             {
-              "id": "56523154-5daa-1240-f6a2-000000000000__8a86698c-2a03-48a7-9c53-c9ffde9cba51__KU20y5gry4v4r",
-              "benchCall": "1f7ab2fa.15-echo-a-16",
+              "id": "47e2380d-5dff-1240-6fa6-000000000000__c2a52b9b-6218-4e4a-b669-68e38f262405__Qv0DjDSKy5U4H",
+              "benchCall": "0ca4a166.15-echo-a-16",
               "route": "echo",
               "from": "sipbench",
               "to": "echo",
               "requestUri": "sip:echo@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "1f7ab2fa.15-echo-a-16"
+                "X-Sipbench-Call": "0ca4a166.15-echo-a-16"
               },
-              "startedAt": "2026-11-18T04:21:15.939257167Z",
-              "answeredAt": "2026-11-18T04:21:15.940019875Z",
-              "endedAt": "2026-11-18T04:21:18.484671793Z",
+              "startedAt": "2026-11-18T14:29:18.939488887Z",
+              "answeredAt": "2026-11-18T14:29:18.940478679Z",
+              "endedAt": "2026-11-18T14:29:21.502685722Z",
               "answered": true,
               "endedBy": "remote",
               "source": "172.19.0.3:5080",
@@ -878,7 +910,7 @@
                 600
               ],
               "audioGapsMs": {
-                "600": 24
+                "600": 27
               },
               "digits": "",
               "mediaFrames": 124
@@ -893,7 +925,7 @@
       "area": "fleet",
       "status": "skip",
       "reason": "needs fleet",
-      "durationNs": 2583
+      "durationNs": 1334
     },
     {
       "name": "rolling-update-live-call",
@@ -901,7 +933,7 @@
       "area": "fleet",
       "status": "skip",
       "reason": "needs fleet",
-      "durationNs": 708
+      "durationNs": 542
     },
     {
       "name": "bad-config-stops-roll",
@@ -909,10 +941,10 @@
       "area": "fleet",
       "status": "skip",
       "reason": "needs fleet",
-      "durationNs": 917
+      "durationNs": 208
     }
   ],
   "pass": 15,
   "fail": 0,
-  "skip": 17
+  "skip": 21
 }

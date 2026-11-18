@@ -1,0 +1,375 @@
+name: raw-malformed-requests
+area: proxy-validation
+description: >
+  Requests that are malformed: none may reach a node, and Kamailio must stay up. Kamailio answers 400 itself to a
+  CSeq number too large for 32 bits, a Request-URI in <>, and a CSeq method that doesn't match the request's (for a
+  known method and an unknown one). Its core parser drops the rest without an answer: extra separators in Via and
+  Contact, an unterminated quoted display name, whitespace inside the Request-URI, several spaces between the
+  request line's parts, an addr-spec with spaces, and a second To, Call-ID, Max-Forwards and CSeq. Kamailio's
+  parser lets a malformed display name through (characters a token can't hold, outside quotes) and so does a bare
+  From URI with a comma, but every node would discard them unanswered, so Kamailio's script answers them 400
+  itself. RFC 4475 would have most of these answered 400; each gap is in the conformance record.
+requires: [proxy, mock]
+raw:
+  # RFC 4475 3.1.2.4: a CSeq number past 2^32.
+  - id: cseq-too-large
+    waitMs: 2000
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 36893488147419103232 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Expires: 10000000000
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 400, headers: {Server: kamailio}, backend: {calls: 0}}
+  # RFC 4475 3.1.2.7.
+  - id: request-uri-in-brackets
+    waitMs: 2000
+    message: |
+      INVITE <sip:agent@{{edge}}> SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 400, headers: {Server: kamailio}, backend: {calls: 0}}
+  # RFC 4475 3.1.2.17.
+  - id: method-differs-from-cseq
+    waitMs: 2000
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 ACK
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 400, headers: {Server: kamailio}, backend: {calls: 0}}
+  # RFC 4475 3.1.2.18: 501 is preferred at a proxy, 400 is allowed.
+  - id: unknown-method-differs-from-cseq
+    waitMs: 2000
+    message: |
+      FROBNICATE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 WIDGET
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    expect: {status: 400, headers: {Server: kamailio}, backend: {calls: 0}}
+  # RFC 4475 3.1.2.1: empty parameters in Via, empty values in Contact. A drop is allowed.
+  - id: extra-separators
+    waitMs: 2000
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}};;x=1;;
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>;;,;,
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {noResponse: true, backend: {calls: 0}}
+  # RFC 4475 3.1.2.6 (gap: 400 expected).
+  - id: unterminated-quote
+    waitMs: 2000
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: "sipbench <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {noResponse: true, backend: {calls: 0}}
+  # RFC 4475 3.1.2.8 (gap: 400 expected).
+  - id: request-uri-whitespace
+    waitMs: 2000
+    message: |
+      INVITE sip:age nt@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {noResponse: true, backend: {calls: 0}}
+  # RFC 4475 3.1.2.9 (gap: 400, or passed on with single spaces, expected).
+  - id: request-line-extra-spaces
+    waitMs: 2000
+    message: |
+      INVITE   sip:agent@{{edge}}    SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {noResponse: true, backend: {calls: 0}}
+  # RFC 4475 3.1.2.14 (gap: 400, or passed on without the spaces, expected).
+  - id: addr-spec-spaces
+    waitMs: 2000
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: sip:agent @ {{edge}}
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {noResponse: true, backend: {calls: 0}}
+  # RFC 4475 3.1.2.15: an unquoted display name with characters a token can't hold.
+  - id: unquoted-display-name
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: sip bench@home, inc <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 400, headers: {Server: kamailio}, backend: {calls: 0}}
+  # The same in To.
+  - id: unquoted-display-name-in-to
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: agent, desk <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 400, headers: {Server: kamailio}, backend: {calls: 0}}
+  # UTF-8 outside quotes: the grammar allows it only in a quoted name, and FreeSWITCH discards it otherwise.
+  - id: unquoted-utf8-display-name
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: Jöe Bench <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 400, headers: {Server: kamailio}, backend: {calls: 0}}
+  # A From URI with a comma outside <> (RFC 3261 20 wants it in <>).
+  - id: bare-uri-with-comma
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: sip:sip,bench@{{localHost}};tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 400, headers: {Server: kamailio}, backend: {calls: 0}}
+  # Calls still go through after the refusals.
+  - id: call-after-refusals
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {status: 200, backend: {answered: true}}
+  # RFC 4475 3.3.8 (gap: 400 expected).
+  - id: single-valued-headers-twice
+    waitMs: 2000
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      To: <sip:other@{{edge}}>
+      Call-ID: second-{{callId}}
+      Max-Forwards: 60
+      CSeq: 2 INVITE
+      Content-Type: application/sdp
+      Content-Length: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    expect: {noResponse: true, backend: {calls: 0}}
+  - id: still-up
+    message: |
+      OPTIONS sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 OPTIONS
+      Content-Length: 0
+    expect: {status: 200}

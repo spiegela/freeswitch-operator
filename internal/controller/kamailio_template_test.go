@@ -10,9 +10,9 @@ import (
 // kamailioConfigCases are rendered by TestKamailioConfigRenders and, with KAMAILIO_CFG_OUT set, written out (with
 // the pod scripts, under scripts/) for make check-kamailio-cfg to run through kamailio -c in the pinned image.
 var kamailioConfigCases = map[string]kamailioConfigData{
-	"two-sets": {Name: "edge", SIPPort: 5060, RPCPort: 5070, DispatcherList: kamailioDispatcher, Sets: []int32{2, 1}},
-	"one-set":  {Name: "edge", SIPPort: 5080, RPCPort: 5071, DispatcherList: kamailioDispatcher, Sets: []int32{1}},
-	"no-sets":  {Name: "edge", SIPPort: 5060, RPCPort: 5070, DispatcherList: kamailioDispatcher},
+	"two-sets": {Name: "edge", SIPPort: 5060, RPCPort: 5070, MetricsPort: 5071, DispatcherList: kamailioDispatcher, Sets: []int32{2, 1}},
+	"one-set":  {Name: "edge", SIPPort: 5080, RPCPort: 5071, MetricsPort: 5072, DispatcherList: kamailioDispatcher, Sets: []int32{1}},
+	"no-sets":  {Name: "edge", SIPPort: 5060, RPCPort: 5070, MetricsPort: 5071, DispatcherList: kamailioDispatcher},
 }
 
 func TestKamailioConfigRenders(t *testing.T) {
@@ -54,6 +54,10 @@ func TestKamailioConfigRouting(t *testing.T) {
 		`if (ds_is_active("2"))`,
 		`if (ds_is_active("1"))`,
 		"listen=tcp:PRIVATE_ADDR:RPC_PORT",
+		"listen=tcp:PRIVATE_ADDR:METRICS_PORT",
+		"#!define METRICS_PORT 5071",
+		"if (!route(DISPLAY_NAMES))",
+		`prom_counter_inc("silent_drops_total", "1", "request")`,
 		"#!define SIP_PORT 5060",
 		`modparam("dispatcher", "ds_probing_mode", 3)`,
 		`#!define DISPATCHER_LIST "` + kamailioDispatcher + `"`,
