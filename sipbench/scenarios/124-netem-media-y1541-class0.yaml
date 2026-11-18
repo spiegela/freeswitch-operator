@@ -1,0 +1,29 @@
+name: netem-media-y1541-class0
+area: impairment
+description: >
+  The caller's media at the ITU-T Y.1541 class 0 limits, each direction: 100 ms delay, 50 ms of jitter around
+  it, 0.1% loss. Each side hears the other's tone, and the caller measures about the injected loss.
+requires: [mock, netem]
+timeoutMs: 60000
+impairments:
+  - {link: carrier-edge, direction: both, traffic: rtp, delay: 100ms, jitter: 50ms, loss: 0.1%}
+calls:
+  - id: a
+    to: throughout
+    steps:
+      - tone: {hz: 600, ms: 20000}
+      - hangup: {}
+    maxDurationMs: 30000
+    expect:
+      status: 200
+      tonesHeard: [1000]
+      minToneCoverage: 0.95
+      rtpLossPct: {max: 1}
+      endedBy: local
+      backend: {answered: true, tonesHeard: [600], endedBy: remote}
+backend:
+  routes:
+    throughout:
+      steps:
+        - answer: {}
+        - tone: {hz: 1000, ms: 40000}

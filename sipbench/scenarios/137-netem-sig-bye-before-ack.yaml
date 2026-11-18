@@ -1,0 +1,21 @@
+name: netem-sig-bye-before-ack
+area: impairment
+description: >
+  The caller's ACK is held back a second and its BYE, sent 200 ms after the 200, overtakes it. The edge accepts
+  the BYE (200, not 481), releases both legs, and ignores the late ACK.
+requires: [mock, sip-trace]
+impairments:
+  - {link: carrier-edge, direction: to-edge, traffic: sip, match: ACK, delay: 1s}
+calls:
+  - id: a
+    to: agent
+    steps:
+      - wait: {ms: 200}
+      - hangup: {}
+    expect:
+      status: 200
+      endedBy: local
+      sip:
+        - {in: 200 BYE, min: 1}
+        - {in: 481 BYE, max: 0}
+      backend: {calls: 1, answered: true, endedBy: remote}

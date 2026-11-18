@@ -1,0 +1,31 @@
+name: netem-media-lte-bad
+area: impairment
+description: >
+  A poor mobile path, each direction: 36 ms delay, 30 ms jitter, 6% loss in runs of about 2 packets. The call
+  stays up, tones are still recognised both ways in at least 85% of their frames, and no tone goes missing for
+  long. (It will not sound good; the point is that the edge survives it.)
+requires: [mock, netem]
+timeoutMs: 60000
+impairments:
+  - {link: carrier-edge, direction: both, traffic: rtp, delay: 36ms, jitter: 30ms, loss: 6%, burst: 2}
+calls:
+  - id: a
+    to: throughout
+    steps:
+      - tone: {hz: 600, ms: 20000}
+      - hangup: {}
+    maxDurationMs: 30000
+    expect:
+      status: 200
+      tonesHeard: [1000]
+      minToneCoverage: 0.85
+      maxAudioGapMs: 500
+      rtpLossPct: {min: 2, max: 12}
+      endedBy: local
+      backend: {answered: true, tonesHeard: [600], endedBy: remote}
+backend:
+  routes:
+    throughout:
+      steps:
+        - answer: {}
+        - tone: {hz: 1000, ms: 40000}

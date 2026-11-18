@@ -165,10 +165,12 @@ calls:
         headers: {X-Conversation-Id: 2b9e4c71}
 ```
 
-Capabilities a run provides are set with `-caps` (default `mock,esl,codec:pcmu,codec:pcma`): `mock` when
+Capabilities a run provides are set with `-caps` (default `mock,esl,codec:pcmu,codec:pcma,sip-trace`): `mock` when
 the backend is mockbackend, `esl` when the runner can reach FreeSWITCH's event socket, `codec:*` for codecs the
-edge and runner both support, `proxy` when the edge address is Kamailio rather than a FreeSWITCH node, and `fleet`, added by `-fleet namespace/name` (`SIPBENCH_FLEET`), when the runner
-can act on the FreeswitchCluster under test.
+edge and runner both support, `proxy` when the edge address is Kamailio rather than a FreeSWITCH node, `fleet`, added by `-fleet namespace/name` (`SIPBENCH_FLEET`), when the runner
+can act on the FreeswitchCluster under test, `netem` when the runner may impair its own traffic with tc (it
+needs `NET_ADMIN`; compose and the kind Job provide both), and `sip-trace` when the edge address is a SIP node's
+own address, not a Service VIP, so a call can keep all its SIP on one socket (see Impairments below).
 
 ### Raw messages: what sipgo won't send
 
@@ -230,6 +232,69 @@ member's address. Whatever happens, a scenario ends with its cordoned nodes unco
 put back. Every action but `hangup` needs the `fleet` capability, and a scenario using them must say
 `requires: [fleet]`. The runner's access is in `k8s/runner-rbac.yaml`. Results carry a `timeline` of what each
 action did and when.
+
+### Impairments: a bad network between the carrier and the edge
+
+`impairments:` puts a scenario's calls behind a worse network, in the vocabulary of
+[`conformance/impairment.yaml`](conformance/impairment.yaml):
+
+```yaml
+requires: [mock, netem, sip-trace]
+impairments:
+  - {link: carrier-edge, direction: both, traffic: rtp, delay: 40ms, jitter: 3ms, loss: 1%, burst: 2}
+  - {link: carrier-edge, direction: both, traffic: all, loss: 100%, at: 5s, for: 2s}     # a 2 s blackhole
+  - {link: carrier-edge, direction: from-edge, traffic: sip, drop: first 100 and first 180}   # needs sip-trace
+  - {link: carrier-edge, direction: to-edge, traffic: sip, match: ACK, delay: 1s}
+```
+
+Two mechanisms, chosen by the knobs:
+
+- **tc netem** for `loss`, `burst`, `delay`, `jitter`, `reorder` and `duplicate`, on the runner's own interface
+  toward the edge: the runner is the carrier, so this is the carrier-edge link. A `prio` qdisc sorts packets by
+  port into one band per impairment, and a `netem` qdisc hangs off each band while it is on. `traffic: sip` is UDP
+  and TCP to or from the edge's SIP port, `rtp` is the runner's RTP ports (it keeps its media to 20480-24575 so
+  one u32 mask matches them), `all` is both; DNS, the mock's API and the Kubernetes API are never touched.
+  `from-edge` needs what arrives to be delayed too, and tc only shapes what leaves an interface: matching arrivals
+  are redirected out of a veth pair (`sbnetem0`/`sbnetem1`) and come back in through its peer. (The ifb device does
+  this usually; the Docker Desktop kernel, and so kind's, has none.) `burst` turns `loss` into Gilbert-Elliott
+  loss with that mean run length. `at`/`for` turn an impairment on that long after the first call is answered, and
+  off again. The runner removes everything when the scenario ends, and clears leftovers before it starts.
+- **The runner's SIP layer** for `drop` and `match`: each call has its own UDP socket, and named messages are
+  dropped (`drop: first INVITE`, `drop: every ACK`, `drop: first 200 to INVITE`) or held and lost
+  (`match: ACK` with `delay` and `loss`) on their way in or out. Ordinals count per call. These need no
+  privilege, but every request of the call, in-dialog ones included, must leave from that socket, and that needs
+  the `sip-trace` capability, as `sip:` expectations do: the edge address must be a node's own. Behind a Service
+  VIP (`kamailio-sip` on kind) the ACK and BYE go to the Kamailio pod's own address (its Record-Route), and from
+  the INVITE's socket they collide in conntrack with the VIP's NAT entry and are dropped. So the kind Job doesn't
+  offer `sip-trace`, and those scenarios skip there unless `SIPBENCH_EDGE` names `proxy-kamailio:5060`, the
+  headless Service, and the run adds `sip-trace`.
+
+tc needs the `netem` capability and `NET_ADMIN`: compose's runner has `cap_add: [NET_ADMIN]`, and the Job in
+`k8s/runner-job.yaml` adds it to the container (it changes the runner pod's network namespace only). The image
+runs as a non-root user, so `sipbench` carries `cap_net_admin` as a permitted file capability and hands it to `tc`
+and `ip` as an ambient one. Other links (`proxy-node`, `edge-backend`) are part of the vocabulary and need the
+`netem:<link>` capability, which no runner offers yet: those scenarios skip. Adding one means running the same
+`tc` plan in that pod's network namespace.
+
+With an impairment comes a set of measurements per call, in the report and as expectations:
+
+| Expectation | Checks |
+|---|---|
+| `minToneCoverage: 0.95` | each tone in `tonesHeard` detected in at least that share of its 20 ms frames |
+| `rtpLossPct: {min, max}` | RTP loss the caller measured on what it received, in percent |
+| `maxSetupMs: 1200` | INVITE to final response |
+| `echoMs: {min, max}` | round trip of an `echo` route's audio |
+| `durationMs: {min, max}` | answer to end |
+| `sip: [{out: INVITE, min: 2}, {in: 200 INVITE, max: 3, deliveredWithinMs: 1500, oneToTag: true}]` | (needs `sip-trace`) copies of a message on the caller's socket, those the SIP layer dropped included: how many, when the first was seen (`firstMs`, from just before the INVITE), how soon after it one got through, all with one To tag |
+| `backend.tonesNotHeard` | tones the backend must not have heard |
+
+`repeat: {count: 50, everyMs: 500, setupP95Ms: 1700}` on a call places it that many times (ids `a-1`, `a-2`, ...),
+each with the call's expectations, and checks the setup time p95 across them. Results carry `impairments`, and
+each call `setupMs`, `durationMs`, `toneCoverage`, `echoMs`, `rtp` (packets, expected, lost) and, with `sip`
+expectations or SIP-layer impairments, `sip`: every message on the caller's socket and what was done to it.
+
+To run the netem scenarios in compose beside another checkout, give the stack its own project and image:
+`SIPBENCH_IMAGE=sipbench:netem docker compose -p sipbench-netem run --rm --use-aliases sipbench run -run netem- scenarios`.
 
 ## mockbackend
 
@@ -324,6 +389,10 @@ profiles, and which scenario checks each one. A new scenario needs an entry ther
 - Runners can share a mock backend, but not a transfer target: FreeSWITCH sends transfers to one address
   (`TRANSFER_HOST`, the `sipbench` Service on a cluster), so concurrent runners each need their own. Scenarios that
   change the edge itself (setup commands, fleet actions) disturb whatever else runs on it.
+- **Impairments**: tc works on the runner's interface, so one runner runs one impairment scenario at a time (the
+  runner runs scenarios one after another). Only the carrier-edge link is impaired; RFC 3550 jitter, MOS (the
+  E-model), SSRC and timestamp continuity, and loss as the backend measures it aren't measured yet. SIP-layer
+  rules apply to calls, not to `raw:` messages or the OPTIONS check, and can't be timed with `at`/`for`.
 
 ## Layout
 
@@ -337,6 +406,7 @@ internal/tone       tone generator and Goertzel detector
 internal/scenario   scenario files
 internal/fleet      the FreeswitchCluster scenario actions act on (client-go)
 internal/rawsip     hand-written SIP messages over UDP and TCP, and a lenient parser for what comes back
+internal/netem      impairments: the scenario vocabulary, tc plans, and the SIP layer's drops and holds
 internal/mock       mock config and HTTP API
 internal/esl        minimal FreeSWITCH event socket client
 freeswitch/conf     the edge configuration (freeswitch/kustomization.yaml: the same as ConfigMaps)
