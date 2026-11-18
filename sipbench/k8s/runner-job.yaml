@@ -6,6 +6,15 @@
 #
 # SIPBENCH_FLEET names the FreeswitchCluster the fleet scenarios act on (the "fleet" capability), through the
 # sipbench-runner service account (runner-rbac.yaml). Empty, they skip.
+#
+# NET_ADMIN lets the runner impair its own traffic with tc (the "netem" capability, carrier-edge link only): it
+# changes this pod's network namespace and nothing else.
+#
+# No "sip-trace": the edge address is the kamailio-sip Service VIP, and a call's in-dialog requests go to the
+# Kamailio pod's own address (its Record-Route); sent from the INVITE's socket, as the SIP-layer impairments and
+# sip checks need, they collide in conntrack with the VIP's NAT entry and are dropped. Those scenarios skip here;
+# to run them, set SIPBENCH_EDGE to proxy-kamailio:5060 (the headless Service: a node's own address) and add
+# sip-trace.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -33,10 +42,13 @@ spec:
             - {name: SIPBENCH_MOCK, value: "http://mockbackend:8080"}
             - {name: SIPBENCH_ESL, value: ""}             # set but empty: no event socket
             - {name: SIPBENCH_TARGET, value: "0.0.0.0:5090"}
-            - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma,proxy"}  # proxy: the edge address is Kamailio
+            - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma,proxy,netem"}  # proxy: the edge address is Kamailio
             - {name: SIPBENCH_FLEET, value: "telephony/edge"}    # namespace/name; empty skips the fleet scenarios
             - {name: SIPBENCH_PROMETHEUS, value: "http://prometheus.monitoring.svc:9090"}  # metric checks; empty skips them
             - {name: SIPBENCH_RUN, value: ""}             # a regexp picking scenarios by name; hack/kind.sh bench sets it
             - {name: SIPBENCH_JSON, value: ""}            # "-" prints the JSON report after the summary; hack/kind.sh bench sets it
+          securityContext:
+            capabilities:
+              add: [NET_ADMIN]
           ports:
             - {name: target-udp, containerPort: 5090, protocol: UDP}

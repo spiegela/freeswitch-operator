@@ -1,0 +1,22 @@
+name: netem-dtmf-duplicate-reorder
+area: impairment
+description: >
+  RFC 4733 event packets toward the edge arrive late, out of order (30 ms jitter, 5% reordered) and twice (5%
+  duplicated). Each digit still reaches the backend once and in order, 10 times over.
+requires: [mock, netem]
+timeoutMs: 60000
+impairments:
+  - {link: carrier-edge, direction: to-edge, traffic: rtp, jitter: 30ms, reorder: 5%, duplicate: 5%}
+calls:
+  - id: a
+    to: dtmf
+    repeat: {count: 10, everyMs: 1000}
+    steps:
+      - wait: {ms: 500}
+      - digits: {digits: "1234#", gapMs: 150}
+      - wait: {ms: 2500}
+      - hangup: {}
+    expect:
+      status: 200
+      backend:
+        digits: "1234#"

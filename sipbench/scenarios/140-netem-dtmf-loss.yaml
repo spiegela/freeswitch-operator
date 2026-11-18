@@ -1,0 +1,23 @@
+name: netem-dtmf-loss
+area: impairment
+description: >
+  RFC 4733 digits under 5% media loss each way, 20 times over: the backend records exactly 1234# and the caller
+  exactly 4321 every time (no digit missing, none doubled, order kept).
+requires: [mock, netem]
+timeoutMs: 90000
+impairments:
+  - {link: carrier-edge, direction: both, traffic: rtp, loss: 5%}
+calls:
+  - id: a
+    to: dtmf
+    repeat: {count: 20, everyMs: 1000}
+    steps:
+      - wait: {ms: 500}
+      - digits: {digits: "1234#", gapMs: 150}
+      - wait: {ms: 2500}
+      - hangup: {}
+    expect:
+      status: 200
+      digits: "4321"
+      backend:
+        digits: "1234#"

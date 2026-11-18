@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/netem"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/script"
 )
 
@@ -39,6 +40,12 @@ type Scenario struct {
 	Raw []Raw `yaml:"raw,omitempty"`
 	// Actions run one after another while the calls are up: the scenario's timeline.
 	Actions []Action `yaml:"actions,omitempty"`
+	// Impairments are network conditions the scenario runs under, in the conformance record's impairment
+	// vocabulary (see package netem). Each is in place from before the first message until the scenario ends,
+	// or, with at and for, from that long after the first call is answered.
+	Impairments []netem.Spec `yaml:"impairments,omitempty"`
+	// Impaired is Impairments parsed (by Validate).
+	Impaired []*netem.Impairment `yaml:"-"`
 	// Metrics are counters the edge should have moved by the end of the scenario, read from the metrics backend
 	// the runner queries (-prometheus). Without one they aren't checked, and the result says so.
 	Metrics []MetricCheck `yaml:"metrics,omitempty"`
@@ -105,8 +112,84 @@ type Call struct {
 	// plus the bench's standard tones.
 	DetectHz []float64 `yaml:"detectHz,omitempty"`
 	// MaxDurationMs hangs the call up if it is still up this long after answer. Default 30000.
-	MaxDurationMs int    `yaml:"maxDurationMs,omitempty"`
-	Expect        Expect `yaml:"expect"`
+	MaxDurationMs int `yaml:"maxDurationMs,omitempty"`
+	// Repeat places the call several times, as calls <id>-1 ... <id>-<count>, each checked against Expect.
+	Repeat *Repeat `yaml:"repeat,omitempty"`
+	Expect Expect  `yaml:"expect"`
+
+	// Group is the id of the call this one repeats (Repeat), or "".
+	Group string `yaml:"-"`
+}
+
+// Repeat is how often a call is placed.
+type Repeat struct {
+	Count int `yaml:"count"`
+	// EveryMs starts each copy this long after the one before (they may overlap). Default 0: all at once.
+	EveryMs int `yaml:"everyMs,omitempty"`
+	// SetupP95Ms bounds the 95th percentile of the copies' setup times (INVITE sent to final response).
+	SetupP95Ms int `yaml:"setupP95Ms,omitempty"`
+}
+
+// Bounds is a range a measurement must fall in; either end may be left open.
+type Bounds struct {
+	Min *float64 `yaml:"min,omitempty"`
+	Max *float64 `yaml:"max,omitempty"`
+}
+
+// Holds reports whether v is within the bounds.
+func (b *Bounds) Holds(v float64) bool {
+	return (b.Min == nil || v >= *b.Min) && (b.Max == nil || v <= *b.Max)
+}
+
+func (b *Bounds) String() string {
+	lo, hi := "", ""
+	if b.Min != nil {
+		lo = fmt.Sprint(*b.Min)
+	}
+	if b.Max != nil {
+		hi = fmt.Sprint(*b.Max)
+	}
+	return "[" + lo + ", " + hi + "]"
+}
+
+func (b *Bounds) validate(name string) error {
+	if b == nil {
+		return nil
+	}
+	if b.Min == nil && b.Max == nil {
+		return fmt.Errorf("%s needs min or max", name)
+	}
+	if b.Min != nil && b.Max != nil && *b.Min > *b.Max {
+		return fmt.Errorf("%s: min is above max", name)
+	}
+	return nil
+}
+
+// SIPExpect is a check on the SIP messages that crossed the runner's socket for a call, as its trace recorded
+// them: what was on the wire, including copies the scenario's impairments then dropped.
+type SIPExpect struct {
+	// In names a message the edge sent, Out one the runner sent: a method ("BYE") or a response code with the
+	// method it answers ("200 INVITE").
+	In  string `yaml:"in,omitempty"`
+	Out string `yaml:"out,omitempty"`
+	// Min and Max bound how many copies crossed.
+	Min *int `yaml:"min,omitempty"`
+	Max *int `yaml:"max,omitempty"`
+	// FirstMs bounds when the first copy crossed, in ms after the call's first INVITE was sent.
+	FirstMs *Bounds `yaml:"firstMs,omitempty"`
+	// DeliveredWithinMs: the first copy that got through (wasn't dropped) crossed no later than this after the
+	// first copy.
+	DeliveredWithinMs int `yaml:"deliveredWithinMs,omitempty"`
+	// OneToTag: every copy carries the same To tag.
+	OneToTag bool `yaml:"oneToTag,omitempty"`
+}
+
+// Message returns the direction (netem.DirIn or DirOut) and the message named.
+func (e SIPExpect) Message() (string, string) {
+	if e.In != "" {
+		return netem.DirIn, e.In
+	}
+	return netem.DirOut, e.Out
 }
 
 // Expect is what must be true of a call afterwards.
@@ -130,6 +213,21 @@ type Expect struct {
 	Backend *EndExpect `yaml:"backend,omitempty"`
 	// Target checks what the transfer target recorded for this call.
 	Target *EndExpect `yaml:"target,omitempty"`
+
+	// MinToneCoverage: each tone in tonesHeard was detected in at least this share (0-1) of the 20 ms frames
+	// between its first and last detection.
+	MinToneCoverage float64 `yaml:"minToneCoverage,omitempty"`
+	// RTPLossPct bounds the share of RTP packets lost on the way to the caller, by sequence number.
+	RTPLossPct *Bounds `yaml:"rtpLossPct,omitempty"`
+	// MaxSetupMs bounds the time from sending the INVITE to the final response.
+	MaxSetupMs int `yaml:"maxSetupMs,omitempty"`
+	// EchoMs bounds, for each tone the caller both played and heard (the far side echoing it), the time from
+	// starting to play it to first hearing it.
+	EchoMs *Bounds `yaml:"echoMs,omitempty"`
+	// DurationMs bounds how long the call was up, from answer to its end.
+	DurationMs *Bounds `yaml:"durationMs,omitempty"`
+	// SIP checks the messages that crossed the runner's socket for this call.
+	SIP []SIPExpect `yaml:"sip,omitempty"`
 }
 
 // EndExpect is what the backend or a transfer target must have seen of a call.
@@ -137,8 +235,9 @@ type EndExpect struct {
 	// Calls is how many legs reached this end for the call. Default 1; 0 means none must have.
 	Calls *int `yaml:"calls,omitempty"`
 	// Headers that must have arrived. An empty value means present with any value.
-	Headers    map[string]string `yaml:"headers,omitempty"`
-	TonesHeard []float64         `yaml:"tonesHeard,omitempty"`
+	Headers       map[string]string `yaml:"headers,omitempty"`
+	TonesHeard    []float64         `yaml:"tonesHeard,omitempty"`
+	TonesNotHeard []float64         `yaml:"tonesNotHeard,omitempty"`
 	// MaxAudioGapMs bounds how long any tone in tonesHeard may go missing at this end (see Expect).
 	MaxAudioGapMs int     `yaml:"maxAudioGapMs,omitempty"`
 	Digits        *string `yaml:"digits,omitempty"`
@@ -312,7 +411,41 @@ func Parse(b []byte) (*Scenario, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
+	s.expand()
 	return &s, nil
+}
+
+// expand replaces each repeated call with its copies.
+func (s *Scenario) expand() {
+	var calls []Call
+	for _, c := range s.Calls {
+		if c.Repeat == nil || c.Group != "" {
+			calls = append(calls, c)
+			continue
+		}
+		for i := range c.Repeat.Count {
+			cp := c
+			cp.ID = fmt.Sprintf("%s-%d", c.ID, i+1)
+			cp.Group = c.ID
+			cp.StartMs = c.StartMs + i*c.Repeat.EveryMs
+			calls = append(calls, cp)
+		}
+	}
+	s.Calls = calls
+}
+
+// NeedsTrace reports whether the scenario's calls keep all their SIP on their own socket and record it: when the
+// runner's SIP layer impairs them, or the scenario checks their messages. Such a scenario requires sip-trace.
+func (s *Scenario) NeedsTrace() bool {
+	if slices.ContainsFunc(s.Impaired, (*netem.Impairment).SIPLayer) {
+		return true
+	}
+	for _, c := range s.Calls {
+		if len(c.Expect.SIP) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // LoadDir loads every *.yaml file in dir, sorted by file name.
@@ -344,9 +477,6 @@ func (s *Scenario) Validate() error {
 	if err := s.validateRaw(); err != nil {
 		return err
 	}
-	if err := s.validateMetrics(); err != nil {
-		return err
-	}
 	ids := map[string]bool{}
 	for i, c := range s.Calls {
 		if c.ID == "" {
@@ -356,30 +486,18 @@ func (s *Scenario) Validate() error {
 			return fmt.Errorf("call %q: duplicate id", c.ID)
 		}
 		ids[c.ID] = true
-		if c.To == "" {
-			return fmt.Errorf("call %q: to is required", c.ID)
-		}
-		if c.Expect.Status == 0 {
-			return fmt.Errorf("call %q: expect.status is required", c.ID)
-		}
-		for _, codec := range c.Codecs {
-			switch strings.ToLower(codec) {
-			case "pcmu", "pcma", "g722":
-			default:
-				return fmt.Errorf("call %q: unknown codec %q (pcmu, pcma, g722)", c.ID, codec)
-			}
-		}
-		if err := script.Validate(c.Steps, false); err != nil {
+		if err := validateCall(c); err != nil {
 			return fmt.Errorf("call %q: %w", c.ID, err)
 		}
-		switch c.Expect.EndedBy {
-		case "", "local", "remote":
-		default:
-			return fmt.Errorf("call %q: expect.endedBy must be local or remote", c.ID)
-		}
-		if c.Expect.Target != nil && c.Expect.Target.OtherNodeThan != "" {
-			return fmt.Errorf("call %q: otherNodeThan is for the backend only", c.ID)
-		}
+	}
+	if err := s.validateRepeats(); err != nil {
+		return err
+	}
+	if err := s.validateImpairments(); err != nil {
+		return err
+	}
+	if err := s.validateMetrics(); err != nil {
+		return err
 	}
 	for _, c := range s.Calls {
 		if b := c.Expect.Backend; b != nil && b.OtherNodeThan != "" && (!ids[b.OtherNodeThan] || b.OtherNodeThan == c.ID) {
@@ -403,6 +521,115 @@ func (s *Scenario) Validate() error {
 		if err := script.Validate(s.Target.Steps, true); err != nil {
 			return fmt.Errorf("target: %w", err)
 		}
+	}
+	return nil
+}
+
+// validateCall checks one call on its own; errors leave the call's id to the caller.
+func validateCall(c Call) error {
+	if c.To == "" {
+		return fmt.Errorf("to is required")
+	}
+	if c.Expect.Status == 0 {
+		return fmt.Errorf("expect.status is required")
+	}
+	for _, codec := range c.Codecs {
+		switch strings.ToLower(codec) {
+		case "pcmu", "pcma", "g722":
+		default:
+			return fmt.Errorf("unknown codec %q (pcmu, pcma, g722)", codec)
+		}
+	}
+	if err := script.Validate(c.Steps, false); err != nil {
+		return err
+	}
+	switch c.Expect.EndedBy {
+	case "", "local", "remote":
+	default:
+		return fmt.Errorf("expect.endedBy must be local or remote")
+	}
+	if c.Expect.Target != nil && c.Expect.Target.OtherNodeThan != "" {
+		return fmt.Errorf("otherNodeThan is for the backend only")
+	}
+	return validateMeasures(c)
+}
+
+func validateMeasures(c Call) error {
+	e := c.Expect
+	if e.MinToneCoverage < 0 || e.MinToneCoverage > 1 {
+		return fmt.Errorf("expect.minToneCoverage is a share, 0 to 1")
+	}
+	for name, b := range map[string]*Bounds{"rtpLossPct": e.RTPLossPct, "echoMs": e.EchoMs, "durationMs": e.DurationMs} {
+		if err := b.validate("expect." + name); err != nil {
+			return err
+		}
+	}
+	for i, x := range e.SIP {
+		if (x.In == "") == (x.Out == "") {
+			return fmt.Errorf("expect.sip %d: give in or out", i+1)
+		}
+		_, msg := x.Message()
+		if _, err := netem.ParseSelector(msg); err != nil {
+			return fmt.Errorf("expect.sip %d: %w", i+1, err)
+		}
+		if (x.Min != nil && *x.Min < 0) || (x.Max != nil && *x.Max < 0) ||
+			(x.Min != nil && x.Max != nil && *x.Min > *x.Max) {
+			return fmt.Errorf("expect.sip %d: min and max are counts, min no more than max", i+1)
+		}
+		if err := x.FirstMs.validate(fmt.Sprintf("expect.sip %d: firstMs", i+1)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Scenario) validateRepeats() error {
+	repeated := map[string]bool{}
+	for _, c := range s.Calls {
+		if r := c.Repeat; r != nil && c.Group == "" {
+			if r.Count < 1 || r.EveryMs < 0 || r.SetupP95Ms < 0 {
+				return fmt.Errorf("call %q: repeat needs a count of at least 1", c.ID)
+			}
+			repeated[c.ID] = true
+		}
+	}
+	for _, c := range s.Calls {
+		if b := c.Expect.Backend; b != nil && repeated[b.OtherNodeThan] {
+			return fmt.Errorf("call %q: otherNodeThan names a repeated call", c.ID)
+		}
+	}
+	for i, a := range s.Actions {
+		refs := []string{a.AfterAnswered, a.AfterEnded, a.DrainNodeOf, a.Hangup}
+		if a.WaitMember != nil {
+			refs = append(refs, a.WaitMember.Of)
+		}
+		for _, call := range refs {
+			if repeated[call] {
+				return fmt.Errorf("action %d names a repeated call %q", i+1, call)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Scenario) validateImpairments() error {
+	s.Impaired = nil
+	for i, spec := range s.Impairments {
+		im, err := netem.Parse(spec)
+		if err != nil {
+			return fmt.Errorf("impairment %d: %w", i+1, err)
+		}
+		if need := im.Requires(); need != "" && !slices.Contains(s.Requires, need) {
+			return fmt.Errorf("impairment %d needs %s, so the scenario must require it", i+1, need)
+		}
+		if im.HasAt && len(s.Calls) == 0 {
+			return fmt.Errorf("impairment %d: at counts from the first call's answer, and there are no calls", i+1)
+		}
+		s.Impaired = append(s.Impaired, im)
+	}
+	if s.NeedsTrace() && !slices.Contains(s.Requires, netem.TraceCapability) {
+		return fmt.Errorf("sip expectations and SIP-layer impairments need %s, so the scenario must require it",
+			netem.TraceCapability)
 	}
 	return nil
 }

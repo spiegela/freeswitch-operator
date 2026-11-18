@@ -37,7 +37,7 @@ services:
 
   mockbackend:
     build: .
-    image: sipbench:dev
+    image: ${SIPBENCH_IMAGE:-sipbench:dev}   # another tag keeps a second checkout's bench apart (with -p)
     entrypoint: ["mockbackend"]
     command: ["-config", "/bench/backends/mock.yaml", "-sip", "0.0.0.0:5060", "-http", "0.0.0.0:8080"]
     volumes:
@@ -49,13 +49,16 @@ services:
       retries: 15
 
   sipbench:
-    image: sipbench:dev
+    image: ${SIPBENCH_IMAGE:-sipbench:dev}
     profiles: ["bench"]
+    # netem: the runner impairs its own traffic with tc (the netem scenarios), which needs NET_ADMIN.
+    cap_add: [NET_ADMIN]
     environment:
       SIPBENCH_EDGE: freeswitch:5060
       SIPBENCH_MOCK: http://mockbackend:8080
       SIPBENCH_ESL: freeswitch:8021
       SIPBENCH_TARGET: 0.0.0.0:5090
+      SIPBENCH_CAPS: mock,esl,codec:pcmu,codec:pcma,netem,sip-trace
     volumes:
       - ./scenarios:/bench/scenarios:ro
       - ./reports:/bench/reports
