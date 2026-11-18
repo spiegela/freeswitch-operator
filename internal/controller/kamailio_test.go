@@ -114,7 +114,7 @@ func (n recordingNotifier) SetInactive(_ context.Context, _ int32, uri string) e
 	return nil
 }
 
-func (n recordingNotifier) Reload(context.Context, int32, []string) error {
+func (n recordingNotifier) Reload(context.Context, map[int32][]string) error {
 	*n.calls = append(*n.calls, n.url+" reload")
 	if n.fail {
 		return errors.New("down")
@@ -142,11 +142,11 @@ func TestOnlyListNotLoaded(t *testing.T) {
 
 func TestFanoutNotifierTellsEveryPodAndReportsEachFailure(t *testing.T) {
 	var calls []string
-	f := &fanoutNotifier{service: "sip/kamailio", targets: []string{"http://a/RPC", "http://b/RPC", "http://c/RPC"}}
+	f := &fanoutNotifier{service: "Service sip/kamailio", targets: []string{"http://a/RPC", "http://b/RPC", "http://c/RPC"}}
 	for i, u := range f.targets {
 		f.notifiers = append(f.notifiers, recordingNotifier{url: u, calls: &calls, fail: i == 0})
 	}
-	err := f.Reload(context.Background(), 1, nil)
+	err := f.Reload(context.Background(), nil)
 	if err == nil || !strings.Contains(err.Error(), "http://a/RPC (Service sip/kamailio): down") {
 		t.Fatalf("want the first pod's failure, got %v", err)
 	}
@@ -160,7 +160,7 @@ func TestFanoutNotifierTellsEveryPodAndReportsEachFailure(t *testing.T) {
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("a failure must not stop the others:\n got %v\nwant %v", calls, want)
 	}
-	if err := (&fanoutNotifier{}).Reload(context.Background(), 1, nil); err != nil {
+	if err := (&fanoutNotifier{}).Reload(context.Background(), nil); err != nil {
 		t.Fatalf("no pods, nothing to tell: %v", err)
 	}
 }

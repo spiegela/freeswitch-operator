@@ -3,6 +3,7 @@ package runner
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
@@ -29,6 +30,7 @@ func check(c scenario.Call, cr CallResult, haveMock bool) []string {
 		}
 	}
 	out = append(out, tones("caller", cr.TonesHeard, e.TonesHeard, e.TonesNotHeard)...)
+	out = append(out, gaps("caller", cr.AudioGapsMs, e.TonesHeard, e.MaxAudioGapMs)...)
 	if e.Digits != nil && cr.Digits != *e.Digits {
 		out = append(out, fmt.Sprintf("caller digits %q, want %q", cr.Digits, *e.Digits))
 	}
@@ -70,6 +72,7 @@ func end(name string, calls []uas.Call, e scenario.EndExpect) []string {
 		}
 	}
 	out = append(out, tones(name, c.TonesHeard, e.TonesHeard, nil)...)
+	out = append(out, gaps(name, c.AudioGapsMs, e.TonesHeard, e.MaxAudioGapMs)...)
 	if e.Digits != nil && c.Digits != *e.Digits {
 		out = append(out, fmt.Sprintf("%s digits %q, want %q", name, c.Digits, *e.Digits))
 	}
@@ -108,6 +111,21 @@ func tones(name string, heard, want, notWant []float64) []string {
 	for _, hz := range notWant {
 		if slices.Contains(heard, hz) {
 			out = append(out, fmt.Sprintf("%s heard %g Hz, which it should not have", name, hz))
+		}
+	}
+	return out
+}
+
+// gaps checks no tone in want went missing for longer than maxMs (0: not checked).
+func gaps(name string, gapsMs map[string]int, want []float64, maxMs int) []string {
+	if maxMs <= 0 {
+		return nil
+	}
+	var out []string
+	for _, hz := range want {
+		key := strconv.FormatFloat(hz, 'f', -1, 64)
+		if g, ok := gapsMs[key]; ok && g > maxMs {
+			out = append(out, fmt.Sprintf("%s lost %g Hz for %d ms, more than %d ms", name, hz, g, maxMs))
 		}
 	}
 	return out

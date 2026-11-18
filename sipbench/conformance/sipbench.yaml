@@ -165,9 +165,8 @@ cases:
     expect: >
       A draining node leaves dispatch at once, new calls go elsewhere, its live call continues with audio until
       it ends, and only then does the node stop.
-    status: planned
-    milestone: M2
-    gap: Verified by hand on kind in M1; to become a scenario.
+    status: covered
+    scenarios: [drain-mid-call]
 
   - id: sb-rolling-update-live-call
     ref: rolling-update-live-call
@@ -177,9 +176,8 @@ cases:
     expect: >
       The roll replaces one node at a time and waits for the node carrying the call to drain; the call keeps
       two-way audio throughout.
-    status: planned
-    milestone: M2
-    gap: Verified by hand on kind in M1; to become a scenario.
+    status: covered
+    scenarios: [rolling-update-live-call]
 
   - id: sb-bad-config-stops-roll
     ref: bad-config-stops-roll
@@ -189,6 +187,5 @@ cases:
     expect: >
       The first replaced node never passes its startup probe, the roll stops there, the other nodes keep serving,
       and restoring the config lets the roll finish.
-    status: planned
-    milestone: M2
-    gap: Verified by hand on kind in M1; to become a scenario.
+    status: covered
+    scenarios: [bad-config-stops-roll]

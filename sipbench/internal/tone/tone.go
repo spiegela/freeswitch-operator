@@ -9,6 +9,7 @@ import (
 	"math"
 	"slices"
 	"sync"
+	"time"
 )
 
 // SampleRate is the rate every bench codec decodes to (G.711).
@@ -86,6 +87,11 @@ type Detector struct {
 	mu     sync.Mutex
 	frames map[float64]int
 	buf    []int16
+	// For each frequency: when a frame last held it, and the longest wait between two such frames. Timed by
+	// arrival, so a stretch in which no packets came at all counts as a gap too.
+	last   map[float64]time.Time
+	maxGap map[float64]time.Duration
+	now    func() time.Time
 }
 
 // NewDetector listens for freqs. A frame counts for a frequency when at least threshold of its energy sits
@@ -96,6 +102,9 @@ func NewDetector(freqs []float64) *Detector {
 		threshold: 0.6,
 		minRMS:    200,
 		frames:    map[float64]int{},
+		last:      map[float64]time.Time{},
+		maxGap:    map[float64]time.Duration{},
+		now:       time.Now,
 	}
 }
 
@@ -104,12 +113,17 @@ func (d *Detector) Feed(samples []int16) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.buf = append(d.buf, samples...)
+	now := d.now()
 	for len(d.buf) >= FrameSamples {
 		frame := d.buf[:FrameSamples]
 		if RMS(frame) >= d.minRMS {
 			for _, f := range d.freqs {
 				if Ratio(frame, f) >= d.threshold {
 					d.frames[f]++
+					if last, ok := d.last[f]; ok && now.Sub(last) > d.maxGap[f] {
+						d.maxGap[f] = now.Sub(last)
+					}
+					d.last[f] = now
 				}
 			}
 		}
@@ -128,6 +142,18 @@ func (d *Detector) Heard(minFrames int) []float64 {
 		}
 	}
 	slices.Sort(out)
+	return out
+}
+
+// MaxGaps returns, for each frequency heard, the longest time between two frames that held it: how long the tone
+// was lost for at worst, once it had started. A far end that plays a tone throughout should show only jitter here.
+func (d *Detector) MaxGaps() map[float64]time.Duration {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make(map[float64]time.Duration, len(d.last))
+	for f := range d.last {
+		out[f] = d.maxGap[f]
+	}
 	return out
 }
 

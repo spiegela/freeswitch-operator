@@ -8,6 +8,8 @@
 # See https://github.com/containers/buildah/issues/6417
 !**/*.go
 **/*_test.go
+# Templates the operator embeds (go:embed), such as internal/controller/kamailio.cfg.tmpl.
+!**/*.tmpl
 
 # Re-include Go module files
 !go.mod

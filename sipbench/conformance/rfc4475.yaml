@@ -22,7 +22,7 @@ cases:
       Kamailio parses it as well formed (no 400), relays it to a FreeSWITCH node, and passes the unknown header
       fields (the oddly valued one included) and unknown parameters through unchanged; the call proceeds.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.1.2
@@ -34,7 +34,7 @@ cases:
       Parsed without error. As a new request from a peer (no To tag) it goes to a FreeSWITCH node, whose 501 with
       Allow comes back; the method, branch, Call-ID and quoted strings are relayed byte for byte.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.1.3
@@ -47,7 +47,7 @@ cases:
       Request-URI user part is neither unescaped nor treated as a URI, and % outside escapable places isn't
       decoded.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.1.4
@@ -60,7 +60,7 @@ cases:
       relayed copy). The edge is no registrar, so the REGISTER is handled like any peer REGISTER (today sent to a
       node, which refuses it), never answered 400 for its syntax.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.1.5
@@ -72,7 +72,7 @@ cases:
       Parsed as well formed; Kamailio treats the method as unknown, not as REGISTER, and sees two Contact values,
       not three. As a new request it goes to a node, and the caller gets the node's 501.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.1.6
@@ -82,7 +82,7 @@ cases:
     component: proxy
     expect: Accepted as well formed (a known grammar bug); the OPTIONS goes to a node and its 200 comes back.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.1.7
@@ -94,7 +94,7 @@ cases:
       Accepted and relayed with every long value intact (display name, parameters, Call-ID); nothing truncated,
       no crash or buffer error.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.1.8
@@ -106,7 +106,7 @@ cases:
       Kamailio handles the REGISTER at the front of the datagram and ignores the trailing octets: no INVITE is
       processed, and a relayed REGISTER carries none of them.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP) in sipbench.
 
   - id: rfc4475-3.1.1.9
@@ -118,7 +118,7 @@ cases:
       Accepted; the whole user;par=... string (with its escaped @) is the user part, not a URI parameter, and is
       relayed unchanged.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.1.10
@@ -130,7 +130,7 @@ cases:
       Accepted; the unknown transports in lower Via values don't matter, and the response goes back over the top
       Via's transport.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.1.11
@@ -143,7 +143,7 @@ cases:
       (the node's answer to MESSAGE comes back). The RFC's printed Content-Length is 14 octets short of its body,
       so over UDP the tail is dropped as trailing octets; the vector must account for that.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.1.12
@@ -155,7 +155,7 @@ cases:
       Sent by a node in answer to a relayed request, the 200 is accepted and relayed upstream with its reason
       phrase (UTF-8 included) unchanged.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: >
       Needs a raw-message sender, and a sipbench node stand-in behind Kamailio to send the response.
 
@@ -168,7 +168,7 @@ cases:
       Sent by a node as a provisional to a relayed INVITE, it is accepted (stops Kamailio's INVITE
       retransmissions) and, being a 100, not relayed upstream.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: >
       Needs a raw-message sender, and a sipbench node stand-in behind Kamailio to send the response.
 
@@ -180,7 +180,7 @@ cases:
     component: proxy
     expect: Kamailio answers 400 (or drops it); nothing reaches FreeSWITCH and Kamailio stays up.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.2
@@ -192,7 +192,7 @@ cases:
       Over UDP Kamailio answers 400. Over TCP it waits for the rest, then closes the connection when none comes;
       nothing is relayed either way.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.3
@@ -204,7 +204,7 @@ cases:
       Over UDP an error response (400) and the rest of the datagram discarded; over TCP the connection closed.
       Never relayed, no crash. The same for a non-numeric Content-Length.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.4
@@ -214,7 +214,7 @@ cases:
     component: proxy
     expect: Kamailio answers 400 for the CSeq overflow and relays nothing.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.5
@@ -226,7 +226,7 @@ cases:
       Sent by a node, the response is discarded: not relayed upstream and not acted on as a 503 (no dispatcher
       failover is triggered by it).
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: >
       Needs a raw-message sender, and a sipbench node stand-in behind Kamailio to send the response.
 
@@ -237,7 +237,7 @@ cases:
     component: proxy
     expect: 400 from Kamailio (or, if it infers the quote, a relayed copy that is well formed); no crash.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.7
@@ -247,7 +247,7 @@ cases:
     component: proxy
     expect: 400 from Kamailio; if it is liberal and relays, the brackets are gone from the relayed Request-URI.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.8
@@ -257,7 +257,7 @@ cases:
     component: proxy
     expect: 400 from Kamailio; nothing relayed.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.9
@@ -267,7 +267,7 @@ cases:
     component: proxy
     expect: 400 from Kamailio, or relayed with single spaces in the request line.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.10
@@ -277,7 +277,7 @@ cases:
     component: proxy
     expect: 400 from Kamailio, or relayed without the trailing spaces.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.11
@@ -289,7 +289,7 @@ cases:
       400 from Kamailio, or relayed with the escaped headers removed from the Request-URI; they never become real
       header fields in the relayed request.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.12
@@ -301,7 +301,7 @@ cases:
       Kamailio doesn't use Date, so it shouldn't refuse the INVITE for it: relayed with Date unchanged (a 400 is
       tolerable); no crash.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.13
@@ -311,7 +311,7 @@ cases:
     component: proxy
     expect: 400 from Kamailio (inferring the brackets is allowed here); a malformed Contact is never relayed.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.14
@@ -321,7 +321,7 @@ cases:
     component: proxy
     expect: Kamailio's parser doesn't break; 400, or relayed with the spaces dropped.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.15
@@ -331,7 +331,7 @@ cases:
     component: proxy
     expect: 400 from Kamailio; if it is liberal and relays, the relayed From and To are well formed.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.16
@@ -341,7 +341,7 @@ cases:
     component: proxy
     expect: Kamailio answers 505 Version Not Supported and relays nothing.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.17
@@ -351,7 +351,7 @@ cases:
     component: proxy
     expect: Kamailio answers 400 and relays nothing.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.18
@@ -361,7 +361,7 @@ cases:
     component: proxy
     expect: Kamailio answers 501 (preferred at a proxy) or 400, and relays nothing.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.1.2.19
@@ -371,7 +371,7 @@ cases:
     component: proxy
     expect: Sent by a node, the response is dropped silently and Kamailio stays up; the transaction carries on.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: >
       Needs a raw-message sender, and a sipbench node stand-in behind Kamailio to send the response.
 
@@ -385,7 +385,7 @@ cases:
       Kamailio's parser doesn't break; it answers 400 (statelessly is best) or falls back to RFC 2543 matching and
       handles the OPTIONS normally.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   # Application layer (3.3)
@@ -396,7 +396,7 @@ cases:
     component: proxy
     expect: Kamailio doesn't break and answers 400; nothing reaches FreeSWITCH.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.2
@@ -407,7 +407,7 @@ cases:
     expect: >
       Parsed as well formed; Kamailio answers 416 and doesn't fall back to routing on the To header.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.3
@@ -417,7 +417,7 @@ cases:
     component: proxy
     expect: Parsed as well formed; Kamailio answers 416 (it never routes this scheme).
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.4
@@ -429,7 +429,7 @@ cases:
       Parsed without error; as a proxy Kamailio treats it like any REGISTER from a peer (no 400 for the To
       scheme, which is a registrar's objection). The edge has no registrar, so it ends refused by the node.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.5
@@ -442,7 +442,7 @@ cases:
       example config now runs the Proxy-Require sanity check (verified by hand: 420 with Unsupported naming the
       extension); no scenario checks it yet.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.6
@@ -453,7 +453,7 @@ cases:
     expect: >
       Kamailio relays the INVITE like any other; the node (an endpoint here) answers 415, which reaches the caller.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.7
@@ -465,7 +465,7 @@ cases:
       Parsed as well formed; handled like any peer REGISTER, and if relayed the Authorization header goes through
       unmodified. Never a 400.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.8
@@ -475,7 +475,7 @@ cases:
     component: proxy
     expect: Kamailio doesn't break and answers 400; nothing relayed.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.9
@@ -487,7 +487,7 @@ cases:
       Over UDP an error response (400) and the rest of the datagram discarded; over TCP the connection closed.
       Nothing relayed.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.10
@@ -499,7 +499,7 @@ cases:
       Parsed without error and dropped: Kamailio never forwards a response to 255.255.255.255, whether it matches a
       transaction or not.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench, and a capture to show nothing went to the broadcast address.
 
   - id: rfc4475-3.3.11
@@ -509,7 +509,7 @@ cases:
     component: proxy
     expect: Legal message; Kamailio doesn't relay it and answers 483.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.12
@@ -521,7 +521,7 @@ cases:
       Parsed as well formed; the unknown parameter stays a Contact parameter (outside the URI) in anything
       Kamailio relays. Edge has no registrar; handled like any peer REGISTER.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.13
@@ -533,7 +533,7 @@ cases:
       Parsed as well formed; the unknown parameter stays inside the Contact URI in anything Kamailio relays. Edge
       has no registrar; handled like any peer REGISTER.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.14
@@ -545,7 +545,7 @@ cases:
       Parsed as well formed; the escaped Route stays escaped inside the Contact URI and Kamailio never routes on
       it. Edge has no registrar; handled like any peer REGISTER.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   - id: rfc4475-3.3.15
@@ -556,7 +556,7 @@ cases:
     expect: >
       Kamailio relays it like any INVITE; the node answers 406 (with a Warning) or 400, which reaches the caller.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.
 
   # Backward compatibility (3.4)
@@ -569,5 +569,5 @@ cases:
       Accepted: Kamailio matches the transaction by RFC 2543 rules, adds Max-Forwards: 70, takes the body to the end
       of the UDP datagram, and relays it; the call completes and later requests in it match.
     status: planned
-    milestone: M2
+    milestone: M2b
     gap: Needs a raw-message sender (UDP and TCP) in sipbench.

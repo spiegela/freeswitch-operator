@@ -1,5 +1,5 @@
 # The mock backend's starting routes. The Request-URI user picks the route; scenarios can add or replace
-# routes for their own run (POST /routes), and POST /reset returns here.
+# routes for their own run only (POST /runs/{run}/routes), and POST /reset returns here.
 #
 # Steps run in order. Answering side: ring, reject, earlyMedia, answer. Media (after answer): tone, digits,
 # wait, echo, refer, hangup. After the last step an answered call is held until the other end hangs up or

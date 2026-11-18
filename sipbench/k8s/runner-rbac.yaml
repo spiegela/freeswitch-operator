@@ -1,0 +1,69 @@
+# What the runner may do to the fleet under test, for the scenarios that require "fleet" (drain-mid-call,
+# rolling-update-live-call, bad-config-stops-roll): read the FreeswitchCluster and roll it, evict its pods, edit
+# the ConfigMaps it reads and put them back, and cordon and uncordon nodes. Only the runner Job uses this account.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sipbench-runner
+  labels:
+    app.kubernetes.io/part-of: sipbench
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sipbench-runner
+  labels:
+    app.kubernetes.io/part-of: sipbench
+rules:
+  - apiGroups: ["sip.instruments.com"]
+    resources: ["freeswitchclusters"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sipbench-runner
+  labels:
+    app.kubernetes.io/part-of: sipbench
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sipbench-runner
+subjects:
+  - kind: ServiceAccount
+    name: sipbench-runner
+---
+# Nodes are cluster-wide: cordoning one is the only cluster-scoped thing the runner does.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sipbench-runner-nodes
+  labels:
+    app.kubernetes.io/part-of: sipbench
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sipbench-runner-nodes
+  labels:
+    app.kubernetes.io/part-of: sipbench
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sipbench-runner-nodes
+subjects:
+  - kind: ServiceAccount
+    name: sipbench-runner

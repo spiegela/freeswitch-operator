@@ -1,5 +1,5 @@
 {
-  "startedAt": "2026-11-17T21:37:27.923796508Z",
+  "startedAt": "2026-11-17T22:46:03.385161969Z",
   "edge": "freeswitch:5060",
   "capabilities": [
     "codec:pcma",
@@ -13,40 +13,47 @@
       "file": "scenarios/01-basic-two-way.yaml",
       "area": "basic",
       "status": "pass",
-      "durationNs": 3153273126,
+      "durationNs": 3153054168,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-basic-two-way-a-1",
+          "benchCall": "491e1ac5.1-basic-two-way-a-1",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
+          "audioGapsMs": {
+            "1000": 63
+          },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 124,
+          "mediaFrames": 122,
           "backend": [
             {
-              "id": "ed4d3650-5d71-1240-e59c-000000000000__07e46a98-afc5-45f0-a2d4-b13945ff8ffd__B6Km36mpKpt8Q",
-              "benchCall": "13p3-basic-two-way-a-1",
+              "id": "824e9f9c-5d7b-1240-019b-000000000000__99f07eee-f59c-4713-864a-5dbda9fd5736__Q18X8182587Be",
+              "benchCall": "491e1ac5.1-basic-two-way-a-1",
               "route": "agent",
               "from": "sipbench",
               "to": "agent",
               "requestUri": "sip:agent@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-basic-two-way-a-1"
+                "X-Sipbench-Call": "491e1ac5.1-basic-two-way-a-1"
               },
-              "startedAt": "2026-11-17T21:37:27.9293378Z",
-              "answeredAt": "2026-11-17T21:37:27.930022758Z",
-              "endedAt": "2026-11-17T21:37:30.471867218Z",
+              "startedAt": "2026-11-17T22:46:03.389632469Z",
+              "answeredAt": "2026-11-17T22:46:03.390223719Z",
+              "endedAt": "2026-11-17T22:46:05.932847762Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.19.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 26
+              },
               "digits": "",
               "mediaFrames": 124
             }
@@ -59,40 +66,47 @@
       "file": "scenarios/02-backend-hangup.yaml",
       "area": "basic",
       "status": "pass",
-      "durationNs": 2653412668,
+      "durationNs": 2655949376,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-backend-hangup-a-2",
+          "benchCall": "491e1ac5.2-backend-hangup-a-2",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
+          "audioGapsMs": {
+            "1000": 22
+          },
           "digits": "",
           "endedBy": "remote",
-          "mediaFrames": 98,
+          "mediaFrames": 99,
           "backend": [
             {
-              "id": "ef2f14c1-5d71-1240-e59c-000000000000__b1843c06-c9db-46fe-b441-a71e55cf74c3__cFDD515SgZgUK",
-              "benchCall": "13p3-backend-hangup-a-2",
+              "id": "843061c1-5d7b-1240-019b-000000000000__0e6bac14-1ac6-4bab-bb27-56d8b99921df__ra2paXS62HyyS",
+              "benchCall": "491e1ac5.2-backend-hangup-a-2",
               "route": "hangup",
               "from": "sipbench",
               "to": "hangup",
               "requestUri": "sip:hangup@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-backend-hangup-a-2"
+                "X-Sipbench-Call": "491e1ac5.2-backend-hangup-a-2"
               },
-              "startedAt": "2026-11-17T21:37:31.08714851Z",
-              "answeredAt": "2026-11-17T21:37:31.088265468Z",
-              "endedAt": "2026-11-17T21:37:33.109678052Z",
+              "startedAt": "2026-11-17T22:46:06.546716887Z",
+              "answeredAt": "2026-11-17T22:46:06.547804054Z",
+              "endedAt": "2026-11-17T22:46:08.569768263Z",
               "answered": true,
               "endedBy": "local",
+              "source": "172.19.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 24
+              },
               "digits": "",
               "mediaFrames": 98
             }
@@ -105,31 +119,32 @@
       "file": "scenarios/03-cancel.yaml",
       "area": "basic",
       "status": "pass",
-      "durationNs": 2503480418,
+      "durationNs": 2506475083,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-cancel-a-3",
+          "benchCall": "491e1ac5.3-cancel-a-3",
           "status": 487,
           "tonesHeard": [],
           "digits": "",
           "mediaFrames": 0,
           "backend": [
             {
-              "id": "f0c34f74-5d71-1240-e59c-000000000000__37d27944-4cb6-432e-8735-6b797df1e058__Dr656vpXD86DF",
-              "benchCall": "13p3-cancel-a-3",
+              "id": "85c5d0d6-5d7b-1240-019b-000000000000__5e61eefa-d776-464b-88dc-3c7da16f165e__SKUFcraa0tmHN",
+              "benchCall": "491e1ac5.3-cancel-a-3",
               "route": "noanswer",
               "from": "sipbench",
               "to": "noanswer",
               "requestUri": "sip:noanswer@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-cancel-a-3"
+                "X-Sipbench-Call": "491e1ac5.3-cancel-a-3"
               },
-              "startedAt": "2026-11-17T21:37:33.735949928Z",
-              "endedAt": "2026-11-17T21:37:35.761053179Z",
+              "startedAt": "2026-11-17T22:46:09.20374918Z",
+              "endedAt": "2026-11-17T22:46:11.22651975Z",
               "answered": false,
               "endedBy": "remote",
+              "source": "172.19.0.3:5080",
               "tonesHeard": [],
               "digits": "",
               "mediaFrames": 0
@@ -143,11 +158,11 @@
       "file": "scenarios/10-busy-fallback.yaml",
       "area": "failures",
       "status": "pass",
-      "durationNs": 3633846584,
+      "durationNs": 3631821585,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-busy-fallback-a-4",
+          "benchCall": "491e1ac5.4-busy-fallback-a-4",
           "status": 200,
           "responseHeaders": {
             "x-fallback-reason": "USER_BUSY"
@@ -156,25 +171,29 @@
           "tonesHeard": [
             1400
           ],
+          "audioGapsMs": {
+            "1400": 24
+          },
           "digits": "",
           "endedBy": "remote",
           "mediaFrames": 150,
           "backend": [
             {
-              "id": "f241bd3d-5d71-1240-e59c-000000000000__ee593b27-2c6c-4163-ab37-a6e0656f918c__e1Zy8Q70aHX0a",
-              "benchCall": "13p3-busy-fallback-a-4",
+              "id": "8743bfc7-5d7b-1240-019b-000000000000__0cdccb3a-6fd1-495c-a67f-9e276f8eae5b__tvm8DKUDX3a4g",
+              "benchCall": "491e1ac5.4-busy-fallback-a-4",
               "route": "busy",
               "from": "sipbench",
               "to": "busy",
               "requestUri": "sip:busy@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-busy-fallback-a-4"
+                "X-Sipbench-Call": "491e1ac5.4-busy-fallback-a-4"
               },
-              "startedAt": "2026-11-17T21:37:36.242419596Z",
-              "endedAt": "2026-11-17T21:37:36.242751179Z",
+              "startedAt": "2026-11-17T22:46:11.706694708Z",
+              "endedAt": "2026-11-17T22:46:11.707003917Z",
               "answered": false,
               "rejected": 486,
+              "source": "172.19.0.3:5080",
               "tonesHeard": [],
               "digits": "",
               "mediaFrames": 0
@@ -188,11 +207,11 @@
       "file": "scenarios/11-decline-fallback.yaml",
       "area": "failures",
       "status": "pass",
-      "durationNs": 3651641085,
+      "durationNs": 3634334710,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-decline-fallback-a-5",
+          "benchCall": "491e1ac5.5-decline-fallback-a-5",
           "status": 200,
           "responseHeaders": {
             "x-fallback-reason": "CALL_REJECTED"
@@ -201,25 +220,29 @@
           "tonesHeard": [
             1400
           ],
+          "audioGapsMs": {
+            "1400": 24
+          },
           "digits": "",
           "endedBy": "remote",
           "mediaFrames": 150,
           "backend": [
             {
-              "id": "f46c0e7e-5d71-1240-e59c-000000000000__8801c217-f2cd-4c6d-b0c8-bb39addbdc5b__FaSQaKr47SKKp",
-              "benchCall": "13p3-decline-fallback-a-5",
+              "id": "896e1821-5d7b-1240-019b-000000000000__5f8b4b2e-03b6-4280-af01-5b40c47eb1de__U5D1FecHtc1pc",
+              "benchCall": "491e1ac5.5-decline-fallback-a-5",
               "route": "decline",
               "from": "sipbench",
               "to": "decline",
               "requestUri": "sip:decline@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-decline-fallback-a-5"
+                "X-Sipbench-Call": "491e1ac5.5-decline-fallback-a-5"
               },
-              "startedAt": "2026-11-17T21:37:39.875253958Z",
-              "endedAt": "2026-11-17T21:37:39.875633333Z",
+              "startedAt": "2026-11-17T22:46:15.339567168Z",
+              "endedAt": "2026-11-17T22:46:15.339841835Z",
               "answered": false,
               "rejected": 603,
+              "source": "172.19.0.3:5080",
               "tonesHeard": [],
               "digits": "",
               "mediaFrames": 0
@@ -233,11 +256,11 @@
       "file": "scenarios/12-no-answer-fallback.yaml",
       "area": "failures",
       "status": "pass",
-      "durationNs": 9126429629,
+      "durationNs": 8704019879,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-no-answer-fallback-a-6",
+          "benchCall": "491e1ac5.6-no-answer-fallback-a-6",
           "status": 200,
           "responseHeaders": {
             "x-fallback-reason": "NO_ANSWER"
@@ -246,25 +269,29 @@
           "tonesHeard": [
             1400
           ],
+          "audioGapsMs": {
+            "1400": 65
+          },
           "digits": "",
           "endedBy": "remote",
           "mediaFrames": 150,
           "backend": [
             {
-              "id": "f698b2a6-5d71-1240-e59c-000000000000__04fd6925-994d-4517-bb59-d88e3f835d64__gKjgce974295H",
-              "benchCall": "13p3-no-answer-fallback-a-6",
+              "id": "8b98b5fc-5d7b-1240-019b-000000000000__b7e128c1-b913-431e-b7d9-4aa93407dfb8__ve7SH9vmQNQ9Q",
+              "benchCall": "491e1ac5.6-no-answer-fallback-a-6",
               "route": "noanswer",
               "from": "sipbench",
               "to": "noanswer",
               "requestUri": "sip:noanswer@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-no-answer-fallback-a-6"
+                "X-Sipbench-Call": "491e1ac5.6-no-answer-fallback-a-6"
               },
-              "startedAt": "2026-11-17T21:37:43.523025418Z",
-              "endedAt": "2026-11-17T21:37:49.041137504Z",
+              "startedAt": "2026-11-17T22:46:18.974320253Z",
+              "endedAt": "2026-11-17T22:46:24.026400006Z",
               "answered": false,
               "endedBy": "remote",
+              "source": "172.19.0.3:5080",
               "tonesHeard": [],
               "digits": "",
               "mediaFrames": 0
@@ -278,11 +305,11 @@
       "file": "scenarios/13-unreachable-fallback.yaml",
       "area": "failures",
       "status": "pass",
-      "durationNs": 8980927921,
+      "durationNs": 8964189421,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-unreachable-fallback-a-7",
+          "benchCall": "491e1ac5.7-unreachable-fallback-a-7",
           "status": 200,
           "responseHeaders": {
             "x-fallback-reason": "NO_ANSWER"
@@ -291,6 +318,9 @@
           "tonesHeard": [
             1400
           ],
+          "audioGapsMs": {
+            "1400": 30
+          },
           "digits": "",
           "endedBy": "remote",
           "mediaFrames": 150
@@ -302,23 +332,26 @@
       "file": "scenarios/20-header-passthrough.yaml",
       "area": "headers",
       "status": "pass",
-      "durationNs": 1651068042,
+      "durationNs": 1648327793,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-header-passthrough-a-8",
+          "benchCall": "491e1ac5.8-header-passthrough-a-8",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
+          "audioGapsMs": {
+            "1000": 21
+          },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 49,
+          "mediaFrames": 50,
           "backend": [
             {
-              "id": "0163cff4-5d72-1240-e59c-000000000000__3200f7a8-380f-4439-bc3b-5aa3312bd8ca__j541F4aFZmpBS",
-              "benchCall": "13p3-header-passthrough-a-8",
+              "id": "96202c64-5d7b-1240-019b-000000000000__56dc3be0-c2d5-4085-a3a7-22a8e1986110__y0SBNZyUH73eF",
+              "benchCall": "491e1ac5.8-header-passthrough-a-8",
               "route": "agent",
               "from": "sipbench",
               "to": "agent",
@@ -327,14 +360,15 @@
                 "X-Campaign": "spring-renewals",
                 "X-Conversation-Id": "7d0c1f9e-5b8a-4c2e-9f3a-0e6b1d2c3a4f",
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-header-passthrough-a-8",
+                "X-Sipbench-Call": "491e1ac5.8-header-passthrough-a-8",
                 "X-Tenant": "example-tenant"
               },
-              "startedAt": "2026-11-17T21:38:01.631327093Z",
-              "answeredAt": "2026-11-17T21:38:01.631882593Z",
-              "endedAt": "2026-11-17T21:38:02.695082761Z",
+              "startedAt": "2026-11-17T22:46:36.639274554Z",
+              "answeredAt": "2026-11-17T22:46:36.639887637Z",
+              "endedAt": "2026-11-17T22:46:37.701046012Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.19.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [],
               "digits": "",
@@ -349,24 +383,28 @@
       "file": "scenarios/30-blind-transfer.yaml",
       "area": "transfers",
       "status": "pass",
-      "durationNs": 7651931712,
+      "durationNs": 7656625836,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-blind-transfer-a-9",
+          "benchCall": "491e1ac5.9-blind-transfer-a-9",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000,
             1800
           ],
+          "audioGapsMs": {
+            "1000": 22,
+            "1800": 63
+          },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 345,
+          "mediaFrames": 344,
           "backend": [
             {
-              "id": "025febee-5d72-1240-e59c-000000000000__886c7bd9-096f-45ee-9db1-8d60b6c7ff54__KeytHZUjvXcym",
-              "benchCall": "13p3-blind-transfer-a-9",
+              "id": "971c08c3-5d7b-1240-019b-000000000000__f91de67a-9b57-4bed-8413-646c4efb77d2__Z9j4ptFZegt1a",
+              "benchCall": "491e1ac5.9-blind-transfer-a-9",
               "route": "transfer",
               "from": "sipbench",
               "to": "transfer",
@@ -374,19 +412,23 @@
               "headers": {
                 "X-Conversation-Id": "2b9e4c71-0d3f-4a8e-b5c6-9f1e7a2d4c80",
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-blind-transfer-a-9"
+                "X-Sipbench-Call": "491e1ac5.9-blind-transfer-a-9"
               },
-              "startedAt": "2026-11-17T21:38:03.283689469Z",
-              "answeredAt": "2026-11-17T21:38:03.284510177Z",
-              "endedAt": "2026-11-17T21:38:04.325858095Z",
+              "startedAt": "2026-11-17T22:46:38.289941971Z",
+              "answeredAt": "2026-11-17T22:46:38.290809179Z",
+              "endedAt": "2026-11-17T22:46:39.332111097Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.19.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 22
+              },
               "digits": "",
-              "mediaFrames": 48,
+              "mediaFrames": 49,
               "refer": {
                 "to": "sip:target@172.19.0.3:5080",
                 "accepted": true,
@@ -398,8 +440,8 @@
           ],
           "target": [
             {
-              "id": "02ff32ef-5d72-1240-e59c-000000000000__8d952943-5045-4b6c-a346-78d126c294be__SUeSN6c663ceB",
-              "benchCall": "13p3-blind-transfer-a-9",
+              "id": "97bb6dc9-5d7b-1240-019b-000000000000__94e8c42b-f451-4082-9853-9627106b2d03__1S857ca15rrcm",
+              "benchCall": "491e1ac5.9-blind-transfer-a-9",
               "route": "target",
               "from": "sipbench",
               "to": "target",
@@ -407,17 +449,21 @@
               "headers": {
                 "X-Conversation-Id": "2b9e4c71-0d3f-4a8e-b5c6-9f1e7a2d4c80",
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-blind-transfer-a-9"
+                "X-Sipbench-Call": "491e1ac5.9-blind-transfer-a-9"
               },
-              "startedAt": "2026-11-17T21:38:04.327749011Z",
-              "answeredAt": "2026-11-17T21:38:04.328403886Z",
-              "endedAt": "2026-11-17T21:38:10.329483792Z",
+              "startedAt": "2026-11-17T22:46:39.334776597Z",
+              "answeredAt": "2026-11-17T22:46:39.335436805Z",
+              "endedAt": "2026-11-17T22:46:45.336482085Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.19.0.3:5060",
               "codec": "PCMU",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 28
+              },
               "digits": "",
               "mediaFrames": 298
             }
@@ -430,11 +476,11 @@
       "file": "scenarios/40-dtmf-both-ways.yaml",
       "area": "dtmf",
       "status": "pass",
-      "durationNs": 5214968586,
+      "durationNs": 5171028586,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-dtmf-both-ways-a-10",
+          "benchCall": "491e1ac5.10-dtmf-both-ways-a-10",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": null,
@@ -443,25 +489,26 @@
           "mediaFrames": 218,
           "backend": [
             {
-              "id": "06efe422-5d72-1240-e59c-000000000000__60de291e-239a-401e-b9d8-da540c074820__mQQKKtcpS62gg",
-              "benchCall": "13p3-dtmf-both-ways-a-10",
+              "id": "9bac8004-5d7b-1240-019b-000000000000__7bbd012b-8c7f-4b4c-950c-648c5abb3ecf__0jcXrN02BSgmp",
+              "benchCall": "491e1ac5.10-dtmf-both-ways-a-10",
               "route": "dtmf",
               "from": "sipbench",
               "to": "dtmf",
               "requestUri": "sip:dtmf@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-dtmf-both-ways-a-10"
+                "X-Sipbench-Call": "491e1ac5.10-dtmf-both-ways-a-10"
               },
-              "startedAt": "2026-11-17T21:38:10.938317709Z",
-              "answeredAt": "2026-11-17T21:38:10.939552084Z",
-              "endedAt": "2026-11-17T21:38:15.561284669Z",
+              "startedAt": "2026-11-17T22:46:45.947718252Z",
+              "answeredAt": "2026-11-17T22:46:45.948863544Z",
+              "endedAt": "2026-11-17T22:46:50.510134296Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.19.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [],
               "digits": "1234#",
-              "mediaFrames": 223
+              "mediaFrames": 218
             }
           ]
         }
@@ -472,40 +519,47 @@
       "file": "scenarios/50-codec-pcmu.yaml",
       "area": "codecs",
       "status": "pass",
-      "durationNs": 2152562918,
+      "durationNs": 2148938668,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-codec-pcmu-a-11",
+          "benchCall": "491e1ac5.11-codec-pcmu-a-11",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
+          "audioGapsMs": {
+            "1000": 22
+          },
           "digits": "",
           "endedBy": "local",
           "mediaFrames": 75,
           "backend": [
             {
-              "id": "0a0b9569-5d72-1240-e59c-000000000000__8844d2ed-4bdb-4651-ad67-909960ecd449__N0gcNNXSpFS3B",
-              "benchCall": "13p3-codec-pcmu-a-11",
+              "id": "9ec11d66-5d7b-1240-019b-000000000000__23cc5c85-997e-472f-8e8e-39af6e775204__1U5NtgH68166H",
+              "benchCall": "491e1ac5.11-codec-pcmu-a-11",
               "route": "agent",
               "from": "sipbench",
               "to": "agent",
               "requestUri": "sip:agent@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-codec-pcmu-a-11"
+                "X-Sipbench-Call": "491e1ac5.11-codec-pcmu-a-11"
               },
-              "startedAt": "2026-11-17T21:38:16.152773211Z",
-              "answeredAt": "2026-11-17T21:38:16.153621794Z",
-              "endedAt": "2026-11-17T21:38:17.715546587Z",
+              "startedAt": "2026-11-17T22:46:51.115667046Z",
+              "answeredAt": "2026-11-17T22:46:51.116288254Z",
+              "endedAt": "2026-11-17T22:46:52.678465172Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.19.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 22
+              },
               "digits": "",
               "mediaFrames": 74
             }
@@ -518,40 +572,47 @@
       "file": "scenarios/51-codec-pcma.yaml",
       "area": "codecs",
       "status": "pass",
-      "durationNs": 2151565293,
+      "durationNs": 2149735376,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-codec-pcma-a-12",
+          "benchCall": "491e1ac5.12-codec-pcma-a-12",
           "status": 200,
           "codec": "PCMA",
           "tonesHeard": [
             1000
           ],
+          "audioGapsMs": {
+            "1000": 23
+          },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 75,
+          "mediaFrames": 74,
           "backend": [
             {
-              "id": "0b53db57-5d72-1240-e59c-000000000000__77e53d5d-3c6e-443f-9a50-f2c45f4b8048__p994pgeXKrFpQ",
-              "benchCall": "13p3-codec-pcma-a-12",
+              "id": "a008f64b-5d7b-1240-019b-000000000000__c9cfd391-7109-416a-a9d2-394c67db2fca__24yevB295aXSD",
+              "benchCall": "491e1ac5.12-codec-pcma-a-12",
               "route": "agent",
               "from": "sipbench",
               "to": "agent",
               "requestUri": "sip:agent@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-codec-pcma-a-12"
+                "X-Sipbench-Call": "491e1ac5.12-codec-pcma-a-12"
               },
-              "startedAt": "2026-11-17T21:38:18.304112754Z",
-              "answeredAt": "2026-11-17T21:38:18.304906254Z",
-              "endedAt": "2026-11-17T21:38:19.866111088Z",
+              "startedAt": "2026-11-17T22:46:53.264313464Z",
+              "answeredAt": "2026-11-17T22:46:53.264983381Z",
+              "endedAt": "2026-11-17T22:46:54.828171048Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.19.0.3:5080",
               "codec": "PCMA",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 22
+              },
               "digits": "",
               "mediaFrames": 74
             }
@@ -565,43 +626,47 @@
       "area": "codecs",
       "status": "skip",
       "reason": "needs codec:g722",
-      "durationNs": 2750
+      "durationNs": 875
     },
     {
       "name": "admission-limit",
       "file": "scenarios/60-admission-limit.yaml",
       "area": "admission",
       "status": "pass",
-      "durationNs": 5963427295,
+      "durationNs": 5956417502,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-admission-limit-a-13",
+          "benchCall": "491e1ac5.13-admission-limit-a-13",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
+          "audioGapsMs": {
+            "1000": 21
+          },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 249,
+          "mediaFrames": 250,
           "backend": [
             {
-              "id": "0c9ca5e0-5d72-1240-e59c-000000000000__41efa47c-9154-4ada-9bb0-0cb889ee0bde__Qj3XrBZ0g158j",
-              "benchCall": "13p3-admission-limit-a-13",
+              "id": "a15117c4-5d7b-1240-019b-000000000000__3ae56e1e-78a0-4207-ad1b-26f3fee624b8__3Dr7X6jD3KKcS",
+              "benchCall": "491e1ac5.13-admission-limit-a-13",
               "route": "hold",
               "from": "sipbench",
               "to": "hold",
               "requestUri": "sip:hold@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-admission-limit-a-13"
+                "X-Sipbench-Call": "491e1ac5.13-admission-limit-a-13"
               },
-              "startedAt": "2026-11-17T21:38:20.459078671Z",
-              "answeredAt": "2026-11-17T21:38:20.460044088Z",
-              "endedAt": "2026-11-17T21:38:25.505616965Z",
+              "startedAt": "2026-11-17T22:46:55.414702757Z",
+              "answeredAt": "2026-11-17T22:46:55.415383923Z",
+              "endedAt": "2026-11-17T22:47:00.476531967Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.19.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [],
               "digits": "",
@@ -611,32 +676,36 @@
         },
         {
           "id": "b",
-          "benchCall": "13p3-admission-limit-b-14",
+          "benchCall": "491e1ac5.13-admission-limit-b-14",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             1000
           ],
+          "audioGapsMs": {
+            "1000": 20
+          },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 248,
+          "mediaFrames": 249,
           "backend": [
             {
-              "id": "0cca9623-5d72-1240-e59c-000000000000__e10cee32-450c-428f-a319-0e7385175d87__rUvpt6F4DavUe",
-              "benchCall": "13p3-admission-limit-b-14",
+              "id": "a17f34c3-5d7b-1240-019b-000000000000__92a2a22f-2131-487d-86e3-4ba68ea9c26a__4pH0Z13g0v9ym",
+              "benchCall": "491e1ac5.13-admission-limit-b-14",
               "route": "hold",
               "from": "sipbench",
               "to": "hold",
               "requestUri": "sip:hold@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-admission-limit-b-14"
+                "X-Sipbench-Call": "491e1ac5.13-admission-limit-b-14"
               },
-              "startedAt": "2026-11-17T21:38:20.759963422Z",
-              "answeredAt": "2026-11-17T21:38:20.760826838Z",
-              "endedAt": "2026-11-17T21:38:25.824612966Z",
+              "startedAt": "2026-11-17T22:46:55.716978882Z",
+              "answeredAt": "2026-11-17T22:46:55.717843507Z",
+              "endedAt": "2026-11-17T22:47:00.759753842Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.19.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [],
               "digits": "",
@@ -646,7 +715,7 @@
         },
         {
           "id": "c",
-          "benchCall": "13p3-admission-limit-c-15",
+          "benchCall": "491e1ac5.13-admission-limit-c-15",
           "status": 503,
           "tonesHeard": [],
           "digits": "",
@@ -659,56 +728,87 @@
       "file": "scenarios/70-options.yaml",
       "area": "health",
       "status": "pass",
-      "durationNs": 502799541
+      "durationNs": 503261417
     },
     {
       "name": "echo",
       "file": "scenarios/80-echo.yaml",
       "area": "basic",
       "status": "pass",
-      "durationNs": 3150786043,
+      "durationNs": 3151034084,
       "calls": [
         {
           "id": "a",
-          "benchCall": "13p3-echo-a-16",
+          "benchCall": "491e1ac5.15-echo-a-16",
           "status": 200,
           "codec": "PCMU",
           "tonesHeard": [
             600
           ],
+          "audioGapsMs": {
+            "600": 59
+          },
           "digits": "",
           "endedBy": "local",
-          "mediaFrames": 121,
+          "mediaFrames": 120,
           "backend": [
             {
-              "id": "1076c105-5d72-1240-e59c-000000000000__150af40a-b129-44af-867c-9f13a2a5e32a__Up80ZQ2e54yKH",
-              "benchCall": "13p3-echo-a-16",
+              "id": "a52ad5f0-5d7b-1240-019b-000000000000__c9297816-0be4-443a-8414-aabc79fe5d74__7HXa5jpUQQcQQ",
+              "benchCall": "491e1ac5.15-echo-a-16",
               "route": "echo",
               "from": "sipbench",
               "to": "echo",
               "requestUri": "sip:echo@mockbackend:5060",
               "headers": {
                 "X-Fs-Support": "update_display,send_info",
-                "X-Sipbench-Call": "13p3-echo-a-16"
+                "X-Sipbench-Call": "491e1ac5.15-echo-a-16"
               },
-              "startedAt": "2026-11-17T21:38:26.921383466Z",
-              "answeredAt": "2026-11-17T21:38:26.922441424Z",
-              "endedAt": "2026-11-17T21:38:29.490121176Z",
+              "startedAt": "2026-11-17T22:47:01.875073801Z",
+              "answeredAt": "2026-11-17T22:47:01.875706218Z",
+              "endedAt": "2026-11-17T22:47:04.417318552Z",
               "answered": true,
               "endedBy": "remote",
+              "source": "172.19.0.3:5080",
               "codec": "PCMU",
               "tonesHeard": [
                 600
               ],
+              "audioGapsMs": {
+                "600": 24
+              },
               "digits": "",
               "mediaFrames": 124
             }
           ]
         }
       ]
+    },
+    {
+      "name": "drain-mid-call",
+      "file": "scenarios/90-drain-mid-call.yaml",
+      "area": "fleet",
+      "status": "skip",
+      "reason": "needs fleet",
+      "durationNs": 1042
+    },
+    {
+      "name": "rolling-update-live-call",
+      "file": "scenarios/91-rolling-update-live-call.yaml",
+      "area": "fleet",
+      "status": "skip",
+      "reason": "needs fleet",
+      "durationNs": 6000
+    },
+    {
+      "name": "bad-config-stops-roll",
+      "file": "scenarios/92-bad-config-stops-roll.yaml",
+      "area": "fleet",
+      "status": "skip",
+      "reason": "needs fleet",
+      "durationNs": 208
     }
   ],
   "pass": 15,
   "fail": 0,
-  "skip": 1
+  "skip": 4
 }

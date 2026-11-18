@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# The edge on kind: Kamailio in front of a FreeswitchCluster run by this operator, with sipbench behind and in front.
+# The edge on kind: a KamailioCluster in front of a FreeswitchCluster, both run by this operator, with sipbench
+# behind and in front.
 #
 #   hack/kind.sh up        create the cluster (deploy/kind/kind-config.yaml)
-#   hack/kind.sh deploy    build and load the images, install the operator, apply deploy/kind, wait for the fleet and
-#                          for every Kamailio to load it
+#   hack/kind.sh deploy    build and load the images, install the operator, apply deploy/kind, wait for both fleets
+#                          and for every Kamailio to load the dispatcher list
 #   hack/kind.sh bench [re] run sipbench through Kamailio; an optional regexp picks scenarios by name, and
 #                          SIPBENCH_REPORT=<file> saves the run's JSON report there (for the report card)
-#   hack/kind.sh status    the fleet, its members and the dispatcher list Kamailio reads
+#   hack/kind.sh status    both fleets, their members and the dispatcher list each Kamailio has loaded
 #   hack/kind.sh down      delete the cluster
 #
 # Needs docker, kind and kubectl. Uses the kind cluster "freeswitch-operator" (EDGE_KIND_CLUSTER) and the namespace
@@ -16,6 +17,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLUSTER="${EDGE_KIND_CLUSTER:-freeswitch-operator}"
 NS=telephony
+PROXY=proxy   # the KamailioCluster
 KIND="${KIND:-kind}"
 KUBECTL=(kubectl --context "kind-${CLUSTER}")
 KUSTOMIZE="${ROOT}/bin/kustomize"
@@ -70,37 +72,53 @@ deploy() {
   "${KUBECTL[@]}" -n freeswitch-operator-system rollout status deployment/freeswitch-operator-controller-manager --timeout=120s
   wait_leader 120
 
+  # M1 ran Kamailio from deploy/examples/kamailio, by hand; it holds the proxy nodes' SIP and RPC ports.
+  "${KUBECTL[@]}" -n "$NS" delete deployment/kamailio service/kamailio configmap/kamailio-config \
+    --ignore-not-found --wait=true
+
   say "applying the edge"
   "$KUSTOMIZE" build "$ROOT/deploy/kind" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -
   "${KUBECTL[@]}" -n "$NS" rollout restart deployment/mockbackend
   "${KUBECTL[@]}" -n "$NS" rollout status deployment/mockbackend --timeout=120s
-  "${KUBECTL[@]}" -n "$NS" rollout status deployment/kamailio --timeout=120s
   say "waiting for the fleet to be Ready and current"
   wait_fleet 600
-  say "waiting for every Kamailio to load the dispatcher list"
-  wait_kamailio $(($("${KUBECTL[@]}" -n "$NS" get freeswitchcluster edge \
-    -o jsonpath='{.spec.dispatcher.reloadDelaySeconds}') + 120))
+  say "waiting for the proxies to be Ready and every Kamailio to load the dispatcher list"
+  wait_proxy $(($("${KUBECTL[@]}" -n "$NS" get kamailiocluster "$PROXY" \
+    -o jsonpath='{.spec.reloadDelaySeconds}') + 180))
   status
 }
 
+# kamailio_rpc <pod> <method> makes one JSON-RPC call to a Kamailio pod from inside it: at the pod's own address,
+# the only one JSON-RPC listens on, with the token the pod got from the <proxy>-jsonrpc Secret.
+kamailio_rpc() {
+  "${KUBECTL[@]}" -n "$NS" exec "$1" -c kamailio -- sh -c 'wget -T 5 -qO- \
+    --header "Authorization: Bearer $KAMAILIO_RPC_TOKEN" \
+    --post-data "{\"jsonrpc\":\"2.0\",\"method\":\"$0\",\"id\":1}" "http://$POD_IP:$KAMAILIO_RPC_PORT/RPC"' "$2"
+}
+
 # The operator asks Kamailio to reload only reloadDelaySeconds after it last wrote the list (so the kubelet has
-# synced the mounted file), so a fleet that has just become Ready may not be in Kamailio yet. Wait until every
-# Kamailio pod has loaded exactly the destinations in the ConfigMap, or the bench meets 503s.
-wait_kamailio() {
-  local deadline=$((SECONDS + $1)) want have pod behind
+# synced the mounted file), so a fleet that has just become Ready may not be in Kamailio yet. Wait until the
+# KamailioCluster is Ready and current, has confirmed the reload, and every Kamailio pod has loaded exactly the
+# destinations in its combined list, or the bench meets 503s.
+wait_proxy() {
+  local deadline=$((SECONDS + $1)) want have pod behind state
   while :; do
-    want=$("${KUBECTL[@]}" -n "$NS" get configmap edge-dispatcher -o jsonpath='{.data.dispatcher\.list}' \
+    state=$("${KUBECTL[@]}" -n "$NS" get kamailiocluster "$PROXY" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status} {.status.dispatcherHash} {.status.dispatcherReloadedHash} {.status.updatedReplicas}/{.spec.replicas}')
+    want=$("${KUBECTL[@]}" -n "$NS" get configmap "$PROXY-dispatcher" -o jsonpath='{.data.dispatcher\.list}' \
       | awk '!/^#/ && NF { print $2 }' | sort)
     behind=
-    for pod in $("${KUBECTL[@]}" -n "$NS" get pods -l app.kubernetes.io/name=kamailio -o name); do
-      have=$("${KUBECTL[@]}" -n "$NS" exec "$pod" -- wget -T 5 -qO- \
-        --post-data='{"jsonrpc":"2.0","method":"dispatcher.list","id":1}' http://127.0.0.1:5070/RPC 2>/dev/null \
+    set -- "$1" $state
+    if [ "${2:-}" != True ] || [ -z "${3:-}" ] || [ "${3:-}" != "${4:-}" ] || [ "${5%/*}" != "${5#*/}" ]; then
+      behind=" (KamailioCluster: Ready=${2:-?} hash=${3:-?} reloaded=${4:-?} updated=${5:-?})"
+    fi
+    for pod in $("${KUBECTL[@]}" -n "$NS" get pods -l "sip.instruments.com/kamailio-cluster=$PROXY" -o name); do
+      have=$(kamailio_rpc "$pod" dispatcher.list 2>/dev/null \
         | sed -n 's/.*"URI":[[:space:]]*"\([^"]*\)".*/\1/p' | sort || true)
       [ -n "$want" ] && [ "$have" = "$want" ] || behind="$behind ${pod#pod/}"
     done
     [ -z "$behind" ] && return 0
     if [ "$SECONDS" -ge "$deadline" ]; then
-      echo "Kamailio has not loaded the dispatcher list after ${1}s:${behind}" >&2
+      echo "the proxies are not ready with the dispatcher list after ${1}s:${behind}" >&2
       return 1
     fi
     sleep 5
@@ -156,14 +174,16 @@ status() {
   "${KUBECTL[@]}" -n "$NS" get pods -o wide -l app.kubernetes.io/name=freeswitch
   "${KUBECTL[@]}" -n "$NS" get freeswitchcluster edge \
     -o jsonpath='{range .status.members[*]}{.pod}{"\t"}{.node}{"\t"}{.address}{"\t"}{.state}{"\n"}{end}'
-  echo "-- dispatcher list (ConfigMap edge-dispatcher)"
-  "${KUBECTL[@]}" -n "$NS" get configmap edge-dispatcher -o jsonpath='{.data.dispatcher\.list}'
+  "${KUBECTL[@]}" -n "$NS" get kamailiocluster "$PROXY"
+  "${KUBECTL[@]}" -n "$NS" get kamailiocluster "$PROXY" \
+    -o jsonpath='{range .status.members[*]}{.pod}{"\t"}{.node}{"\t"}{.address}{"\t"}{.state}{"\n"}{end}'
+  echo "-- combined dispatcher list (ConfigMap $PROXY-dispatcher)"
+  "${KUBECTL[@]}" -n "$NS" get configmap "$PROXY-dispatcher" -o jsonpath='{.data.dispatcher\.list}'
   echo "-- what each Kamailio has loaded (FLAGS: AP active and probing, IP inactive and probing)"
   local pod
-  for pod in $("${KUBECTL[@]}" -n "$NS" get pods -l app.kubernetes.io/name=kamailio -o name); do
+  for pod in $("${KUBECTL[@]}" -n "$NS" get pods -l "sip.instruments.com/kamailio-cluster=$PROXY" -o name); do
     echo "$pod"
-    "${KUBECTL[@]}" -n "$NS" exec "$pod" -- wget -T 5 -qO- \
-      --post-data='{"jsonrpc":"2.0","method":"dispatcher.list","id":1}' http://127.0.0.1:5070/RPC \
+    kamailio_rpc "$pod" dispatcher.list \
       | grep -E '"URI"|"FLAGS"' | paste - - | sed 's/[[:space:]]\{2,\}/ /g' || echo "  (no answer)"
   done
 }

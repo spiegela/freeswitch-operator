@@ -45,8 +45,9 @@ type fakeNotifier struct {
 	mu       sync.Mutex
 	inactive []string
 	reloads  int
-	loaded   []string // the list the last reload asked for
-	stale    int      // reloads still to come that find the old file, as before the kubelet syncs it
+	loaded   map[int32][]string // the sets the last reload asked for
+	token    string             // the bearer token the notifier was built with
+	stale    int                // reloads still to come that find the old file, as before the kubelet syncs it
 }
 
 func (f *fakeNotifier) SetInactive(_ context.Context, setID int32, uri string) error {
@@ -56,7 +57,7 @@ func (f *fakeNotifier) SetInactive(_ context.Context, setID int32, uri string) e
 	return nil
 }
 
-func (f *fakeNotifier) Reload(_ context.Context, _ int32, want []string) error {
+func (f *fakeNotifier) Reload(_ context.Context, want map[int32][]string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reloads++
@@ -225,7 +226,7 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		r := &FreeswitchClusterReconciler{
 			Client:      k8sClient,
 			Scheme:      k8sClient.Scheme(),
-			NewNotifier: func(string) DispatcherNotifier { return notifier },
+			NewNotifier: func(string, string) DispatcherNotifier { return notifier },
 			Now:         func() time.Time { return now },
 		}
 		res := reconcileOnce(r, ns)
@@ -318,7 +319,7 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		r := &FreeswitchClusterReconciler{
 			Client: k8sClient,
 			Scheme: k8sClient.Scheme(),
-			NewNotifier: func(url string) DispatcherNotifier {
+			NewNotifier: func(url, _ string) DispatcherNotifier {
 				if notifiers[url] == nil {
 					notifiers[url] = &fakeNotifier{}
 				}
@@ -344,7 +345,7 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		res = reconcileOnce(r, ns)
 		for _, url := range []string{"http://10.0.2.1:5071/RPC", "http://10.0.2.2:5071/RPC"} {
 			Expect(notifiers[url].reloads).To(Equal(2), url)
-			Expect(notifiers[url].loaded).To(ConsistOf("sip:10.0.1.10:5060", "sip:10.0.1.20:5060"), url)
+			Expect(notifiers[url].loaded[1]).To(ConsistOf("sip:10.0.1.10:5060", "sip:10.0.1.20:5060"), url)
 		}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
 		Expect(fsc.Status.DispatcherReloadedHash).To(Equal(fsc.Status.DispatcherHash))
@@ -585,6 +586,22 @@ var _ = Describe("FreeswitchCluster controller", func() {
 			}))
 			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "path %q: %v", bad, err)
 		}
+	})
+
+	It("fills in lax liveness defaults and keeps the timeout within the period", func() {
+		ns := newNamespace(ctx)
+		fsc := newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) { f.Spec.Liveness = &sipv1alpha1.LivenessSpec{} })
+		Expect(k8sClient.Create(ctx, fsc)).To(Succeed())
+		var got sipv1alpha1.FreeswitchCluster
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: fsc.Name}, &got)).To(Succeed())
+		Expect(*got.Spec.Liveness).To(Equal(sipv1alpha1.LivenessSpec{PeriodSeconds: 30, TimeoutSeconds: 15, FailureThreshold: 10}))
+
+		err := k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
+			f.Name = "slow"
+			f.Spec.Liveness = &sipv1alpha1.LivenessSpec{PeriodSeconds: 10, TimeoutSeconds: 20}
+		}))
+		Expect(apierrors.IsInvalid(err)).To(BeTrue(), "timeout over period: %v", err)
+		Expect(err.Error()).To(ContainSubstring("timeoutSeconds must not exceed periodSeconds"))
 	})
 })
 

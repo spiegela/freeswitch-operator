@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -175,6 +176,16 @@ func (e *Engine) Digits() string {
 	e.digitsMu.Lock()
 	defer e.digitsMu.Unlock()
 	return string(e.digits)
+}
+
+// MaxGapsMs is, for each tone heard, the longest it went missing once it had started, in milliseconds, keyed by
+// frequency ("1000").
+func (e *Engine) MaxGapsMs() map[string]int {
+	out := map[string]int{}
+	for hz, gap := range e.detector.MaxGaps() {
+		out[strconv.FormatFloat(hz, 'f', -1, 64)] = int(gap.Milliseconds())
+	}
+	return out
 }
 
 // FramesReceived is the number of audio reads with data; zero means no media arrived.
