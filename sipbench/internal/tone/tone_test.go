@@ -95,3 +95,26 @@ func TestDetectorMaxGaps(t *testing.T) {
 		t.Fatal("a tone never heard has no gap")
 	}
 }
+
+func TestDetectorCoverage(t *testing.T) {
+	d := NewDetector([]float64{1000})
+	start := time.Unix(0, 0)
+	clock := start
+	d.now = func() time.Time { return clock }
+	g := NewGenerator(1000, 8000)
+	frame := make([]int16, FrameSamples)
+	// 100 frames' time, one in ten lost on the way: 90 arrive.
+	for i := range 100 {
+		g.Frame(frame)
+		if i%10 != 5 {
+			d.Feed(frame)
+		}
+		clock = clock.Add(20 * time.Millisecond)
+	}
+	if c := d.Coverage()[1000]; c < 0.89 || c > 0.91 {
+		t.Fatalf("coverage %.3f, want 0.9", c)
+	}
+	if f := d.First()[1000]; !f.Equal(start) {
+		t.Fatalf("first heard at %v, want %v", f, start)
+	}
+}

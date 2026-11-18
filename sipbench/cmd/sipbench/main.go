@@ -122,7 +122,7 @@ func run(args []string) (int, error) {
 	eslPass := fs.String("esl-password", env("SIPBENCH_ESL_PASSWORD", "ClueCon"), "event socket password")
 	target := fs.String("target", env("SIPBENCH_TARGET", "0.0.0.0:5090"),
 		"where to answer transfers (host:port); empty disables")
-	caps := fs.String("caps", env("SIPBENCH_CAPS", "mock,esl,codec:pcmu,codec:pcma"),
+	caps := fs.String("caps", env("SIPBENCH_CAPS", "mock,esl,codec:pcmu,codec:pcma,sip-trace"),
 		"capabilities this run provides, comma separated")
 	fleetRef := fs.String("fleet", env("SIPBENCH_FLEET", ""),
 		"the FreeswitchCluster fleet scenarios act on, namespace/name; adds the fleet capability")

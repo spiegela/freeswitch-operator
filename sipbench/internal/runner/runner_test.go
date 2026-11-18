@@ -72,7 +72,7 @@ func startMock(t *testing.T, cfgYAML string) *Runner {
 	r := New(Config{
 		Edge:    fmt.Sprintf("127.0.0.1:%d", port),
 		MockURL: hs.URL,
-		Caps:    map[string]bool{"mock": true},
+		Caps:    map[string]bool{"mock": true, "sip-trace": true},
 		Log:     log,
 		// No transfer target and no event socket: those need an edge.
 		CallerBindHost: "127.0.0.1",

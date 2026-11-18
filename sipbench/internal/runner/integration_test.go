@@ -23,7 +23,7 @@ func TestScenarios(t *testing.T) {
 		t.Skip("SIPBENCH_EDGE is not set")
 	}
 	caps := map[string]bool{}
-	for _, c := range strings.Split(envOr("SIPBENCH_CAPS", "mock,esl,codec:pcmu,codec:pcma"), ",") {
+	for _, c := range strings.Split(envOr("SIPBENCH_CAPS", "mock,esl,codec:pcmu,codec:pcma,sip-trace"), ",") {
 		if c = strings.TrimSpace(c); c != "" {
 			caps[c] = true
 		}

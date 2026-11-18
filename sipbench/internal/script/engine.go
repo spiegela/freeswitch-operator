@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,8 @@ type Engine struct {
 	toneGen  *tone.Generator
 	toneEnd  time.Time
 	writeErr atomic.Pointer[error]
+	// played is when each tone first started playing, for echo timing.
+	played map[float64]time.Time
 }
 
 // Start begins listening on med. freqs are the tone frequencies to detect.
@@ -56,6 +59,7 @@ func Start(med *diago.DialogMedia, freqs []float64) (*Engine, error) {
 		codec:    codec,
 		detector: tone.NewDetector(freqs),
 		done:     make(chan struct{}),
+		played:   map[float64]time.Time{},
 	}
 
 	// Writer: prefer the DTMF-capable writer so tones and keypad events share one RTP stream.
@@ -188,6 +192,31 @@ func (e *Engine) MaxGapsMs() map[string]int {
 	return out
 }
 
+// ToneCoverage is, for each tone heard, the share of 20 ms frames between its first and last detection in which
+// it was present (see tone.Detector.Coverage), rounded to three places and keyed by frequency.
+func (e *Engine) ToneCoverage() map[string]float64 {
+	out := map[string]float64{}
+	for hz, c := range e.detector.Coverage() {
+		out[strconv.FormatFloat(hz, 'f', -1, 64)] = math.Round(c*1000) / 1000
+	}
+	return out
+}
+
+// EchoMs is, for each tone this end both played and heard, the time from starting to play it to first hearing
+// it: the round trip when the far side echoes.
+func (e *Engine) EchoMs() map[string]int {
+	first := e.detector.First()
+	e.toneMu.Lock()
+	defer e.toneMu.Unlock()
+	out := map[string]int{}
+	for hz, at := range e.played {
+		if heard, ok := first[hz]; ok && heard.After(at) {
+			out[strconv.FormatFloat(hz, 'f', -1, 64)] = int(heard.Sub(at).Milliseconds())
+		}
+	}
+	return out
+}
+
 // FramesReceived is the number of audio reads with data; zero means no media arrived.
 func (e *Engine) FramesReceived() int64 { return e.frames.Load() }
 
@@ -202,6 +231,9 @@ func (e *Engine) PlayTone(ctx context.Context, hz float64, d time.Duration) erro
 	e.toneMu.Lock()
 	e.toneGen = tone.NewGenerator(hz, ToneAmplitude)
 	e.toneEnd = time.Now().Add(d)
+	if _, ok := e.played[hz]; !ok {
+		e.played[hz] = time.Now()
+	}
 	e.toneMu.Unlock()
 	select {
 	case <-ctx.Done():
