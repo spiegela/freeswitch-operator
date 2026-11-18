@@ -24,11 +24,10 @@ cases:
     status: partial
     scenarios: [raw-tortuous-invite]
     gap: >
-      Over UDP the INVITE is accepted and relayed and the call completes, with two deviations checked as they
-      behave today, neither decided: Kamailio's core can't parse a CSeq folded across lines and drops that message
-      unanswered; and a From display name with escaped quotes gets through Kamailio, but FreeSWITCH can't build its
-      leg to the backend with it, so its dialplan's fallback answers 200 and the call never reaches the backend.
-      TCP isn't checked.
+      Over UDP the INVITE is accepted and relayed and the call completes, a From display name with escaped quotes
+      included (FreeSWITCH can't carry the quotes to the backend, so the bench dialplan turns them into single
+      quotes). One deviation is checked as it behaves today, not decided: Kamailio's core can't parse a CSeq
+      folded across lines and drops that message unanswered. TCP isn't checked.
 
   - id: rfc4475-3.1.1.2
     ref: "3.1.1.2"

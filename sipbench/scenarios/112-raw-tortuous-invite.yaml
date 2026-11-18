@@ -4,11 +4,10 @@ description: >
   A legal but tortuous INVITE: odd whitespace around colons and separators, header names in mixed case, folded
   values, unknown header fields (one with an odd value), and unknown parameters on the Request-URI, Via, From and
   Contact. Kamailio parses it as well formed and relays it; the call completes, and an unknown X- header passes
-  through to the backend unchanged. Two legal forms don't get through, each checked as it behaves today and
-  recorded as a deviation in the conformance record: a CSeq folded across two lines, which Kamailio's core parser
-  drops without an answer; and a From display name with escaped quotes, which Kamailio relays but FreeSWITCH
-  can't carry onto its leg to the backend ("Error creating HANDLE"), so its dialplan's fallback answers 200 itself
-  and the call never reaches the backend.
+  through to the backend unchanged. A From display name with escaped quotes gets through too: FreeSWITCH can't
+  carry the quotes onto its leg to the backend, so the bench dialplan swaps them for single quotes first. One legal
+  form doesn't get through, checked as it behaves today and recorded as a deviation in the conformance record: a
+  CSeq folded across two lines, which Kamailio's core parser drops without an answer.
 requires: [proxy, mock]
 raw:
   - id: invite
@@ -78,5 +77,5 @@ raw:
       t=0 0
       m=audio 40000 RTP/AVP 0
       a=rtpmap:0 PCMU/8000
-    # Today's behaviour, a deviation: FreeSWITCH answers itself and the backend never sees the call.
-    expect: {status: 200, backend: {calls: 0}}
+    # The backend answers, so the call got past FreeSWITCH (its fallback would answer 200 with no backend leg).
+    expect: {status: 200, backend: {answered: true}}
