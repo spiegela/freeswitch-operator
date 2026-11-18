@@ -190,12 +190,18 @@ route[RELAY] {
 }
 
 # A paused (draining) FreeSWITCH answers new calls with 503; a dead one doesn't answer. Either way, try the next.
+# Only a 503 takes the node out of rotation here. A node also stays silent when it discards a request it can't
+# parse, so a timeout says something about the request as much as the node: marking on it would let one malformed
+# INVITE, silently dropped by every node in turn, take the whole fleet out of rotation. The dispatcher's probes
+# (every 10 s, two misses) take a node that has really stopped answering out instead.
 failure_route[DS_FAILOVER] {
 	if (t_is_canceled()) {
 		exit;
 	}
-	if (t_check_status("503") || (t_branch_timeout() && !t_branch_replied())) {
+	if (t_check_status("503")) {
 		ds_mark_dst("ip");
+	}
+	if (t_check_status("503") || (t_branch_timeout() && !t_branch_replied())) {
 		if (ds_next_dst()) {
 			t_on_failure("DS_FAILOVER");
 			route(RELAY);

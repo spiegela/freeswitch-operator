@@ -235,7 +235,10 @@ priority order; each must set `spec.dispatcher`, whose `setID` becomes that flee
 
   It also inserts `Max-Forwards: 70` when missing and refuses requests that require an extension it doesn't support
   (`420`). Requests it relays onward wait RFC 3261's 32 s; a new call fails over after 5 s without any answer, and the
-  dispatcher's probes use the same 5 s. A `503` from the last node is passed on as `503`. `make check-kamailio-cfg`
+  dispatcher's probes use the same 5 s. A `503` takes a node out of rotation at once; silence alone doesn't, since a
+  node is also silent when it discards a request it can't parse (one malformed INVITE would otherwise empty the
+  fleet), so a node that has stopped answering leaves rotation after two missed probes, 10 to 20 s. A `503` from the
+  last node is passed on as `503`. `make check-kamailio-cfg`
   runs `kamailio -c` on rendered cases in the pinned image, in the lint workflow. Peer data (loop 9) and
   registrations (loop 8) join the config in M5.
 - **Most changes are live; a short list restarts.** The restart list is the rendered config and the pod template:
