@@ -1,0 +1,57 @@
+name: raw-unknown-scheme
+area: proxy-validation
+description: >
+  A Request-URI whose scheme Kamailio doesn't support is refused with 416, for an INVITE (over UDP and TCP), a
+  BYE inside a dialog and a CANCEL. Kamailio doesn't fall back to routing on the To header: the INVITE never
+  reaches the backend.
+requires: [proxy, mock]
+raw:
+  - id: invite-udp
+    message: |
+      INVITE frobnet:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    expect: {status: 416, backend: {calls: 0}}
+  - id: invite-tcp
+    transport: tcp
+    message: |
+      INVITE frobnet:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}};transport=tcp>
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    expect: {status: 416, backend: {calls: 0}}
+  - id: bye-in-dialog
+    message: |
+      BYE frobnet:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>;tag=elsewhere
+      Call-ID: {{callId}}
+      CSeq: 2 BYE
+      Content-Length: 0
+    expect: {status: 416}
+  - id: cancel
+    message: |
+      CANCEL frobnet:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 CANCEL
+      Content-Length: 0
+    expect: {status: 416}

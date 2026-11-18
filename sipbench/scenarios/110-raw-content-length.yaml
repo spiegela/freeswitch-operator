@@ -1,0 +1,77 @@
+name: raw-content-length
+area: proxy-validation
+description: >
+  Broken Content-Length framing over UDP goes no further. A Content-Length larger than the body gets 400.
+  Two Content-Length headers that disagree, a negative one, and one that isn't a number are dropped by Kamailio's
+  core parser before its routing script runs, so nothing comes back (RFC 4475 would have them answered 400; the
+  gap is recorded in the conformance record).
+requires: [proxy, mock]
+raw:
+  - id: conflicting
+    waitMs: 2000
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: text/plain
+      Content-Length: 4
+      Content-Length: 9
+
+      sipbench
+    expect: {noResponse: true, backend: {calls: 0}}
+  - id: negative
+    waitMs: 2000
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: text/plain
+      Content-Length: -9
+
+      sipbench
+    expect: {noResponse: true, backend: {calls: 0}}
+  - id: larger-than-body
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: text/plain
+      Content-Length: 900
+
+      sipbench
+    expect: {status: 400, backend: {calls: 0}}
+  - id: not-a-number
+    waitMs: 2000
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Type: text/plain
+      Content-Length: nine
+
+      sipbench
+    expect: {noResponse: true, backend: {calls: 0}}

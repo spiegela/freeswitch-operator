@@ -167,8 +167,46 @@ calls:
 
 Capabilities a run provides are set with `-caps` (default `mock,esl,codec:pcmu,codec:pcma`): `mock` when
 the backend is mockbackend, `esl` when the runner can reach FreeSWITCH's event socket, `codec:*` for codecs the
-edge and runner both support, and `fleet`, added by `-fleet namespace/name` (`SIPBENCH_FLEET`), when the runner
+edge and runner both support, `proxy` when the edge address is Kamailio rather than a FreeSWITCH node, and `fleet`, added by `-fleet namespace/name` (`SIPBENCH_FLEET`), when the runner
 can act on the FreeswitchCluster under test.
+
+### Raw messages: what sipgo won't send
+
+The runner's SIP stack only builds well-formed requests. `raw:` sends hand-written messages to the edge byte for
+byte, one exchange after another before the calls: Max-Forwards 0, a missing Call-ID, an unknown scheme or SIP
+version, broken Content-Length, a CANCEL or response that matches nothing, legal but tortuous syntax.
+
+```yaml
+requires: [proxy, mock]          # proxy: the edge address is Kamailio (the kind runner)
+raw:
+  - id: invite-udp
+    transport: udp               # or tcp
+    waitMs: 3000                 # for a final response, or for silence (noResponse)
+    message: |                   # LF becomes CRLF; a header-only message gets its closing blank line
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 0
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      X-Sipbench-Call: {{bench}}  # so the mock files anything that gets through under this exchange
+      Content-Length: {{len}}      # the body's length, computed
+    expect:
+      status: 483                # the final response; or noResponse: true; or closed: true (tcp)
+      provisional: [100]         # must arrive before the final response
+      withinMs: 200              # the first response, from sending
+      headers: {Unsupported: x}  # on the final response; the value must contain this ("" = present)
+      copied: [Via, From, To]    # the first response carries these as sent (Via may gain received/rport)
+      backend: {calls: 0}        # what the mock recorded under {{bench}}
+```
+
+Placeholders: `{{edge}}`, `{{local}}`, `{{localHost}}`, `{{localPort}}`, `{{transport}}`, `{{branch}}`,
+`{{callId}}`, `{{tag}}`, `{{bench}}`, `{{len}}`; any other is an error. Over UDP the message is resent at 500 ms,
+1 s and 2 s while nothing has come back, from an unconnected socket, since the edge may answer from another
+address than the one it was sent to. An INVITE answered 2xx is acknowledged and hung up (`hangupAfterMs`, default
+500), and the BYE must get 200; a non-2xx is acknowledged. Messages are written in our own words, never copied from
+the RFC 4475 or ETSI texts.
 
 ### Actions: driving the fleet during a scenario
 
@@ -298,6 +336,7 @@ internal/script     steps and the media engine (tones, digits, echo; continuous 
 internal/tone       tone generator and Goertzel detector
 internal/scenario   scenario files
 internal/fleet      the FreeswitchCluster scenario actions act on (client-go)
+internal/rawsip     hand-written SIP messages over UDP and TCP, and a lenient parser for what comes back
 internal/mock       mock config and HTTP API
 internal/esl        minimal FreeSWITCH event socket client
 freeswitch/conf     the edge configuration (freeswitch/kustomization.yaml: the same as ConfigMaps)

@@ -1,0 +1,36 @@
+name: raw-lexical-variants
+area: proxy-validation
+description: >
+  Lexical variants a parser must take in stride: compact header names, header names in odd case, a folded header
+  value with extra leading whitespace, a mixed-case branch parameter name and a lower-case SIP version. Kamailio
+  relays the INVITE and the call completes, with the bench header (written in odd case) reaching the backend.
+requires: [proxy, mock]
+raw:
+  - id: invite
+    message: |
+      INVITE sip:agent@{{edge}} sip/2.0
+      v: SIP/2.0/{{transport}} {{local}};BrAnCh={{branch}}
+      mAX-fORWARDS: 70
+      f: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      t: <sip:agent@{{edge}}>
+      i: {{callId}}
+      cseq:    1    INVITE
+      m: <sip:sipbench@{{local}}>
+      Subject: a header value
+         folded across
+            three lines
+      x-SIPBENCH-call: {{bench}}
+      c: application/sdp
+      l: {{len}}
+
+      v=0
+      o=sipbench 1 1 IN IP4 {{localHost}}
+      s=-
+      c=IN IP4 {{localHost}}
+      t=0 0
+      m=audio 40000 RTP/AVP 0 101
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:101 telephone-event/8000
+    expect:
+      status: 200
+      backend: {answered: true}

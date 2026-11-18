@@ -1,0 +1,29 @@
+name: raw-stray-response
+area: proxy-validation
+description: >
+  A response that matches no transaction, and whose top Via isn't Kamailio's, is dropped: nothing comes back,
+  and Kamailio goes on answering.
+requires: [proxy]
+raw:
+  - id: response
+    waitMs: 2000
+    message: |
+      SIP/2.0 200 OK
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>;tag=stray
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Content-Length: 0
+    expect: {noResponse: true}
+  - id: still-up
+    message: |
+      OPTIONS sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 OPTIONS
+      Content-Length: 0
+    expect: {status: 200}

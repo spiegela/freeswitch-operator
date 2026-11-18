@@ -302,6 +302,7 @@ type fakeKamailio struct {
 	onDisk map[int][]string
 	loaded map[int][]string
 	fail   string // a JSON-RPC error message to answer every call with
+	busy   bool   // refuse dispatcher.reload as too soon after the last one
 }
 
 func (k *fakeKamailio) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -319,6 +320,10 @@ func (k *fakeKamailio) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch req["method"] {
 	case "dispatcher.reload":
+		if k.busy {
+			rpcErr("Ongoing reload")
+			return
+		}
 		k.loaded = k.onDisk
 	case "dispatcher.list":
 		if len(k.loaded) == 0 {
@@ -377,6 +382,16 @@ func TestJSONRPCNotifier(t *testing.T) {
 	if err := n.Reload(ctx, map[int32][]string{1: want[:1]}); !errors.Is(err, errListNotLoaded) {
 		t.Fatalf("one destination too many: want errListNotLoaded, got %v", err)
 	}
+
+	k.busy = true
+	if err := n.Reload(ctx, map[int32][]string{1: want}); err != nil {
+		t.Fatalf("a reload refused as too soon after the last, which loaded the list, is confirmed: %v", err)
+	}
+	k.onDisk = map[int][]string{1: {"sip:10.0.0.3:5060"}}
+	if err := n.Reload(ctx, map[int32][]string{1: {"sip:10.0.0.3:5060"}}); !errors.Is(err, errListNotLoaded) {
+		t.Fatalf("a refused reload that left the old list must be retried: want errListNotLoaded, got %v", err)
+	}
+	k.busy = false
 
 	k.fail = "boom"
 	err := n.Reload(ctx, map[int32][]string{1: want})

@@ -1,0 +1,24 @@
+name: raw-trailing-octets
+area: proxy-validation
+description: >
+  A datagram holding a complete OPTIONS keepalive (Content-Length 0) followed by stray octets that look like the
+  start of an INVITE. Nothing in the stray octets is processed and nothing reaches the backend. RFC 4475 would
+  have the OPTIONS handled and the rest ignored; Kamailio's sanity check insists the body fill the datagram and
+  answers 400 Content-Length mis-match instead (recorded in the conformance record).
+requires: [proxy, mock]
+raw:
+  - id: options
+    message: |
+      OPTIONS sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 OPTIONS
+      Content-Length: 0
+
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch=z9hG4bKtrailing
+      X-Sipbench-Call: {{bench}}
+    expect: {status: 400, backend: {calls: 0}}

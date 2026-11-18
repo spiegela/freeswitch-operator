@@ -1,0 +1,54 @@
+name: raw-stray-requests
+area: proxy-validation
+description: >
+  Requests that belong to nothing: a CANCEL with no INVITE gets 481 (Kamailio answers it rather than relaying it,
+  a deliberate choice: without the INVITE there is no node to send it to), over UDP and TCP; a BYE naming a
+  dialog that doesn't exist, with no Route for Kamailio, gets 481; an ACK like it is dropped, never answered.
+requires: [proxy]
+raw:
+  - id: cancel-udp
+    message: |
+      CANCEL sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 CANCEL
+      Content-Length: 0
+    expect: {status: 481}
+  - id: cancel-tcp
+    transport: tcp
+    message: |
+      CANCEL sip:agent@{{edge}};transport=tcp SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 CANCEL
+      Content-Length: 0
+    expect: {status: 481}
+  - id: bye
+    message: |
+      BYE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>;tag=nosuchdialog
+      Call-ID: {{callId}}
+      CSeq: 2 BYE
+      Content-Length: 0
+    expect: {status: 481}
+  - id: ack
+    waitMs: 2000
+    message: |
+      ACK sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>;tag=nosuchdialog
+      Call-ID: {{callId}}
+      CSeq: 1 ACK
+      Content-Length: 0
+    expect: {noResponse: true}

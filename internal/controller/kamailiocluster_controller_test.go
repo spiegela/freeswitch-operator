@@ -261,6 +261,24 @@ var _ = Describe("KamailioCluster controller", func() {
 		kc = getProxy(ns)
 		Expect(kc.Status.DispatcherReloadedHash).To(Equal(kc.Status.DispatcherHash))
 
+		By("a pod that becomes ready later may have read a stale file at start: it is reloaded and checked too")
+		var late corev1.Pod
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "proxy-kamailio-2"}, &late)).To(Succeed())
+		late.Status.PodIP = "10.0.9.3"
+		setKamailioPodReady(ctx, &late)
+		notifiers["http://10.0.9.3:5070/RPC"] = &fakeNotifier{stale: 1}
+		res = reconcileProxy(r, ns)
+		Expect(res.RequeueAfter).To(Equal(10*time.Second), "the late pod's file is stale: reload again soon")
+		kc = getProxy(ns)
+		Expect(kc.Status.DispatcherReloadedHash).NotTo(Equal(kc.Status.DispatcherHash))
+		reconcileProxy(r, ns)
+		Expect(notifiers["http://10.0.9.3:5070/RPC"].loaded).To(HaveKeyWithValue(int32(1), ConsistOf("sip:10.0.1.10:5060", "sip:10.0.1.20:5060")))
+		kc = getProxy(ns)
+		Expect(kc.Status.DispatcherReloadedHash).To(Equal(kc.Status.DispatcherHash))
+		reloads := notifiers["http://10.0.9.3:5070/RPC"].reloads
+		reconcileProxy(r, ns)
+		Expect(notifiers["http://10.0.9.3:5070/RPC"].reloads).To(Equal(reloads), "once confirmed, no more reloads")
+
 		By("a node leaving its fleet is marked inactive on every ready Kamailio at once")
 		publishFleetList(ctx, edge, destination{URI: "sip:10.0.1.10:5060", Pod: "edge-0"})
 		reconcileProxy(r, ns)

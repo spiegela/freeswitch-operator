@@ -1,0 +1,44 @@
+name: raw-missing-headers
+area: proxy-validation
+description: >
+  An INVITE without a Call-ID, and one without Call-ID, From and To, go nowhere and don't break Kamailio, which
+  answers the next request. RFC 3261 would have them answered 400; Kamailio's core drops a request missing any of
+  Call-ID, From, To and CSeq before its routing script runs, since it can't build a response without them, so
+  nothing comes back. That gap is recorded in the conformance record.
+requires: [proxy, mock]
+raw:
+  - id: no-call-id
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    waitMs: 2000
+    expect: {noResponse: true, backend: {calls: 0}}
+  - id: no-call-id-from-to
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    waitMs: 2000
+    expect: {noResponse: true, backend: {calls: 0}}
+  - id: still-up
+    message: |
+      OPTIONS sip:{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 OPTIONS
+      Content-Length: 0
+    expect: {status: 200}

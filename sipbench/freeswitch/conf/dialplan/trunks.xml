@@ -14,6 +14,19 @@
       </condition>
     </extension>
 
+    <!--
+      A caller ID name with a double quote in it (sent escaped, as in "John \"JJ\" Smith") reaches the dialplan
+      unescaped, and FreeSWITCH 1.10 can't then build the From header of its leg to the backend: the bridge fails
+      with DESTINATION_OUT_OF_ORDER ("Error creating HANDLE!" in the log) and the call never gets there. Swap
+      double quotes for single ones before bridging. Any edge dialplan that bridges a caller's name onward needs
+      the same.
+    -->
+    <extension name="caller-name-quotes" continue="true">
+      <condition field="caller_id_name" expression="&quot;">
+        <action application="set" data="effective_caller_id_name=${replace(${caller_id_name}|&quot;|')}" inline="true"/>
+      </condition>
+    </extension>
+
     <!-- Bench only: a backend address that never answers. -->
     <extension name="bench-unreachable" continue="true">
       <condition field="destination_number" expression="^unreachable$">

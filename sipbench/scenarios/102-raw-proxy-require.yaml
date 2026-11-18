@@ -1,0 +1,43 @@
+name: raw-proxy-require
+area: proxy-validation
+description: >
+  An INVITE whose Proxy-Require (and Require) name an extension Kamailio doesn't support gets 420, with
+  Unsupported naming it, over UDP and TCP, and never reaches the backend.
+requires: [proxy, mock]
+raw:
+  - id: udp
+    message: |
+      INVITE sip:agent@{{edge}} SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}}>
+      Proxy-Require: x-sipbench-frob
+      Require: x-sipbench-frob
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    expect:
+      status: 420
+      headers: {Unsupported: x-sipbench-frob}
+      backend: {calls: 0}
+  - id: tcp
+    transport: tcp
+    message: |
+      INVITE sip:agent@{{edge}};transport=tcp SIP/2.0
+      Via: SIP/2.0/{{transport}} {{local}};branch={{branch}}
+      Max-Forwards: 70
+      From: <sip:sipbench@{{localHost}}>;tag={{tag}}
+      To: <sip:agent@{{edge}}>
+      Call-ID: {{callId}}
+      CSeq: 1 INVITE
+      Contact: <sip:sipbench@{{local}};transport=tcp>
+      Proxy-Require: x-sipbench-frob
+      X-Sipbench-Call: {{bench}}
+      Content-Length: 0
+    expect:
+      status: 420
+      headers: {Unsupported: x-sipbench-frob}
+      backend: {calls: 0}
