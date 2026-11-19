@@ -191,8 +191,8 @@ volume, which, unlike environment variables, updates in place. The bundled `vars
 - **v0, `source: NodeExternalIP`:** the address comes from the node's `ExternalIP`.
 - **M3, `source: AddressPool`:** a `SIPAddressPool` holds a fixed list of addresses and binds one to each edge node,
   Kamailio's and FreeSWITCH's alike. When a node is replaced, its address moves to the replacement. One spare node
-  and one spare address are the norm. Pools work the same whatever provides the addresses: AWS Elastic IPs today,
-  MetalLB next (on kind and on-prem), and later other clouds and plain routed addresses.
+  and one spare address are the norm. Pools work the same whatever provides the addresses: AWS Elastic IPs and
+  MetalLB (on kind and on-prem) today, and later other clouds and plain routed addresses.
 
 **Pools and providers.** A pool is cluster-scoped, like a `GatewayClass`: addresses and nodes are cluster-wide, and
 two pools must never hold the same address. Its spec names exactly one provider, each with its own block, so a new
@@ -207,8 +207,8 @@ spec:
   awsElasticIP:                     # M3. Existing Elastic IPs, associated with each node's instance
     region: us-east-1
     allocationIDs: [eipalloc-…, eipalloc-…, eipalloc-…]
-  # metalLB:                        # M3, next. Addresses MetalLB announces (L2 or BGP)
-  #   ipAddressPool: sip-edge       #   a MetalLB IPAddressPool in MetalLB's namespace
+  # metalLB:                        # M3. Addresses MetalLB announces (L2 or BGP)
+  #   ipAddressPool: sip-edge       #   the MetalLB IPAddressPool that holds them
   #   addresses: [192.168.1.240, …]
   # static:                         # planned. Routed to the nodes by something else (BGP, keepalived, by hand)
   #   addresses: [198.51.100.10, …]
@@ -223,7 +223,9 @@ status:
       nodeID: i-0abc…
       claimedBy: [{kind: FreeswitchCluster, namespace: telephony, name: edge, pod: edge-1}]
       lastClaimedBy: [{kind: FreeswitchCluster, namespace: telephony, name: edge, pod: edge-1}]
-  conditions: []                    # Ready, Degraded
+      # bindAddress: 10.0.1.57      # when pods bind something other than the node's own address
+      # bindAddressReady: true      #   and the node's address agent has it on its interface
+  conditions: []                    # Ready, Degraded, ProviderAvailable
 ```
 
 A fleet sets `externalAddress: {source: AddressPool, addressPoolRef: {name: …}}`. Signalling and media can draw from
@@ -276,16 +278,19 @@ changes what the fleets render:
 | Replies and outbound traffic | leave from the address through the translation | leave from the address only because the process binds to it |
 
 So when a pool's address reaches the node at an address the node doesn't already have (an AWS pool with
-`privateAddress: Secondary`, and later a `Local` provider such as MetalLB), each pod gets a second annotation beside
+`privateAddress: Secondary`, or a `Local` provider such as MetalLB), each pod gets a second annotation beside
 `sip.instruments.com/external-address` (what it advertises): `sip.instruments.com/bind-address` (what it binds RTP,
 or Kamailio's peer-facing listener, to), from the pool's `status.addresses[].bindAddress`. Pods of other pools bind
 their node's own address, as they always have. FreeSWITCH's SIP profile stays on the private address either way:
 Kamailio dispatches to it there, and peers only ever signal through Kamailio.
 
 - **FreeSWITCH** gets a `bind-address` downward-API file (`FS_BIND_ADDRESS_FILE`) in a fleet that draws from a pool;
-  sipbench's config ([`bin/bind-address.sh`](sipbench/freeswitch/conf/bin/bind-address.sh)) sets `rtp-ip` from it,
-  falling back to `local_ip_v4`. The operator renders Kamailio's config but not FreeSWITCH's: a FreeSWITCH config of
-  your own needs the same, or its RTP leaves from the node's address and the pool's address never carries it.
+  sipbench's config ([`bin/podinfo.sh`](sipbench/freeswitch/conf/bin/podinfo.sh)) sets `rtp-ip` from it,
+  falling back to `local_ip_v4`, and then advertises the external address for RTP only (`ext-rtp-ip`): `ext-sip-ip`
+  stays `local_ip_v4`, since the external address reaches only the bind address, where SIP doesn't listen, and a
+  Contact naming it strands the dialog's ACK and BYE. The operator renders Kamailio's config but not FreeSWITCH's: a
+  FreeSWITCH config of your own needs the same, or its RTP leaves from the node's address and the pool's address
+  never carries it.
 - **Kamailio** with a bind address listens on it, advertising the public address, and separately on the pod's own
   address for FreeSWITCH, instead of on `0.0.0.0`, so replies leave from the address the request came to. A new
   request leaves from the side it is going to (`force_send_socket`: toward a node from the pod's address, toward a
@@ -293,11 +298,18 @@ Kamailio dispatches to it there, and peers only ever signal through Kamailio.
 - **The address agent** ([`config/components/address-agent`](config/components/address-agent/kustomization.yaml)), a
   DaemonSet in the manager's image with host networking and `NET_ADMIN`, puts each bind address its node is given on
   the interface that holds the node's own address (a /32 labelled `<interface>:sip`) and reports what its node has on
-  its own pod (`sip.instruments.com/bind-addresses`). The operator sets a pod's external and bind addresses together,
-  and only once the agent on its node reports the bind address, so a pod never starts binding an address that isn't
-  there. The agent removes only addresses it labelled that no pool gives its node, and only while every such pool
-  reads its provider, so a provider outage never takes an address off a node. Deleting a pool does take its bind
-  addresses off the nodes' interfaces: delete one only when no fleet uses it.
+  its own pod (`sip.instruments.com/bind-addresses`). Whether an address needs it is the provider's to say: it reports
+  a bind address for the binding, and the agent and the pool need to know nothing else about the provider. The pool
+  reads the agents' reports and marks each such address `bindAddressReady` once its node's agent has it; only then
+  does the address count as the node's for its pods, so the operator sets a pod's external and bind addresses
+  together and a pod never starts binding an address that isn't there. A new agent pod that hasn't reported yet (a
+  rollout) changes nothing; one that reports the address gone takes it back. The agent removes only addresses it
+  labelled that no pool gives its node, and never one that a pool which can't read its provider (`ProviderAvailable`
+  False) names anywhere in its status, so a provider outage never takes an address off a node while other pools'
+  moved addresses still leave. Deleting a pool does take its bind addresses off the nodes' interfaces: delete one
+  only when no fleet uses it.
+- **A just-bound address** waits for the pool's next read (5 s) to confirm it, and to learn its bind address, before
+  the node's pods are given it: its status shows a message until then.
 
 **Fencing: what unbinding guarantees.** `Authoritative` means one API call takes the address off a node whether or
 not the node is alive (AWS's `DisassociateAddress`). `Advisory` means a node cut off from the cluster but not from the
@@ -309,8 +321,9 @@ still has it). Failover (loop 5) moves addresses on its own only for `Authoritat
   binds and unbinds, and only addresses listed in the pool.
 - A pool is checked against the provider, not against its own status: after a restart it reads bindings back
   before acting.
-- Providers are turned on with a manager flag (`--address-providers=aws`), so the operator holds the permissions
-  of the providers in use only. A pool whose provider isn't enabled reports `ProviderUnavailable`.
+- Providers are turned on with a manager flag (`--address-providers=aws,metallb`; repeated flags add up, so the
+  kustomize components combine), so the operator holds the permissions of the providers in use only. A pool whose
+  provider isn't enabled reports `ProviderUnavailable`.
 
 **AWS Elastic IPs.** The pool lists existing allocation IDs (see
 [`config/samples`](config/samples/sip_v1alpha1_sipaddresspool.yaml)). A node is named by the instance in its
@@ -330,7 +343,11 @@ IP with it; a failed association takes the address back. Unbinding disassociates
 the tag names (never a primary address), and removes the tag. The address agent then puts the address on the node's
 interface. This needs `ec2:AssignPrivateIpAddresses`, `ec2:UnassignPrivateIpAddresses`, and `ec2:CreateTags` and
 `ec2:DeleteTags` on Elastic IPs for that one tag key. Don't use it where the CNI hands out the primary interface's
-secondary addresses to pods (the VPC CNI does): it could hand out this one.
+secondary addresses to pods (the VPC CNI does): it could hand out this one, fill the interface's address limit, or
+release it as surplus, which disassociates the Elastic IP. So the pool refuses to bind a new address to a node
+running the VPC CNI's `aws-node` pod (the node waits, and the pool's Ready condition says why); an address already
+bound there stays. On EKS, use `Primary` on a dedicated edge node group, in public subnets: an Elastic IP's replies
+must leave through an internet gateway, not a NAT gateway.
 
 Enabling it: add [`config/components/aws-address-pool`](config/components/aws-address-pool/kustomization.yaml)
 (`--address-providers=aws`) to `config/default`'s components, and for `Secondary` pools
@@ -340,13 +357,26 @@ Kustomization on `./config/default` takes `spec.components`). Give the manager's
 only), by IRSA annotation or Pod Identity association.
 
 **MetalLB.** MetalLB only announces addresses that belong to a `LoadBalancer` Service, and a Service can't carry
-FreeSWITCH's 16k-port RTP range. So for each binding the pool makes one Service for the SIP port only, pinned to its
-address with MetalLB's `loadBalancerIPs` annotation, with `externalTrafficPolicy: Local` and selecting just that pod.
-MetalLB then announces the address from that pod's node and won't give it to any other Service. The address agent
-(above) adds the address as a /32 while it is bound there, so every RTP port is delivered locally, and removes it on
-unbind. On kind, MetalLB in L2 mode on the Docker network
-lets the bench reach pooled addresses, so the pool, replacements and media to the pooled address are all checked
-in CI.
+FreeSWITCH's 16k-port RTP range. So for each binding the pool keeps a Service of its own in the operator's namespace
+(`sip-<pool>-<address>`) that asks MetalLB for the address (`metallb.io/loadBalancerIPs`, and
+`metallb.io/address-pool` when the pool names `ipAddressPool`), with `externalTrafficPolicy: Local`, no selector,
+and an EndpointSlice the pool writes naming the node. MetalLB announces the address from that node only and won't
+give it to any other Service; the pool reports an address another Service asks for or holds as a `Conflict`, and
+leaves it alone. One MetalLB hasn't assigned (not in an IPAddressPool) stays bound, with a message, but its node's
+pods aren't given it and the node counts as waiting. A Service whose EndpointSlice has gone announces nothing, so
+the pool counts its address as unbound and the next bind completes it. Taking an address out of the spec deletes its
+Service, so MetalLB stops announcing it. The Service's one port is a placeholder
+(discard, 9/UDP): kube-proxy rewrites traffic to a Service's ports, and SIP and RTP must reach the pods untouched.
+The address agent (above) puts the address on the node's interface while it is bound there, so the node delivers
+every port locally and the pods bind it; unbinding deletes the Service and the agent takes the address off. Fencing
+is `Advisory`: a node cut off from the cluster keeps the address on its interface.
+
+Enabling it: install MetalLB with an IPAddressPool holding the addresses and an L2Advertisement or BGPAdvertisement
+for it, run MetalLB's speaker on the fleets' nodes (give it their tolerations), and add
+[`config/components/metallb-address-pool`](config/components/metallb-address-pool/kustomization.yaml) and
+[`config/components/address-agent`](config/components/address-agent/kustomization.yaml) to `config/default`'s
+components. On kind ([below](#the-edge-on-kind)), MetalLB in L2 mode on the Docker network gives the
+FreeSWITCH fleet its addresses, so the pool, the agent and media to the pooled address are checked in CI.
 
 ### 5. Failover with fencing (v1, M4)
 
@@ -545,10 +575,10 @@ and alert rules shipped here watch them.** Nothing in the edge depends on them: 
   `_fleet_max_drain_seconds` (a drain's age against its limit), `_fleet_drain_duration_seconds` (how long each drain
   took), and for the dispatcher `_dispatcher_destinations{set}`, `_dispatcher_list_updates_total`,
   `_dispatcher_reloads_total{result}`, `_dispatcher_set_inactive_total{result}` and `_dispatcher_pending_reload`
-  (a changed list not every Kamailio is confirmed to hold), and `_fleet_pods_awaiting_address_agent` (pods whose
-  node holds their pool address but whose address agent hasn't reported the bind address). Each `SIPAddressPool`'s
-  series name it by `pool`: `freeswitch_operator_address_pool_addresses{state}`, `_address_pool_nodes_waiting`,
-  `_address_pool_provider_calls_total{call,result}` and `_address_pool_last_observed_timestamp_seconds`.
+  (a changed list not every Kamailio is confirmed to hold). Each `SIPAddressPool`'s series name it by `pool`:
+  `freeswitch_operator_address_pool_addresses{state}`, `_address_pool_nodes_waiting`,
+  `_address_pool_addresses_awaiting_agent` (bound addresses whose node's address agent hasn't reported the bind
+  address), `_address_pool_provider_calls_total{call,result}` and `_address_pool_last_observed_timestamp_seconds`.
 - **Alert rules** live in [`config/alerts/edge-alerts.yaml`](config/alerts/edge-alerts.yaml), in Prometheus's
   rule-file format, for Prometheus, Grafana Mimir or Amazon Managed Service for Prometheus;
   `make check-alerts` checks them and runs their unit tests with promtool. Critical: silent drops with the whole
@@ -557,7 +587,7 @@ and alert rules shipped here watch them.** Nothing in the edge depends on them: 
   limit, a fleet short of members with nothing draining, a roll stalled with nothing draining, a drain past 80% of
   its limit, a dispatcher reload pending for 5 minutes, a dispatch set conflict, the operator gone, a node using an
   address pool with none of its addresses, a pool address in `Conflict` or `Error`, a pool that hasn't read its
-  provider for 15 minutes, pods waiting on their node's address agent. Info: a pool with no spare address.
+  provider for 15 minutes, a pool address waiting on its node's address agent. Info: a pool with no spare address.
 - **The scrape config** in [`deploy/kind/monitoring`](deploy/kind/monitoring/collector.yaml) is the reference: pods
   with a port named `metrics` in each fleet (the rules expect `job` = `kamailio` or `freeswitch`, and `namespace`,
   `pod` and `fleet` labels) and the operator's metrics Service. On kind the Collector sends to a Prometheus with its
@@ -632,7 +662,7 @@ which version runs where.
 | M2 | `KamailioCluster`: managed Kamailio, authenticated JSON-RPC, restart list; sipbench fleet scenarios (drain mid-call, rolling update with live calls, run as scenarios rather than by hand), with call records kept per run so concurrent runners don't clear each other's; opt-in liveness (hang detection) with a lax default | done |
 | M2b | Bench tooling for the remaining conformance cases: a raw-message sender (RFC 4475 torture tests; first sets in: proxy validation, stray requests and responses, lexical variants, the request-side torture and size cases; responses from a node still need a stand-in node), netem impairment (first set in: loss, burst loss, delay, jitter, reordering and duplication on the carrier-edge link through tc, and named SIP messages dropped or held, over signalling, media, DTMF, one-way audio and a short blackhole; MOS, RFC 3550 jitter and the proxy-node and edge-backend links still to come), and runner features (re-INVITE, hand-set headers, DTMF before answer, full INVITE records) | in progress |
 | M2c | [Metrics and alerts](#metrics-and-alerts): every component exposes metrics an OpenTelemetry Collector scrapes (its prometheus receiver) and sends on over OTLP: Kamailio's `/metrics` (its statistics, refusals, silent drops), FreeSWITCH through an exporter beside each node (sessions, calls, paused, SIP profile state and counters), and the operator's own (controller-runtime's, plus fleet, drain and dispatcher-reload metrics); alert rules with promtool tests; on kind a Collector sending to a Prometheus that evaluates the rules, and scenarios that check counters through it | in progress |
-| M3 | [`SIPAddressPool`](#4-external-addresses-v0-node-addresses-pool-in-m3), shared by both fleets, with providers behind one interface. In: the provider-neutral pool controller (tested against a fake provider); AWS Elastic IPs on the node's own address or a secondary private address (unit-tested against a fake EC2 client); the `bind-address` split in both fleets' config and the address agent that puts bind addresses on nodes; pool metrics and alerts; kustomize components and the IAM policy; sipbench's `mediaAddress` check (`pool-media-address`). Still to come: a run on AWS (the sandbox, then the EKS edge node group); MetalLB (Service per binding, on kind with sipbench checking replacement and media to the pooled address) | in progress |
+| M3 | [`SIPAddressPool`](#4-external-addresses-v0-node-addresses-pool-in-m3), shared by both fleets, with providers behind one interface. In: the provider-neutral pool controller (tested against a fake provider); AWS Elastic IPs on the node's own address or a secondary private address (unit-tested against a fake EC2 client); the `bind-address` split in both fleets' config and the address agent that puts bind addresses on nodes; pool metrics and alerts; kustomize components and the IAM policy; sipbench's `mediaAddress` check (`pool-media-address`); MetalLB (a Service per binding), with the kind edge's FreeSWITCH fleet on a MetalLB pool and the bench checking media to the pooled address. Still to come: a run on AWS (the sandbox, then the EKS edge node group); a bench scenario for a replaced node's address | in progress |
 | M4 | v1 failover with fencing and call recovery | planned |
 | M5 | Typed peer and ACL resources (loop 9), outbound registrations when a peer needs them (loop 8), sipbench peer mocks; reload without restart | planned |
 | M6 | Peers on the inside network (loop 10): FreeSWITCH inside profile and dispatcher set, Kamailio inside listener, sipbench VPN peer mock | planned |
@@ -656,14 +686,16 @@ sipbench has its own instructions in [`sipbench/README.md`](sipbench/README.md).
 [`hack/kind.sh`](hack/kind.sh) runs the whole edge locally: a kind cluster with two proxy nodes and three tainted
 edge nodes ([`deploy/kind`](deploy/kind/)), the operator built from this tree, a two-node `KamailioCluster` on the
 proxy nodes, a three-node `FreeswitchCluster` running sipbench's FreeSWITCH configuration with the exporter beside
-it, sipbench's mock backend behind it, and in the `monitoring` namespace an OpenTelemetry Collector sending
+it and its media addresses from a MetalLB `SIPAddressPool` (`edge-media`: MetalLB in L2 mode and the address agent,
+four addresses at the top of kind's Docker network), sipbench's mock backend behind it, and in the `monitoring`
+namespace an OpenTelemetry Collector sending
 everything over OTLP to a Prometheus that evaluates the alert rules. Scenarios can name counters the edge should
 move (`metrics:` in a scenario); on kind the runner checks them through that Prometheus
 (`kubectl -n monitoring port-forward svc/prometheus 9090` to look yourself).
 
 ```sh
 make kind-up         # create the cluster (about 6 GB of Docker memory)
-make kind-deploy     # build and load the images, install the operator, apply deploy/kind, wait for both fleets
+make kind-deploy     # build and load the images, install MetalLB and the operator, apply deploy/kind, wait for both fleets
 make kind-bench      # run sipbench through Kamailio; hack/kind.sh bench <regexp> runs a subset
 hack/kind.sh status  # both fleets' members, the combined dispatcher list, and what each Kamailio has loaded
 make kind-down

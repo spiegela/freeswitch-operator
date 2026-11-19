@@ -30,7 +30,9 @@ const (
 	// BindAddressAnnotation is set by the operator on each pod of a fleet whose pool needs an address on the node
 	// (a secondary private address, or a Local datapath): the address the pod binds its peer-facing traffic to
 	// (FreeSWITCH's RTP, Kamailio's peer listener). The operator sets it, and the external address with it, only
-	// once the address agent reports the node has the address on an interface.
+	// once the address agent reports the node has the address on an interface. When it differs from the pod's own
+	// address, the external address reaches only it: whatever listens elsewhere (FreeSWITCH's SIP, on the pod's
+	// own address) must not advertise the external address (ext-sip-ip), or in-dialog requests sent to it are lost.
 	BindAddressAnnotation = "sip.instruments.com/bind-address"
 	// AgentBindAddressesAnnotation is set by the address agent on its own pod: the pools' bind addresses its node
 	// has on an interface, comma-separated and sorted.

@@ -7,7 +7,6 @@ package main
 import (
 	"context"
 	"flag"
-	"net/netip"
 	"os"
 	"time"
 
@@ -42,9 +41,9 @@ func main() {
 	log := ctrl.Log.WithName("address-agent")
 
 	node, ns, name := os.Getenv("NODE_NAME"), os.Getenv("POD_NAMESPACE"), os.Getenv("POD_NAME")
-	hostIP, err := netip.ParseAddr(os.Getenv("HOST_IP"))
+	hostIP, err := addressagent.HostIPv4(os.Getenv("HOST_IPS"), os.Getenv("HOST_IP"))
 	if node == "" || ns == "" || name == "" || err != nil {
-		log.Error(err, "NODE_NAME, POD_NAMESPACE, POD_NAME and HOST_IP must be set (downward API)")
+		log.Error(err, "NODE_NAME, POD_NAMESPACE, POD_NAME and HOST_IPS or HOST_IP must be set (downward API)")
 		os.Exit(1)
 	}
 
@@ -57,7 +56,10 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
 			// Only its own pod: the agent needs no other.
-			&corev1.Pod{}: {Namespaces: map[string]cache.Config{ns: {}}, Field: fields.OneTermEqualSelector("metadata.name", name)},
+			&corev1.Pod{}: {
+				Namespaces: map[string]cache.Config{ns: {}},
+				Field:      fields.OneTermEqualSelector("metadata.name", name),
+			},
 		}},
 	})
 	if err != nil {

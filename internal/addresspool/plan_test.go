@@ -218,6 +218,8 @@ func TestDecideRecordsClaims(t *testing.T) {
 	if len(got.ClaimedBy) != 1 || got.ClaimedBy[0].Pod != "edge-0" || len(got.LastClaimedBy) != 1 {
 		t.Fatalf("claims not recorded: %+v", got)
 	}
+	// Confirmed by the next read, the address is the node's.
+	p = Decide(Input{Observed: []Address{addr("eip1", "i-a")}, Nodes: nodes("a"), Claimants: []Claimant{claimant("edge-0", "a")}, Previous: p.Status})
 	st := &sipv1alpha1.SIPAddressPoolStatus{Addresses: p.Status}
 	if b := BindingForNode(st, "a"); b == nil || b.Address != "203.0.113.1" {
 		t.Errorf("BindingForNode = %+v", b)
@@ -234,17 +236,86 @@ func TestDecideRecordsClaims(t *testing.T) {
 	}
 }
 
+// A refused node gets no new address and waits, with why; one it already holds stays.
+func TestDecideRefused(t *testing.T) {
+	in := Input{
+		Observed:  []Address{addr("eip1", "i-a"), addr("eip2", "")},
+		Nodes:     nodes("a", "b"),
+		Claimants: []Claimant{claimant("edge-0", "a"), claimant("edge-1", "b")},
+		Refused:   map[string]string{"a": "runs the VPC CNI", "b": "runs the VPC CNI"},
+	}
+	p := Decide(in)
+	if got := summary(p); got != " | eip1:Bound@a eip2:Free" {
+		t.Errorf("plan: %s", got)
+	}
+	if p.Waiting["b"] != "runs the VPC CNI" || p.Waiting["a"] != "" {
+		t.Errorf("waiting: %v", p.Waiting)
+	}
+}
+
+// A Conflict stays one: the next pass, with it as Previous, must not take it as the pool's own binding.
+func TestDecideConflictStaysAlone(t *testing.T) {
+	in := Input{Observed: []Address{addr("eip1", "i-someone-else")}, Nodes: nodes("a"), Claimants: []Claimant{claimant("edge-0", "a")}}
+	for pass := 1; pass <= 3; pass++ {
+		p := Decide(in)
+		if got := summary(p); got != " | eip1:Conflict" {
+			t.Fatalf("pass %d: %s", pass, got)
+		}
+		in.Previous = p.Status
+	}
+}
+
+// A just-bound address isn't handed out until a read confirms it, with its bind address if it has one.
+func TestDecideConfirmsBinding(t *testing.T) {
+	in := Input{Observed: []Address{addr("eip1", "")}, Nodes: nodes("a"), Claimants: []Claimant{claimant("edge-0", "a")}}
+	p := Decide(in)
+	if b := BindingForNode(&sipv1alpha1.SIPAddressPoolStatus{Addresses: p.Status}, "a"); b != nil || p.Status[0].Message == "" {
+		t.Fatalf("handed out before confirmed: %+v", p.Status[0])
+	}
+	in.Previous, in.Observed = p.Status, []Address{addr("eip1", "i-a")}
+	p = Decide(in)
+	if b := BindingForNode(&sipv1alpha1.SIPAddressPoolStatus{Addresses: p.Status}, "a"); b == nil || b.Message != "" {
+		t.Fatalf("not handed out once confirmed: %+v", p.Status[0])
+	}
+}
+
+// An address the provider has bound but can't use yet (MetalLB hasn't assigned it) stays where it is, but its node's
+// pods don't get it, and the node waits.
+func TestDecideNotReady(t *testing.T) {
+	a := addr("eip1", "i-a")
+	a.BindIP, a.NotReady = "203.0.113.1", "MetalLB hasn't assigned it"
+	in := Input{
+		Observed: []Address{a}, Nodes: nodes("a"), Claimants: []Claimant{claimant("edge-0", "a")},
+		NodeAddresses: map[string][]string{"a": {"203.0.113.1"}},
+	}
+	p := Decide(in)
+	st := p.Status[0]
+	if len(p.Steps) != 0 || st.State != sipv1alpha1.PoolAddressBound || st.BindAddressReady || st.Message != a.NotReady {
+		t.Fatalf("status %+v, steps %v", st, p.Steps)
+	}
+	if b := BindingForNode(&sipv1alpha1.SIPAddressPoolStatus{Addresses: p.Status}, "a"); b != nil || AwaitingAgent(&st) {
+		t.Fatalf("handed out, or blamed on the agent: %+v", b)
+	}
+	if p.Waiting["a"] == "" {
+		t.Error("node a should wait")
+	}
+	if got := NodeBindAddresses(&sipv1alpha1.SIPAddressPoolStatus{Addresses: p.Status}, "a"); len(got) != 1 {
+		t.Errorf("the node should keep the address on its interface: %v", got)
+	}
+}
+
 // A bind address is read from the provider, kept while the provider can't answer, and forgotten when the address
 // is given to another node (its bind address there is the provider's to report).
 func TestDecideBindAddress(t *testing.T) {
 	bound := addr("eip1", "i-a")
 	bound.BindIP = "10.0.9.1"
-	p := Decide(Input{Observed: []Address{bound}, Nodes: nodes("a"), Claimants: []Claimant{claimant("edge-0", "a")}})
+	reported := map[string][]string{"a": {"10.0.9.1"}}
+	p := Decide(Input{Observed: []Address{bound}, Nodes: nodes("a"), Claimants: []Claimant{claimant("edge-0", "a")}, NodeAddresses: reported})
 	if got := p.Status[0]; got.State != sipv1alpha1.PoolAddressBound || got.BindAddress != "10.0.9.1" {
 		t.Fatalf("bound: %+v", got)
 	}
 	failed := Address{ID: "eip1", Err: errors.New("throttled")}
-	p = Decide(Input{Observed: []Address{failed}, Nodes: nodes("a"), Claimants: []Claimant{claimant("edge-0", "a")}, Previous: p.Status})
+	p = Decide(Input{Observed: []Address{failed}, Nodes: nodes("a"), Claimants: []Claimant{claimant("edge-0", "a")}, Previous: p.Status, NodeAddresses: reported})
 	if got := p.Status[0]; got.State != sipv1alpha1.PoolAddressError || got.BindAddress != "10.0.9.1" {
 		t.Fatalf("error: %+v", got)
 	}
@@ -256,17 +327,6 @@ func TestDecideBindAddress(t *testing.T) {
 	p = Decide(Input{Observed: []Address{bound}, Nodes: nodes("a", "b"), Claimants: []Claimant{claimant("edge-0", "b")}, Previous: p.Status})
 	if got := p.Status[0]; got.Node != "b" || got.BindAddress != "" {
 		t.Fatalf("moved: %+v", got)
-	}
-}
-
-func TestNeedsNodeAddress(t *testing.T) {
-	spec := &sipv1alpha1.SIPAddressPoolSpec{AWSElasticIP: &sipv1alpha1.AWSElasticIPPool{}}
-	if NeedsNodeAddress(spec) {
-		t.Error("Primary needs a node address")
-	}
-	spec.AWSElasticIP.PrivateAddress = sipv1alpha1.AWSPrivateAddressSecondary
-	if !NeedsNodeAddress(spec) {
-		t.Error("Secondary doesn't")
 	}
 }
 
@@ -285,18 +345,53 @@ func TestNodeBindAddresses(t *testing.T) {
 }
 
 func TestProviderRead(t *testing.T) {
-	for reason, want := range map[string]bool{
-		"":                                  false,
-		"AddressesBound":                    true,
-		sipv1alpha1.PoolReasonProviderError: false,
-		sipv1alpha1.PoolReasonProviderUnavailable: false,
-	} {
-		st := &sipv1alpha1.SIPAddressPoolStatus{}
-		if reason != "" {
-			st.Conditions = []metav1.Condition{{Type: sipv1alpha1.PoolConditionReady, Reason: reason}}
-		}
+	st := &sipv1alpha1.SIPAddressPoolStatus{}
+	if ProviderRead(st) {
+		t.Error("a pool that has never read its provider")
+	}
+	for status, want := range map[metav1.ConditionStatus]bool{metav1.ConditionTrue: true, metav1.ConditionFalse: false} {
+		st.Conditions = []metav1.Condition{{Type: sipv1alpha1.PoolConditionProviderAvailable, Status: status}}
 		if got := ProviderRead(st); got != want {
-			t.Errorf("reason %q: ProviderRead = %v, want %v", reason, got, want)
+			t.Errorf("ProviderAvailable %s: ProviderRead = %v", status, got)
 		}
+	}
+}
+
+// A bind address is ready once the node's agent reports it, stays so while the node has no report, and is taken
+// back when the report leaves it out or the address moves.
+func TestDecideBindAddressReady(t *testing.T) {
+	bound := addr("eip1", "i-a")
+	bound.BindIP = "10.0.9.1"
+	in := Input{Observed: []Address{bound}, Nodes: nodes("a", "b"), Claimants: []Claimant{claimant("edge-0", "a")}}
+	st := Decide(in).Status[0]
+	if st.BindAddressReady {
+		t.Fatal("ready with no report")
+	}
+	if b := BindingForNode(&sipv1alpha1.SIPAddressPoolStatus{Addresses: []sipv1alpha1.PoolAddress{st}}, "a"); b != nil || !AwaitingAgent(&st) {
+		t.Fatalf("handed out before the agent reported: %+v", b)
+	}
+
+	in.NodeAddresses = map[string][]string{"a": {"10.0.9.1"}}
+	st = Decide(in).Status[0]
+	if !st.BindAddressReady || AwaitingAgent(&st) {
+		t.Fatalf("not ready once reported: %+v", st)
+	}
+
+	in.Previous, in.NodeAddresses = []sipv1alpha1.PoolAddress{st}, nil
+	if st = Decide(in).Status[0]; !st.BindAddressReady {
+		t.Fatal("no report should keep it ready")
+	}
+
+	in.Previous, in.NodeAddresses = []sipv1alpha1.PoolAddress{st}, map[string][]string{"a": {}}
+	if st = Decide(in).Status[0]; st.BindAddressReady {
+		t.Fatal("a report without it should take it back")
+	}
+
+	moved := addr("eip1", "i-b")
+	moved.BindIP = "10.0.9.1"
+	in.Previous = []sipv1alpha1.PoolAddress{{ID: "eip1", Node: "a", BindAddress: "10.0.9.1", BindAddressReady: true, State: sipv1alpha1.PoolAddressBound}}
+	in.Observed, in.NodeAddresses = []Address{moved}, nil
+	if st = Decide(in).Status[0]; st.BindAddressReady {
+		t.Fatal("readiness on another node carried over")
 	}
 }

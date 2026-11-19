@@ -1,0 +1,15 @@
+# Turns on the MetalLB provider for SIPAddressPools (--address-providers=metallb). Add it to config/default's
+# components, with config/components/address-agent, which every MetalLB pool needs: a Flux Kustomization on
+# ./config/default takes `components: [../components/metallb-address-pool, ../components/address-agent]`.
+#
+# The pool keeps a LoadBalancer Service and an EndpointSlice per binding in the operator's namespace, so MetalLB must
+# be installed, with an IPAddressPool holding the pool's addresses (and an L2Advertisement or BGPAdvertisement for
+# it). MetalLB's speaker must run on the nodes the fleets run on: give it their tolerations.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target: {kind: Deployment, name: controller-manager}
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --address-providers=metallb

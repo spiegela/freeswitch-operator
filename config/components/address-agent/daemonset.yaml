@@ -31,6 +31,8 @@ spec:
           args: ["--health-probe-bind-address=127.0.0.1:8082"]
           env:
             - {name: NODE_NAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}
+            # status.hostIPs (all the node's addresses) picks the IPv4 one on a dual-stack node; hostIP is the fallback.
+            - {name: HOST_IPS, valueFrom: {fieldRef: {fieldPath: status.hostIPs}}}
             - {name: HOST_IP, valueFrom: {fieldRef: {fieldPath: status.hostIP}}}
             - {name: POD_NAME, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
             - {name: POD_NAMESPACE, valueFrom: {fieldRef: {fieldPath: metadata.namespace}}}

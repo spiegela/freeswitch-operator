@@ -1,9 +1,9 @@
 // Package addressagent is the per-node half of a SIPAddressPool whose addresses reach a node at an address the node
-// doesn't already have: an AWS Elastic IP associated with a secondary private address, and later a Local datapath
-// (MetalLB). The cloud sends the traffic to the node, but the kernel drops it, and a pod can't bind the address,
-// until the address is on an interface. The agent runs on each node, puts the bind addresses the pools give its
-// node on the interface that holds the node's own address, and reports what its node has on its own pod, which the
-// operator waits for before it gives the fleet's pods their addresses.
+// doesn't already have: an AWS Elastic IP associated with a secondary private address, or an address MetalLB
+// announces (a Local datapath). The network sends the traffic to the node, but the kernel drops it, and a pod can't
+// bind the address, until the address is on an interface. The agent runs on each node, puts the bind addresses the
+// pools give its node on the interface that holds the node's own address, and reports what its node has on its own
+// pod; the pool marks each address ready from that report before the fleets' pods are given it.
 package addressagent
 
 import (
@@ -33,14 +33,20 @@ type Addr struct {
 	Label string
 }
 
+// Link is a network interface.
+type Link struct {
+	Name  string
+	Index int
+}
+
 // Links is the node's network configuration, as far as the agent touches it.
 type Links interface {
 	// Interface returns the interface that holds hostIP, and every IPv4 address on any interface.
-	Interface(hostIP netip.Addr) (iface string, all []Addr, err error)
+	Interface(hostIP netip.Addr) (Link, []Addr, error)
 	// Add puts ip/32 on the interface with a label.
-	Add(iface string, ip netip.Addr, label string) error
+	Add(link Link, ip netip.Addr, label string) error
 	// Del takes ip off the interface.
-	Del(iface string, ip netip.Addr) error
+	Del(link Link, ip netip.Addr) error
 }
 
 // Agent keeps one node's bind addresses on its interface.
@@ -57,9 +63,9 @@ type Agent struct {
 // Sync is one pass: add what the pools give this node, remove what the agent added that no pool gives it, and
 // report the result on the agent's pod.
 //
-// It removes an address only when every pool that needs node addresses has read its provider, so a provider
-// outage never takes an address off a node with calls on it. Deleting such a pool does take its addresses off the
-// nodes' interfaces: delete one only when no fleet uses it.
+// It never removes an address a pool that can't read its provider names anywhere in its status, so a provider
+// outage never takes an address off a node with calls on it, while other pools' moved addresses still leave. Deleting
+// a pool does take its addresses off the nodes' interfaces: delete one only when no fleet uses it.
 func (a *Agent) Sync(ctx context.Context) error {
 	log := logf.FromContext(ctx)
 	var pools sipv1alpha1.SIPAddressPoolList
@@ -67,12 +73,15 @@ func (a *Agent) Sync(ctx context.Context) error {
 		return err
 	}
 	want := map[netip.Addr]bool{}
-	settled := true
+	keep := map[netip.Addr]bool{} // named by a pool whose status may be stale
 	for _, p := range pools.Items {
-		if !addresspool.NeedsNodeAddress(&p.Spec) {
-			continue
+		if !addresspool.ProviderRead(&p.Status) {
+			for _, pa := range p.Status.Addresses {
+				if ip, err := netip.ParseAddr(pa.BindAddress); err == nil {
+					keep[ip] = true
+				}
+			}
 		}
-		settled = settled && addresspool.ProviderRead(&p.Status)
 		for _, s := range addresspool.NodeBindAddresses(&p.Status, a.Node) {
 			ip, err := netip.ParseAddr(s)
 			if err != nil || !ip.Is4() {
@@ -83,10 +92,11 @@ func (a *Agent) Sync(ctx context.Context) error {
 		}
 	}
 
-	iface, all, err := a.Links.Interface(a.HostIP)
+	link, all, err := a.Links.Interface(a.HostIP)
 	if err != nil {
 		return err
 	}
+	iface := link.Name
 	label := iface + labelSuffix
 	if len(label) > 15 {
 		return fmt.Errorf("interface name %q is too long for the address label %q (15 characters at most)", iface, label)
@@ -100,22 +110,20 @@ func (a *Agent) Sync(ctx context.Context) error {
 			continue // already there, ours or not (the node's own address, for a pool switched from Primary)
 		}
 		log.Info("adding bind address", "address", ip, "interface", iface)
-		if err := a.Links.Add(iface, ip, label); err != nil {
+		if err := a.Links.Add(link, ip, label); err != nil {
 			return fmt.Errorf("adding %s to %s: %w", ip, iface, err)
 		}
 		have[ip] = Addr{IP: ip, Label: label}
 	}
-	if settled {
-		for ip, ad := range have {
-			if want[ip] || ad.Label != label {
-				continue
-			}
-			log.Info("removing bind address no pool gives this node", "address", ip, "interface", iface)
-			if err := a.Links.Del(iface, ip); err != nil {
-				return fmt.Errorf("removing %s from %s: %w", ip, iface, err)
-			}
-			delete(have, ip)
+	for ip, ad := range have {
+		if want[ip] || keep[ip] || ad.Label != label {
+			continue
 		}
+		log.Info("removing bind address no pool gives this node", "address", ip, "interface", iface)
+		if err := a.Links.Del(link, ip); err != nil {
+			return fmt.Errorf("removing %s from %s: %w", ip, iface, err)
+		}
+		delete(have, ip)
 	}
 
 	var present []string
@@ -142,4 +150,15 @@ func (a *Agent) report(ctx context.Context, value string) error {
 	}
 	pod.Annotations[sipv1alpha1.AgentBindAddressesAnnotation] = value
 	return a.Client.Patch(ctx, &pod, patch)
+}
+
+// HostIPv4 is the node's IPv4 address, the one whose interface the agent uses: the first IPv4 address in hostIPs
+// (status.hostIPs, comma-separated; on a dual-stack node the primary may be IPv6), else hostIP (status.hostIP).
+func HostIPv4(hostIPs, hostIP string) (netip.Addr, error) {
+	for s := range strings.SplitSeq(hostIPs+","+hostIP, ",") {
+		if ip, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil && ip.Is4() {
+			return ip, nil
+		}
+	}
+	return netip.Addr{}, fmt.Errorf("no IPv4 address in HOST_IPS %q or HOST_IP %q", hostIPs, hostIP)
 }

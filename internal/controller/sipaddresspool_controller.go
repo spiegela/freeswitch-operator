@@ -60,6 +60,10 @@ type SIPAddressPoolReconciler struct {
 
 	// NewProvider builds each pool's provider. Nil means no provider is enabled.
 	NewProvider addresspool.Factory
+
+	// AgentNamespace is where the address agents run (the operator's namespace); empty reads them in every
+	// namespace, as under make run.
+	AgentNamespace string
 }
 
 // +kubebuilder:rbac:groups=sip.instruments.com,resources=sipaddresspools,verbs=get;list;watch;create;update;patch;delete
@@ -94,42 +98,36 @@ func (r *SIPAddressPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 	if err != nil {
 		setPoolConditions(status, gen, metav1.ConditionFalse, sipv1alpha1.PoolReasonProviderUnavailable, err.Error())
+		setProviderAvailable(status, gen, sipv1alpha1.PoolReasonProviderUnavailable, err)
 		return ctrl.Result{RequeueAfter: poolRetry}, r.writePoolStatus(ctx, &pool, status)
 	}
 	caps := provider.Capabilities()
 	status.Datapath, status.Fencing = caps.Datapath, caps.Fencing
 
-	in := addresspool.Input{Previous: pool.Status.Addresses}
-	var nodeList corev1.NodeList
-	if err := r.List(ctx, &nodeList); err != nil {
-		return ctrl.Result{}, err
-	}
-	nodeNames := map[string]string{} // provider ID to name, for recording failures
-	for i := range nodeList.Items {
-		n := &nodeList.Items[i]
-		id, err := provider.NodeID(n)
-		if err != nil {
-			log.V(1).Info("provider can't name node", "node", n.Name, "reason", err.Error())
-			id = ""
-		}
-		in.Nodes = append(in.Nodes, addresspool.Node{Name: n.Name, ID: id})
-		if id != "" {
-			nodeNames[id] = n.Name
-		}
-	}
-	if in.Claimants, err = r.poolClaimants(ctx, pool.Name); err != nil {
+	in, nodeNames, err := r.planInput(ctx, &pool, provider)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 	in.Observed, err = provider.Observe(ctx)
 	recordPoolCall(pool.Name, "observe", err)
 	if err != nil {
 		setPoolConditions(status, gen, metav1.ConditionFalse, sipv1alpha1.PoolReasonProviderError, err.Error())
+		setProviderAvailable(status, gen, sipv1alpha1.PoolReasonProviderError, err)
 		if werr := r.writePoolStatus(ctx, &pool, status); werr != nil {
 			return ctrl.Result{}, werr
 		}
 		return ctrl.Result{}, fmt.Errorf("reading the pool from its provider: %w", err)
 	}
 	poolLastObserved.WithLabelValues(pool.Name).SetToCurrentTime()
+	setProviderAvailable(status, gen, "Observed", nil)
+	if pr, ok := provider.(addresspool.Pruner); ok {
+		// Bindings of addresses taken out of the spec. A failure costs nothing now: the next pass tries again.
+		err := pr.Prune(ctx)
+		recordPoolCall(pool.Name, "prune", err)
+		if err != nil {
+			log.Error(err, "taking back the bindings of addresses no longer in the pool")
+		}
+	}
 
 	plan := addresspool.Decide(in)
 	byID := map[string]int{}
@@ -172,12 +170,15 @@ func (r *SIPAddressPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		problems = append(problems, fmt.Sprintf("node %s has no address: %s", n, plan.Waiting[n]))
 	}
 	for _, a := range status.Addresses {
-		if a.State == sipv1alpha1.PoolAddressConflict || a.State == sipv1alpha1.PoolAddressError {
+		switch {
+		case a.State == sipv1alpha1.PoolAddressConflict || a.State == sipv1alpha1.PoolAddressError:
 			problems = append(problems, fmt.Sprintf("%s (%s) %s: %s", a.ID, a.Address, a.State, a.Message))
+		case addresspool.AwaitingAgent(&a):
+			problems = append(problems, fmt.Sprintf("node %s waits for its address agent to put %s on its interface", a.Node, a.BindAddress))
 		}
 	}
 	if len(problems) == 0 {
-		setPoolConditions(status, gen, metav1.ConditionTrue, "AddressesBound", "every node running a pod that uses the pool holds one of its addresses")
+		setPoolConditions(status, gen, metav1.ConditionTrue, "AddressesBound", "every node running a pod that uses the pool holds one of its addresses, ready to use")
 	} else {
 		setPoolConditions(status, gen, metav1.ConditionFalse, "AddressesMissing", strings.Join(problems, "; "))
 	}
@@ -188,6 +189,43 @@ func (r *SIPAddressPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{RequeueAfter: poolConfirm}, nil
 	}
 	return ctrl.Result{RequeueAfter: poolResync}, nil
+}
+
+// planInput is the planner's input from the cluster (all but the provider's report), and node names by the
+// provider's ID for them, to record failures with.
+func (r *SIPAddressPoolReconciler) planInput(
+	ctx context.Context, pool *sipv1alpha1.SIPAddressPool, provider addresspool.Provider,
+) (addresspool.Input, map[string]string, error) {
+	log := logf.FromContext(ctx)
+	in := addresspool.Input{Previous: pool.Status.Addresses}
+	var nodeList corev1.NodeList
+	if err := r.List(ctx, &nodeList); err != nil {
+		return in, nil, err
+	}
+	nodeNames := map[string]string{}
+	for i := range nodeList.Items {
+		n := &nodeList.Items[i]
+		id, err := provider.NodeID(n)
+		if err != nil {
+			log.V(1).Info("provider can't name node", "node", n.Name, "reason", err.Error())
+			id = ""
+		}
+		in.Nodes = append(in.Nodes, addresspool.Node{Name: n.Name, ID: id})
+		if id != "" {
+			nodeNames[id] = n.Name
+		}
+	}
+	var err error
+	if in.Claimants, err = r.poolClaimants(ctx, pool.Name); err != nil {
+		return in, nil, err
+	}
+	if in.NodeAddresses, err = r.agentReports(ctx); err != nil {
+		return in, nil, err
+	}
+	if in.Refused, err = r.refusedNodes(ctx, pool); err != nil {
+		return in, nil, err
+	}
+	return in, nodeNames, nil
 }
 
 // poolClaimants are the pods, scheduled to a node, of every fleet that draws its addresses from the pool.
@@ -236,6 +274,57 @@ func (r *SIPAddressPoolReconciler) poolClaimants(ctx context.Context, pool strin
 	return out, nil
 }
 
+// agentReports are the bind addresses each node's address agent reports on its interface, by node. A node whose
+// agent hasn't reported (none runs there, or a new one before its first pass) is missing.
+func (r *SIPAddressPoolReconciler) agentReports(ctx context.Context) (map[string][]string, error) {
+	var pods corev1.PodList
+	opts := []client.ListOption{client.MatchingLabels{sipv1alpha1.AppNameLabel: sipv1alpha1.AddressAgentName}}
+	if r.AgentNamespace != "" {
+		opts = append(opts, client.InNamespace(r.AgentNamespace))
+	}
+	if err := r.List(ctx, &pods, opts...); err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Spec.NodeName == "" || p.DeletionTimestamp != nil {
+			continue
+		}
+		if addrs, ok := addresspool.ReportedBindAddresses(p); ok {
+			out[p.Spec.NodeName] = append(out[p.Spec.NodeName], addrs...)
+		}
+	}
+	return out, nil
+}
+
+// vpcCNILabel is the label on the Amazon VPC CNI's node pods (the aws-node DaemonSet).
+const vpcCNILabel = "k8s-app"
+
+// refusedNodes are the nodes the pool must not bind a new address to, with why. An AWS pool with privateAddress
+// Secondary assigns the node's primary interface a secondary private address, which the VPC CNI manages too: it
+// can fill the interface's address limit, adopt the address for a pod, or release it as surplus (which disassociates
+// the Elastic IP). So such a pool refuses nodes running the CNI's aws-node pod. A node's CNI pod runs before the
+// node is Ready, and so before any fleet pod there claims an address.
+func (r *SIPAddressPoolReconciler) refusedNodes(ctx context.Context, pool *sipv1alpha1.SIPAddressPool) (map[string]string, error) {
+	spec := pool.Spec.AWSElasticIP
+	if spec == nil || spec.PrivateAddress != sipv1alpha1.AWSPrivateAddressSecondary {
+		return nil, nil
+	}
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.MatchingLabels{vpcCNILabel: "aws-node"}); err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, p := range pods.Items {
+		if p.Spec.NodeName != "" {
+			out[p.Spec.NodeName] = "it runs the Amazon VPC CNI (" + p.Namespace + "/" + p.Name + "), which manages the " +
+				"secondary addresses privateAddress Secondary assigns; use Primary, or nodes without the VPC CNI"
+		}
+	}
+	return out, nil
+}
+
 func (r *SIPAddressPoolReconciler) writePoolStatus(ctx context.Context, pool *sipv1alpha1.SIPAddressPool, status *sipv1alpha1.SIPAddressPoolStatus) error {
 	if equalJSON(&pool.Status, status) {
 		return nil
@@ -256,6 +345,15 @@ func setPoolConditions(status *sipv1alpha1.SIPAddressPoolStatus, gen int64, read
 	meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionDegraded, Status: degraded, Reason: reason, Message: msg, ObservedGeneration: gen})
 }
 
+// setProviderAvailable records whether the pass read the provider: err nil, or why not.
+func setProviderAvailable(status *sipv1alpha1.SIPAddressPoolStatus, gen int64, reason string, err error) {
+	c := metav1.Condition{Type: sipv1alpha1.PoolConditionProviderAvailable, Status: metav1.ConditionTrue, Reason: reason, Message: "the provider answered", ObservedGeneration: gen}
+	if err != nil {
+		c.Status, c.Message = metav1.ConditionFalse, err.Error()
+	}
+	meta.SetStatusCondition(&status.Conditions, c)
+}
+
 // addressPoolName is the pool a fleet draws from, or empty.
 func addressPoolName(s sipv1alpha1.ExternalAddressSpec) string {
 	if s.Source != sipv1alpha1.ExternalAddressAddressPool || s.AddressPoolRef == nil {
@@ -264,8 +362,8 @@ func addressPoolName(s sipv1alpha1.ExternalAddressSpec) string {
 	return s.AddressPoolRef.Name
 }
 
-// SetupWithManager sets up the controller with the Manager. Pools are few, so a pod, node or fleet event
-// requeues every pool; the planner finds nothing to do for those it doesn't concern.
+// SetupWithManager sets up the controller with the Manager. Pools are few, so a pod, node, fleet or address agent
+// event requeues every pool; the planner finds nothing to do for those it doesn't concern.
 func (r *SIPAddressPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	allPools := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, _ client.Object) []reconcile.Request {
 		var list sipv1alpha1.SIPAddressPoolList
@@ -293,6 +391,10 @@ func (r *SIPAddressPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			return fleetPod(n) && o.Spec.NodeName != n.Spec.NodeName
 		},
 	}
+	// An address agent's report is an annotation on its own pod; creating and deleting one pass too.
+	agentPod := predicate.NewPredicateFuncs(func(o client.Object) bool {
+		return o.GetLabels()[sipv1alpha1.AppNameLabel] == sipv1alpha1.AddressAgentName
+	})
 	// Nodes matter when they come and go, or when their provider ID appears.
 	nodeChanges := predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
@@ -302,6 +404,7 @@ func (r *SIPAddressPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sipv1alpha1.SIPAddressPool{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&corev1.Pod{}, allPools, builder.WithPredicates(podClaims)).
+		Watches(&corev1.Pod{}, allPools, builder.WithPredicates(agentPod, predicate.AnnotationChangedPredicate{})).
 		Watches(&corev1.Node{}, allPools, builder.WithPredicates(nodeChanges)).
 		Watches(&sipv1alpha1.FreeswitchCluster{}, allPools, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&sipv1alpha1.KamailioCluster{}, allPools, builder.WithPredicates(predicate.GenerationChangedPredicate{})).

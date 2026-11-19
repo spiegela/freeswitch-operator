@@ -24,7 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -41,12 +40,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
@@ -149,11 +146,9 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	pods := podList.Items
 	slices.SortFunc(pods, func(a, b corev1.Pod) int { return strings.Compare(a.Name, b.Name) })
 
-	awaiting, err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods)
-	if err != nil {
+	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods); err != nil {
 		return ctrl.Result{}, err
 	}
-	fleetAwaitingAddressAgent.WithLabelValues(fleet.labels()...).Set(float64(awaiting))
 
 	if confErr == nil {
 		if err := r.pruneConfigSnapshots(ctx, &fsc, conf, sts, pods); err != nil {
@@ -389,29 +384,16 @@ func templateHash(t *corev1.PodTemplateSpec) (string, error) {
 }
 
 // syncExternalAddresses writes each pod's external address annotation: its node's ExternalIP, or the address the
-// fleet's SIPAddressPool has bound to its node. FreeSWITCH and Kamailio pods both read it from their downward-API
-// volume.
-//
-// It returns how many pods wait for their node's address agent: the pool has bound their node an address whose bind
-// address the agent hasn't reported on the node's interface yet.
-func syncExternalAddresses(ctx context.Context, c client.Client, source sipv1alpha1.ExternalAddressSource, poolName string, pods []corev1.Pod) (int, error) {
+// fleet's SIPAddressPool has bound to its node, with the bind address when it has one. FreeSWITCH and Kamailio pods
+// both read them from their downward-API volume.
+func syncExternalAddresses(ctx context.Context, c client.Client, source sipv1alpha1.ExternalAddressSource, poolName string, pods []corev1.Pod) error {
 	var pool sipv1alpha1.SIPAddressPool
 	if source == sipv1alpha1.ExternalAddressAddressPool {
 		// A missing pool binds nothing, so every pod goes without.
 		if err := c.Get(ctx, types.NamespacedName{Name: poolName}, &pool); client.IgnoreNotFound(err) != nil {
-			return 0, err
+			return err
 		}
 	}
-	// The pod gets its addresses only once its node has the bind address on an interface: both are read once, at
-	// start, and a pod that started before could bind nothing that reaches it.
-	var onNodes map[string][]string // node to the bind addresses its agent reports
-	if source == sipv1alpha1.ExternalAddressAddressPool && addresspool.NeedsNodeAddress(&pool.Spec) {
-		var err error
-		if onNodes, err = agentBindAddresses(ctx, c); err != nil {
-			return 0, err
-		}
-	}
-	awaiting := 0
 	for i := range pods {
 		p := &pods[i]
 		if p.DeletionTimestamp != nil || p.Spec.NodeName == "" {
@@ -425,27 +407,20 @@ func syncExternalAddresses(ctx context.Context, c client.Client, source sipv1alp
 				if apierrors.IsNotFound(err) {
 					continue
 				}
-				return 0, err
+				return err
 			}
 			want = nodeExternalAddress(&node)
 		case sipv1alpha1.ExternalAddressAddressPool:
-			b := addresspool.BindingForNode(&pool.Status, p.Spec.NodeName)
-			switch {
-			case b == nil:
-			case onNodes == nil:
-				want = b.Address
-			case b.BindAddress == "":
-			case slices.Contains(onNodes[p.Spec.NodeName], b.BindAddress):
+			// The pool hands out an address with a bind address only once the node has it on an interface.
+			if b := addresspool.BindingForNode(&pool.Status, p.Spec.NodeName); b != nil {
 				want, wantBind = b.Address, b.BindAddress
-			default:
-				awaiting++
 			}
 		}
 		if err := setAddressAnnotations(ctx, c, p, want, wantBind); err != nil {
-			return 0, err
+			return err
 		}
 	}
-	return awaiting, nil
+	return nil
 }
 
 // setAddressAnnotations sets a pod's external and bind address annotations, removing those that are empty.
@@ -474,74 +449,37 @@ func setAddressAnnotations(ctx context.Context, c client.Client, p *corev1.Pod, 
 	return nil
 }
 
-// agentBindAddresses reads what the address agents report, by node. Only agent pods in the operator's own
-// namespace count (POD_NAMESPACE; every namespace when it is unset, as under make run).
-func agentBindAddresses(ctx context.Context, c client.Client) (map[string][]string, error) {
-	var pods corev1.PodList
-	opts := []client.ListOption{client.MatchingLabels{sipv1alpha1.AppNameLabel: sipv1alpha1.AddressAgentName}}
-	if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
-		opts = append(opts, client.InNamespace(ns))
-	}
-	if err := c.List(ctx, &pods, opts...); err != nil {
-		return nil, err
-	}
-	out := map[string][]string{}
-	for i := range pods.Items {
-		p := &pods.Items[i]
-		if p.Spec.NodeName != "" && p.DeletionTimestamp == nil {
-			out[p.Spec.NodeName] = append(out[p.Spec.NodeName], addresspool.ReportedBindAddresses(p)...)
-		}
-	}
-	return out, nil
-}
-
-// fleetLister lists the fleets of one kind, with each one's external address spec.
-type fleetLister func(ctx context.Context) ([]client.Object, []sipv1alpha1.ExternalAddressSpec, error)
-
-// fleetsDrawingFrom returns a request for each fleet whose pool matches.
-func fleetsDrawingFrom(ctx context.Context, list fleetLister, match func(pool string) bool) []reconcile.Request {
-	objs, specs, err := list(ctx)
-	if err != nil {
-		return nil
-	}
-	var out []reconcile.Request
-	for i, obj := range objs {
-		if pool := addressPoolName(specs[i]); pool != "" && match(pool) {
-			out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}})
-		}
-	}
-	return out
-}
-
-// poolToFleets maps a SIPAddressPool to the fleets of one kind that draw from it.
-func poolToFleets(list fleetLister) handler.EventHandler {
+// fleetsUsingPool maps a SIPAddressPool to the fleets of one kind (listed into newList) that draw from it.
+func fleetsUsingPool(c client.Reader, newList func() client.ObjectList) handler.EventHandler {
 	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
-		return fleetsDrawingFrom(ctx, list, func(pool string) bool { return pool == o.GetName() })
-	})
-}
-
-// agentToFleets maps a change to an address agent's report to the fleets of one kind that draw from a pool whose
-// addresses need the agent. Use it with agentReports.
-func agentToFleets(c client.Reader, list fleetLister) handler.EventHandler {
-	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, _ client.Object) []reconcile.Request {
-		needs := map[string]bool{}
-		return fleetsDrawingFrom(ctx, list, func(name string) bool {
-			v, ok := needs[name]
-			if !ok {
-				var pool sipv1alpha1.SIPAddressPool
-				v = c.Get(ctx, types.NamespacedName{Name: name}, &pool) == nil && addresspool.NeedsNodeAddress(&pool.Spec)
-				needs[name] = v
+		list := newList()
+		if err := c.List(ctx, list); err != nil {
+			return nil
+		}
+		items, err := meta.ExtractList(list)
+		if err != nil {
+			return nil
+		}
+		var out []reconcile.Request
+		for _, item := range items {
+			if f, ok := item.(client.Object); ok && addressPoolName(externalAddressOf(f)) == o.GetName() {
+				out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(f)})
 			}
-			return v
-		})
+		}
+		return out
 	})
 }
 
-// agentReports passes the address agents' pods, and of their updates only those that change an annotation (the
-// report); creating and deleting one passes too.
-var agentReports = builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
-	return o.GetLabels()[sipv1alpha1.AppNameLabel] == sipv1alpha1.AddressAgentName
-}), predicate.AnnotationChangedPredicate{})
+// externalAddressOf is a fleet's external address spec.
+func externalAddressOf(o client.Object) sipv1alpha1.ExternalAddressSpec {
+	switch f := o.(type) {
+	case *sipv1alpha1.FreeswitchCluster:
+		return f.Spec.ExternalAddress
+	case *sipv1alpha1.KamailioCluster:
+		return f.Spec.ExternalAddress
+	}
+	return sipv1alpha1.ExternalAddressSpec{}
+}
 
 // syncDispatcher renders the dispatcher list from the ready endpoints, writes it when it changes, takes leaving
 // nodes out of a running Kamailio at once, and asks Kamailio to reload once the kubelet has had time to update
@@ -772,18 +710,6 @@ func (r *FreeswitchClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return out
 	})
 
-	var fleets fleetLister = func(ctx context.Context) ([]client.Object, []sipv1alpha1.ExternalAddressSpec, error) {
-		var list sipv1alpha1.FreeswitchClusterList
-		if err := r.List(ctx, &list); err != nil {
-			return nil, nil, err
-		}
-		objs := make([]client.Object, len(list.Items))
-		specs := make([]sipv1alpha1.ExternalAddressSpec, len(list.Items))
-		for i := range list.Items {
-			objs[i], specs[i] = &list.Items[i], list.Items[i].Spec.ExternalAddress
-		}
-		return objs, specs, nil
-	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sipv1alpha1.FreeswitchCluster{}).
 		Owns(&appsv1.StatefulSet{}).
@@ -794,8 +720,7 @@ func (r *FreeswitchClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&discoveryv1.EndpointSlice{}, sliceToCluster).
 		Watches(&corev1.Node{}, nodeToClusters).
 		Watches(&corev1.ConfigMap{}, configToClusters).
-		Watches(&sipv1alpha1.SIPAddressPool{}, poolToFleets(fleets)).
-		Watches(&corev1.Pod{}, agentToFleets(mgr.GetClient(), fleets), agentReports).
+		Watches(&sipv1alpha1.SIPAddressPool{}, fleetsUsingPool(mgr.GetClient(), func() client.ObjectList { return &sipv1alpha1.FreeswitchClusterList{} })).
 		Named("freeswitchcluster").
 		Complete(r)
 }

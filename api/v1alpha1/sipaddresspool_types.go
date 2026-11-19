@@ -24,11 +24,32 @@ import (
 // SIPAddressPoolSpec names the addresses in a pool and the provider that binds them to nodes. Exactly one provider
 // block is set. The operator never allocates or releases an address: peers allow-list them, so the pool is a fixed
 // list, and the operator only binds and unbinds the addresses named here.
-// +kubebuilder:validation:XValidation:rule="[has(self.awsElasticIP)].filter(x, x).size() == 1",message="exactly one provider must be set"
+// +kubebuilder:validation:XValidation:rule="[has(self.awsElasticIP), has(self.metalLB)].filter(x, x).size() == 1",message="exactly one provider must be set"
 type SIPAddressPoolSpec struct {
 	// awsElasticIP draws the pool from AWS Elastic IPs, associated with each node's instance (1:1 NAT).
 	// +optional
 	AWSElasticIP *AWSElasticIPPool `json:"awsElasticIP,omitempty"`
+
+	// metalLB draws the pool from addresses MetalLB announces, from each node they are bound to (Local).
+	// +optional
+	MetalLB *MetalLBPool `json:"metalLB,omitempty"`
+}
+
+// MetalLBPool is a pool of addresses MetalLB announces (L2 or BGP). For each binding the operator makes a
+// LoadBalancer Service that asks MetalLB for the address and has it announced from the node it is bound to; the
+// operator's address agent puts the address on that node's interface, and the fleets' pods bind it.
+type MetalLBPool struct {
+	// addresses in the pool, IPv4. Each must be in a MetalLB IPAddressPool, and no other Service may request it.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=256
+	// +kubebuilder:validation:items:Format=ipv4
+	// +listType=set
+	Addresses []string `json:"addresses"`
+
+	// ipAddressPool is the MetalLB IPAddressPool the addresses are in (metallb.io/address-pool on each Service).
+	// Empty lets MetalLB find the pool that holds each address.
+	// +optional
+	IPAddressPool string `json:"ipAddressPool,omitempty"`
 }
 
 // AWSElasticIPPool is a pool of existing Elastic IPs in one region.
@@ -52,7 +73,8 @@ type AWSElasticIPPool struct {
 	// (a cluster endpoint, say) alone; the operator's address agent adds it to the node's interface, and the
 	// fleets' pods bind it (sip.instruments.com/bind-address). Secondary needs ec2:AssignPrivateIpAddresses,
 	// ec2:UnassignPrivateIpAddresses, ec2:CreateTags and ec2:DeleteTags too. Don't use it on nodes whose CNI hands
-	// out secondary addresses of the primary interface to pods (the VPC CNI does): it could hand out this one.
+	// out secondary addresses of the primary interface to pods (the VPC CNI does): it could hand out this one, fill the
+	// interface's address limit, or release it. The pool refuses new bindings to nodes running the VPC CNI's aws-node.
 	// +kubebuilder:validation:Enum=Primary;Secondary
 	// +kubebuilder:default=Primary
 	// +optional
@@ -92,12 +114,13 @@ const (
 	AddressFencingAdvisory AddressFencing = "Advisory"
 )
 
-// The pool's Ready condition, and the reasons it gives when the pool couldn't read its provider. The address agent
-// reads them to tell whether a pool's status is current.
+// The pool's conditions. ProviderAvailable is True while the pool reads its provider, so its status is current; it
+// is False with reason ProviderUnavailable (no provider) or ProviderError (the provider can't answer).
 const (
-	PoolConditionReady            = "Ready"
-	PoolReasonProviderUnavailable = "ProviderUnavailable"
-	PoolReasonProviderError       = "ProviderError"
+	PoolConditionReady             = "Ready"
+	PoolConditionProviderAvailable = "ProviderAvailable"
+	PoolReasonProviderUnavailable  = "ProviderUnavailable"
+	PoolReasonProviderError        = "ProviderError"
 )
 
 // PoolAddressState is where one of a pool's addresses stands.
@@ -142,6 +165,11 @@ type PoolAddress struct {
 	// node's own: the secondary private address a NAT translates it to, or the address itself on a Local datapath.
 	// +optional
 	BindAddress string `json:"bindAddress,omitempty"`
+	// bindAddressReady means the address agent on the node reports bindAddress on the node's interface. Pods are
+	// given an address with a bindAddress only once it is: a pod that binds an address the node doesn't have yet
+	// fails, and both are read once, at start.
+	// +optional
+	BindAddressReady bool `json:"bindAddressReady,omitempty"`
 	// state of the address.
 	State PoolAddressState `json:"state"`
 	// node the address is bound to.
@@ -182,8 +210,9 @@ type SIPAddressPoolStatus struct {
 	// +optional
 	Addresses []PoolAddress `json:"addresses,omitempty"`
 
-	// conditions: Ready (every node running a pod that uses the pool holds one of its addresses, and the provider
-	// answered) and Degraded (a node is waiting for an address, or an address is in Conflict or Error).
+	// conditions: Ready (every node running a pod that uses the pool holds one of its addresses, ready to use, and
+	// the provider answered), Degraded (a node is waiting for an address, or an address is in Conflict or Error),
+	// and ProviderAvailable (the pool read its provider on its last pass).
 	// +listType=map
 	// +listMapKey=type
 	// +optional

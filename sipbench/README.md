@@ -374,7 +374,9 @@ A minimal SBC, deliberately small enough to read in one sitting:
   `ESL_LISTEN_IP`.
 - **External address.** `ext-sip-ip`/`ext-rtp-ip` on `trunks` come from
   `/etc/freeswitch-operator/podinfo/external-address` (override the path with `FS_EXTERNAL_ADDRESS_FILE`), or this
-  host's first IPv4 address when the file is absent (`bin/external-address.sh`; dual-stack hosts may list IPv6 first).
+  host's first IPv4 address when the file is absent (`bin/podinfo.sh`; dual-stack hosts may list IPv6 first). With a
+  `bind-address` file (`FS_BIND_ADDRESS_FILE`) RTP binds that address (`rtp-ip`) and `ext-sip-ip` stays
+  `local_ip_v4`, where SIP listens.
 - **Event socket** on 8021 (password `ClueCon`, limited to private ranges by the `bench` ACL), on all addresses
   by default for the compose runner. On a cluster set `ESL_LISTEN_IP=127.0.0.1`: `fs_cli` and the operator's ready
   and drain scripts reach it there. Change the password before exposing it anywhere.

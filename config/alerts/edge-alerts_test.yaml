@@ -179,7 +179,7 @@ tests:
         values: '0x40'
       - series: 'freeswitch_operator_address_pool_last_observed_timestamp_seconds{job="freeswitch-operator",pool="edge"}'
         values: '0x40'
-      - series: 'freeswitch_operator_fleet_pods_awaiting_address_agent{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge"}'
+      - series: 'freeswitch_operator_address_pool_addresses_awaiting_agent{job="freeswitch-operator",pool="edge"}'
         values: '1x10'
     alert_rule_test:
       - eval_time: 5m
@@ -229,11 +229,12 @@ tests:
                 Addresses stay where they are, but nothing new is bound and a replaced node waits. Check the provider's
                 credentials and the operator's logs (freeswitch_operator_address_pool_provider_calls_total).
       - eval_time: 5m
-        alertname: EdgePodsAwaitingAddressAgent
+        alertname: AddressPoolAwaitingAddressAgent
         exp_alerts:
-          - exp_labels: {severity: warning, job: freeswitch-operator, kind: FreeswitchCluster, namespace: telephony, name: edge}
+          - exp_labels: {severity: warning, job: freeswitch-operator, pool: edge}
             exp_annotations:
-              summary: "1 pod(s) of FreeswitchCluster telephony/edge wait for the address agent"
+              summary: "1 address(es) of SIPAddressPool edge wait for the address agent"
               description: >
-                Their node holds their pool address, but the address agent on it hasn't reported the bind address on
-                the node's interface. Check that the address agent runs on that node and its logs.
+                Their node holds the address, but its address agent doesn't report the bind address on the node's
+                interface, so the node's pods get no address. Check that the address agent runs on the nodes the pool's
+                status names (its Ready condition says which) and its logs.

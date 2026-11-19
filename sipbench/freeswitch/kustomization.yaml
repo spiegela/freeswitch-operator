@@ -30,6 +30,5 @@ configMapGenerator:
       - conf/sip_profiles/trunks.xml
   - name: freeswitch-bin           # path: bin
     files:
-      - conf/bin/bind-address.sh
       - conf/bin/env.sh
-      - conf/bin/external-address.sh
+      - conf/bin/podinfo.sh

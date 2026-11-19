@@ -43,7 +43,7 @@ spec:
             - {name: SIPBENCH_MOCK, value: "http://mockbackend:8080"}
             - {name: SIPBENCH_ESL, value: ""}             # set but empty: no event socket
             - {name: SIPBENCH_TARGET, value: "0.0.0.0:5090"}
-            - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma,proxy,netem,sip-trace"}  # proxy: the edge address is Kamailio
+            - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma,proxy,netem,sip-trace,address-pool"}  # proxy: the edge address is Kamailio; address-pool: the fleet draws from edge-media
             - {name: SIPBENCH_FLEET, value: "telephony/edge"}    # namespace/name; empty skips the fleet scenarios
             - {name: SIPBENCH_PROMETHEUS, value: "http://prometheus.monitoring.svc:9090"}  # metric checks; empty skips them
             - {name: SIPBENCH_RUN, value: ""}             # a regexp picking scenarios by name; hack/kind.sh bench sets it

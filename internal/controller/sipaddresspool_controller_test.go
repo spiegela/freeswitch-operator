@@ -89,8 +89,7 @@ var _ = Describe("SIPAddressPool controller", func() {
 	syncFleet := func(w world) {
 		var pods corev1.PodList
 		Expect(k8sClient.List(ctx, &pods, client.InNamespace(w.ns))).To(Succeed())
-		_, err := syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items)
-		Expect(err).NotTo(HaveOccurred())
+		Expect(syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items)).To(Succeed())
 	}
 
 	It("binds an address to each node running a pod of a fleet that uses the pool, and the pods advertise it", func() {
@@ -114,15 +113,18 @@ var _ = Describe("SIPAddressPool controller", func() {
 			"203.0.113.10": sipv1alpha1.PoolAddressBound, "203.0.113.11": sipv1alpha1.PoolAddressBound, "203.0.113.12": sipv1alpha1.PoolAddressFree,
 		}))
 
+		By("the pods get the addresses only once a read confirms them")
 		syncFleet(w)
-		Expect(annotation(w.ns, "edge-0")).To(Equal("203.0.113.10"))
-		Expect(annotation(w.ns, "edge-1")).To(Equal("203.0.113.11"))
+		Expect(annotation(w.ns, "edge-0")).To(BeEmpty())
 
-		By("a second pass finds nothing to do")
+		By("a second pass confirms them, and finds nothing to do")
 		w.fake.ResetCalls()
 		res, _ = reconcilePool(w)
 		Expect(w.fake.CallLog()).To(BeEmpty())
 		Expect(res.RequeueAfter).To(Equal(poolResync))
+		syncFleet(w)
+		Expect(annotation(w.ns, "edge-0")).To(Equal("203.0.113.10"))
+		Expect(annotation(w.ns, "edge-1")).To(Equal("203.0.113.11"))
 	})
 
 	It("moves a replaced node's address to the node its pod comes back on", func() {
@@ -146,8 +148,9 @@ var _ = Describe("SIPAddressPool controller", func() {
 		Expect(k8sClient.Create(ctx, fsPod(w.ns, "edge-1", c, "r1"))).To(Succeed())
 
 		w.fake.ResetCalls()
-		_, pool := reconcilePool(w)
+		reconcilePool(w)
 		Expect(w.fake.CallLog()).To(Equal([]string{"unbind " + id1, "bind " + id1 + " " + c}))
+		_, pool := reconcilePool(w)
 		Expect(addresspool.BindingForNode(&pool.Status, c)).To(HaveField("Address", "203.0.113.21"))
 		syncFleet(w)
 		Expect(annotation(w.ns, "edge-1")).To(Equal("203.0.113.21"))
@@ -168,6 +171,7 @@ var _ = Describe("SIPAddressPool controller", func() {
 		Expect(k8sClient.Create(ctx, kp)).To(Succeed())
 		Expect(k8sClient.Create(ctx, fsPod(w.ns, "edge-0", mediaNode, "r1"))).To(Succeed())
 
+		reconcilePool(w)
 		_, pool := reconcilePool(w)
 		claims := map[string]string{}
 		for _, a := range pool.Status.Addresses {
@@ -178,8 +182,7 @@ var _ = Describe("SIPAddressPool controller", func() {
 
 		var pods corev1.PodList
 		Expect(k8sClient.List(ctx, &pods, client.InNamespace(w.ns), client.MatchingLabels{sipv1alpha1.KamailioClusterLabel: "proxy"})).To(Succeed())
-		_, err := syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items)
-		Expect(err).NotTo(HaveOccurred())
+		Expect(syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items)).To(Succeed())
 		Expect(addresspool.BindingForNode(&pool.Status, proxyNode)).NotTo(BeNil())
 		Expect(annotation(w.ns, "proxy-0")).To(Equal(addresspool.BindingForNode(&pool.Status, proxyNode).Address))
 		Expect(annotation(w.ns, "proxy-0")).NotTo(BeEmpty())
@@ -195,6 +198,12 @@ var _ = Describe("SIPAddressPool controller", func() {
 		Expect(w.fake.CallLog()).To(Equal([]string{fmt.Sprintf("bind eipalloc-%d1 %s", poolCounter, a)}))
 		Expect(pool.Status.Addresses[0].State).To(Equal(sipv1alpha1.PoolAddressConflict))
 		Expect(meta.IsStatusConditionTrue(pool.Status.Conditions, conditionDegraded)).To(BeTrue())
+
+		By("the next pass leaves it alone too")
+		w.fake.ResetCalls()
+		_, pool = reconcilePool(w)
+		Expect(w.fake.CallLog()).To(BeEmpty())
+		Expect(pool.Status.Addresses[0].State).To(Equal(sipv1alpha1.PoolAddressConflict))
 	})
 
 	It("records a failed bind, keeps the pod without an address, and binds on the next pass", func() {
@@ -213,6 +222,7 @@ var _ = Describe("SIPAddressPool controller", func() {
 
 		_, pool = reconcilePool(w)
 		Expect(pool.Status.Addresses[0].State).To(Equal(sipv1alpha1.PoolAddressBound))
+		reconcilePool(w)
 		syncFleet(w)
 		Expect(annotation(w.ns, "edge-0")).To(Equal("203.0.113.40"))
 	})
@@ -239,23 +249,75 @@ var _ = Describe("SIPAddressPool controller", func() {
 		_, st = reconcilePool(w)
 		Expect(st.Status.Addresses[0].BindAddress).To(Equal("10.0.9.70"))
 
+		Expect(st.Status.Addresses[0].BindAddressReady).To(BeFalse())
+		Expect(meta.FindStatusCondition(st.Status.Conditions, conditionReady).Message).To(ContainSubstring("waits for its address agent"))
+
 		By("no agent has reported it, so the pod gets neither address")
 		syncFleet(w)
 		Expect(annotation(w.ns, "edge-0")).To(BeEmpty())
 		Expect(bindAnnotation()).To(BeEmpty())
 
-		By("the agent on the node reports it")
+		By("the agent on the node reports it, and the pool hands it out")
 		agentNS := newNamespace(ctx)
-		agent := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: agentNS,
-				Labels:      map[string]string{"app.kubernetes.io/name": sipv1alpha1.AddressAgentName},
-				Annotations: map[string]string{sipv1alpha1.AgentBindAddressesAnnotation: "10.0.9.70"}},
-			Spec: corev1.PodSpec{NodeName: a, Containers: []corev1.Container{{Name: "agent", Image: "agent"}}},
+		w.r.AgentNamespace = agentNS
+		agent := func(name string, annotations map[string]string) *corev1.Pod {
+			return &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: agentNS, Annotations: annotations,
+					Labels: map[string]string{sipv1alpha1.AppNameLabel: sipv1alpha1.AddressAgentName}},
+				Spec: corev1.PodSpec{NodeName: a, Containers: []corev1.Container{{Name: "agent", Image: "agent"}}},
+			}
 		}
-		Expect(k8sClient.Create(ctx, agent)).To(Succeed())
+		first := agent("agent-1", map[string]string{sipv1alpha1.AgentBindAddressesAnnotation: "10.0.9.70"})
+		Expect(k8sClient.Create(ctx, first)).To(Succeed())
+		_, st = reconcilePool(w)
+		Expect(st.Status.Addresses[0].BindAddressReady).To(BeTrue())
+		Expect(meta.IsStatusConditionTrue(st.Status.Conditions, conditionReady)).To(BeTrue())
 		syncFleet(w)
 		Expect(annotation(w.ns, "edge-0")).To(Equal("203.0.113.70"))
 		Expect(bindAnnotation()).To(Equal("10.0.9.70"))
+
+		By("a replacement agent that hasn't reported yet leaves it ready")
+		Expect(k8sClient.Delete(ctx, first)).To(Succeed())
+		Expect(k8sClient.Create(ctx, agent("agent-2", nil))).To(Succeed())
+		_, st = reconcilePool(w)
+		Expect(st.Status.Addresses[0].BindAddressReady).To(BeTrue())
+
+		By("an agent that reports it gone takes it back from the pods")
+		var second corev1.Pod
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: agentNS, Name: "agent-2"}, &second)).To(Succeed())
+		second.Annotations = map[string]string{sipv1alpha1.AgentBindAddressesAnnotation: ""}
+		Expect(k8sClient.Update(ctx, &second)).To(Succeed())
+		_, st = reconcilePool(w)
+		Expect(st.Status.Addresses[0].BindAddressReady).To(BeFalse())
+		syncFleet(w)
+		Expect(annotation(w.ns, "edge-0")).To(BeEmpty())
+	})
+
+	It("refuses a Secondary pool a node running the VPC CNI, and keeps an address already there", func() {
+		w := setup("203.0.113.80", "203.0.113.81")
+		var pool sipv1alpha1.SIPAddressPool
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: w.pool}, &pool)).To(Succeed())
+		pool.Spec.AWSElasticIP.PrivateAddress = sipv1alpha1.AWSPrivateAddressSecondary
+		Expect(k8sClient.Update(ctx, &pool)).To(Succeed())
+		a, b := node(w, "a"), node(w, "b")
+		w.fake.SetBound(fmt.Sprintf("eipalloc-%d0", poolCounter), a)
+		cniNS := newNamespace(ctx)
+		for _, n := range []string{a, b} {
+			Expect(k8sClient.Create(ctx, &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "aws-node-" + n, Namespace: cniNS, Labels: map[string]string{vpcCNILabel: "aws-node"}},
+				Spec:       corev1.PodSpec{NodeName: n, Containers: []corev1.Container{{Name: "aws-node", Image: "aws-node"}}},
+			})).To(Succeed())
+		}
+		Expect(k8sClient.Create(ctx, fsPod(w.ns, "edge-0", a, "r1"))).To(Succeed())
+		Expect(k8sClient.Create(ctx, fsPod(w.ns, "edge-1", b, "r1"))).To(Succeed())
+
+		_, st := reconcilePool(w)
+		Expect(w.fake.CallLog()).To(BeEmpty())
+		Expect(st.Status.Addresses[0].State).To(Equal(sipv1alpha1.PoolAddressBound))
+		Expect(st.Status.Addresses[1].State).To(Equal(sipv1alpha1.PoolAddressFree))
+		Expect(meta.IsStatusConditionTrue(st.Status.Conditions, conditionDegraded)).To(BeTrue())
+		Expect(meta.FindStatusCondition(st.Status.Conditions, conditionReady).Message).To(
+			ContainSubstring("node " + b + " has no address: it runs the Amazon VPC CNI"))
 	})
 
 	It("reports a provider that isn't enabled", func() {
@@ -266,6 +328,7 @@ var _ = Describe("SIPAddressPool controller", func() {
 		cond := meta.FindStatusCondition(pool.Status.Conditions, conditionReady)
 		Expect(cond.Reason).To(Equal("ProviderUnavailable"))
 		Expect(cond.Message).To(ContainSubstring(`provider "aws" is not enabled`))
+		Expect(meta.FindStatusCondition(pool.Status.Conditions, sipv1alpha1.PoolConditionProviderAvailable)).To(HaveField("Status", metav1.ConditionFalse))
 	})
 
 	It("refuses a pool without a provider and a fleet source without its pool", func() {

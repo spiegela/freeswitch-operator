@@ -3,8 +3,9 @@
 # behind and in front.
 #
 #   hack/kind.sh up        create the cluster (deploy/kind/kind-config.yaml)
-#   hack/kind.sh deploy    build and load the images, install the operator, apply deploy/kind/monitoring and
-#                          deploy/kind, wait for both fleets and for every Kamailio to load the dispatcher list
+#   hack/kind.sh deploy    build and load the images, install MetalLB, the operator and the address agent, the
+#                          edge's SIPAddressPool, apply deploy/kind/monitoring and deploy/kind, wait for both
+#                          fleets and for every Kamailio to load the dispatcher list
 #   hack/kind.sh bench [re] run sipbench through Kamailio; an optional regexp picks scenarios by name, and
 #                          SIPBENCH_REPORT=<file> saves the run's JSON report there (for the report card)
 #   hack/kind.sh status    both fleets, their members and the dispatcher list each Kamailio has loaded
@@ -66,12 +67,17 @@ deploy() {
   say "pulling pinned images on the nodes"
   pull_pinned
 
-  say "installing the operator"
+  metallb
+
+  say "installing the operator and the address agent"
   "$KUSTOMIZE" build "$ROOT/deploy/kind/operator" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -
   # A rebuilt image under the same tag needs a restart to be picked up.
-  "${KUBECTL[@]}" -n freeswitch-operator-system rollout restart deployment/freeswitch-operator-controller-manager
+  "${KUBECTL[@]}" -n freeswitch-operator-system rollout restart deployment/freeswitch-operator-controller-manager \
+    daemonset/freeswitch-operator-address-agent
   "${KUBECTL[@]}" -n freeswitch-operator-system rollout status deployment/freeswitch-operator-controller-manager --timeout=120s
+  "${KUBECTL[@]}" -n freeswitch-operator-system rollout status daemonset/freeswitch-operator-address-agent --timeout=120s
   wait_leader 120
+  address_pool
 
   # M1 ran Kamailio from deploy/examples/kamailio, by hand; it holds the proxy nodes' SIP and RPC ports.
   "${KUBECTL[@]}" -n "$NS" delete deployment/kamailio service/kamailio configmap/kamailio-config \
@@ -93,6 +99,65 @@ deploy() {
   wait_proxy $(($("${KUBECTL[@]}" -n "$NS" get kamailiocluster "$PROXY" \
     -o jsonpath='{.spec.reloadDelaySeconds}') + 180))
   status
+}
+
+metallb() {
+  say "installing MetalLB (deploy/kind/metallb)"
+  "$KUSTOMIZE" build "$ROOT/deploy/kind/metallb" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -
+  "${KUBECTL[@]}" -n metallb-system rollout status deployment/controller --timeout=180s
+  "${KUBECTL[@]}" -n metallb-system rollout status daemonset/speaker --timeout=180s
+}
+
+# The edge's SIPAddressPool: four addresses (three edge nodes and a spare) at the top of kind's Docker network,
+# which Docker hands out from the bottom. kind makes it an IPv4 /16.
+pool_addresses() {
+  local subnet
+  subnet=$(docker network inspect kind -f '{{range .IPAM.Config}}{{println .Subnet}}{{end}}' | grep -v : | head -n 1)
+  case "$subnet" in
+    *.0.0/16) ;;
+    *) echo "kind's network is ${subnet:-unknown}; the pool's addresses assume an IPv4 /16" >&2; return 1 ;;
+  esac
+  local base="${subnet%.0.0/16}" i
+  for i in 200 201 202 203; do echo "$base.255.$i"; done
+}
+
+# MetalLB's IPAddressPool and L2Advertisement for the pool's addresses, and the SIPAddressPool the edge draws from.
+# The pool's addresses must be requested by name (autoAssign off), and are announced from the edge nodes only.
+address_pool() {
+  local addrs list cidrs i
+  addrs=$(pool_addresses)
+  list=$(echo "$addrs" | paste -s -d, -)
+  cidrs=$(echo "$addrs" | sed 's|$|/32|' | paste -s -d, -)
+  say "address pool edge-media: $list"
+  # MetalLB's webhook may take a few seconds after its rollout to answer.
+  for i in 1 2 3 4 5 6; do
+    if "${KUBECTL[@]}" apply --server-side --force-conflicts -f - <<EOF; then break; fi
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata: {name: sip-edge, namespace: metallb-system}
+spec:
+  addresses: [$cidrs]
+  autoAssign: false
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata: {name: sip-edge, namespace: metallb-system}
+spec:
+  ipAddressPools: [sip-edge]
+  nodeSelectors:
+    - matchLabels: {node-role.example.com/sip-edge: "true"}
+---
+apiVersion: sip.instruments.com/v1alpha1
+kind: SIPAddressPool
+metadata: {name: edge-media}
+spec:
+  metalLB:
+    ipAddressPool: sip-edge
+    addresses: [$list]
+EOF
+    [ "$i" = 6 ] && return 1
+    sleep 5
+  done
 }
 
 # kamailio_rpc <pod> <method> makes one JSON-RPC call to a Kamailio pod from inside it: at the pod's own address,
@@ -177,6 +242,8 @@ wait_fleet() {
 }
 
 status() {
+  "${KUBECTL[@]}" get sipaddresspool edge-media \
+    -o jsonpath='{range .status.addresses[*]}{.address}{"\t"}{.state}{"\t"}{.node}{"\tready="}{.bindAddressReady}{"\n"}{end}'
   "${KUBECTL[@]}" -n "$NS" get freeswitchcluster edge
   "${KUBECTL[@]}" -n "$NS" get pods -o wide -l app.kubernetes.io/name=freeswitch
   "${KUBECTL[@]}" -n "$NS" get freeswitchcluster edge \

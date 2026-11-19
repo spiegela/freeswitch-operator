@@ -13,6 +13,10 @@ import (
 
 // sdpConnectionAddress returns the address an SDP body says to send audio to: the c= line of its first audio
 // section, else the session's c= line. "" when it has neither.
+//
+// Not diago's media/sdp, nor the remote address of its media session (built from it): that parser flattens the
+// sections and prefers a session-level c= over the audio section's, where RFC 4566 says the media level wins.
+// An edge that puts its pool address on the audio section only would be checked against the wrong address.
 func sdpConnectionAddress(body []byte) string {
 	var session, media string
 	section := "" // "" is the session level; otherwise the m= line's media type

@@ -35,6 +35,13 @@ type Input struct {
 	Claimants []Claimant
 	// Previous is the pool's status before this pass: who claimed each address last, and where the pool bound it.
 	Previous []sipv1alpha1.PoolAddress
+	// NodeAddresses are the bind addresses each node's address agent reports on the node's interface. A node
+	// missing from it has no report (no agent, or a new one before its first pass): its addresses keep the
+	// readiness they had.
+	NodeAddresses map[string][]string
+	// Refused are nodes the pool must not bind a new address to, with why (an AWS Secondary pool on a node whose VPC
+	// CNI manages the same interface's secondary addresses). They wait; an address already bound there stays.
+	Refused map[string]string
 }
 
 // Step is one provider call. A move is two steps on one address: Unbind, then Bind.
@@ -77,11 +84,34 @@ func Decide(in Input) Plan {
 			st.ClaimedBy = pl.claims[st.Node]
 			st.LastClaimedBy = pl.claims[st.Node]
 		}
+		pl.bindAddressReady(st)
+		if msg := pl.notReady[i]; msg != "" {
+			// Bound, but not to be handed out: the provider says it can't carry traffic yet, or this pass bound
+			// it and the next read confirms it.
+			st.Message, st.BindAddressReady = msg, false
+			if st.State == sipv1alpha1.PoolAddressBound && len(pl.steps[i]) == 0 {
+				pl.waiting[st.Node] = "its address " + st.Address + " can't be used yet: " + msg
+			}
+		}
 		if len(pl.steps[i]) > 0 {
 			plan.Steps = append(plan.Steps, pl.steps[i])
 		}
 	}
 	return plan
+}
+
+// bindAddressReady records whether the node's address agent has an address's bind address on its interface.
+func (pl *planner) bindAddressReady(st *sipv1alpha1.PoolAddress) {
+	if st.BindAddress == "" || st.Node == "" {
+		st.BindAddressReady = false
+		return
+	}
+	if have, ok := pl.in.NodeAddresses[st.Node]; ok {
+		st.BindAddressReady = slices.Contains(have, st.BindAddress)
+		return
+	}
+	p := pl.prev[st.ID]
+	st.BindAddressReady = p.BindAddressReady && p.Node == st.Node && p.BindAddress == st.BindAddress
 }
 
 // planner is one pass of Decide in progress.
@@ -93,6 +123,7 @@ type planner struct {
 	prev         map[string]sipv1alpha1.PoolAddress    // by address ID
 	status       []sipv1alpha1.PoolAddress
 	steps        [][]Step
+	notReady     []string        // by address: why a bound address isn't to be handed out yet
 	served       map[string]bool // nodes that hold a Bound address
 	waiting      map[string]string
 }
@@ -102,7 +133,7 @@ func newPlanner(in Input) *planner {
 		in: in, nodeByID: map[string]string{}, nodeIDByName: map[string]string{},
 		claims: map[string][]sipv1alpha1.AddressClaim{}, prev: map[string]sipv1alpha1.PoolAddress{},
 		status: make([]sipv1alpha1.PoolAddress, len(in.Observed)), steps: make([][]Step, len(in.Observed)),
-		served: map[string]bool{}, waiting: map[string]string{},
+		notReady: make([]string, len(in.Observed)), served: map[string]bool{}, waiting: map[string]string{},
 	}
 	for _, n := range in.Nodes {
 		if n.ID != "" {
@@ -130,7 +161,7 @@ func (pl *planner) observe(i int, a Address) {
 	case a.Err != nil:
 		st.Address = cmp.Or(a.IP, p.Address)
 		st.State, st.Node, st.NodeID, st.Message = sipv1alpha1.PoolAddressError, p.Node, p.NodeID, a.Err.Error()
-		st.ClaimedBy, st.BindAddress = p.ClaimedBy, p.BindAddress
+		st.ClaimedBy, st.BindAddress = p.ClaimedBy, cmp.Or(a.BindIP, p.BindAddress)
 		// Not knowing where an address is now is no reason to give its node another one.
 		if p.Node != "" && (p.State == sipv1alpha1.PoolAddressBound || p.State == sipv1alpha1.PoolAddressError) {
 			pl.served[p.Node] = true
@@ -143,10 +174,12 @@ func (pl *planner) observe(i int, a Address) {
 		case inCluster && len(pl.claims[node]) > 0 && !pl.served[node]:
 			pl.served[node] = true
 			st.State, st.Node, st.NodeID, st.BindAddress = sipv1alpha1.PoolAddressBound, node, a.NodeID, a.BindIP
+			pl.notReady[i] = a.NotReady
 		case inCluster:
 			st.State, st.Node, st.NodeID, st.BindAddress = sipv1alpha1.PoolAddressIdle, node, a.NodeID, a.BindIP
-		case p.NodeID == a.NodeID:
-			// The pool bound it to a node that has left the cluster.
+			pl.notReady[i] = a.NotReady
+		case p.NodeID == a.NodeID && p.State != sipv1alpha1.PoolAddressConflict:
+			// The pool bound it to a node that has left the cluster. (A Conflict was never the pool's: it stays one.)
 			pl.steps[i] = append(pl.steps[i], Step{Unbind: true, Address: a})
 			st.State = sipv1alpha1.PoolAddressFree
 		default:
@@ -172,6 +205,10 @@ func (pl *planner) assign() {
 	for _, sticky := range []bool{true, false} {
 		for _, node := range needy {
 			if pl.served[node] {
+				continue
+			}
+			if why, refused := pl.in.Refused[node]; refused {
+				pl.waiting[node] = why
 				continue
 			}
 			if pl.nodeIDByName[node] == "" {
@@ -218,8 +255,10 @@ func (pl *planner) give(node string, i int) {
 	}
 	id := pl.nodeIDByName[node]
 	pl.steps[i] = append(pl.steps[i], Step{Address: a, NodeID: id, Node: node})
-	// The bind address, if the provider uses one, is known once the provider has bound it: the next pass reads it.
+	// The bind address, if the provider uses one, is known once the provider has bound it: the next pass reads it,
+	// and until then the node's pods aren't given the address.
 	pl.status[i].State, pl.status[i].Node, pl.status[i].NodeID, pl.status[i].BindAddress = sipv1alpha1.PoolAddressBound, node, id, ""
+	pl.notReady[i] = "binding to " + node + "; the provider's next read confirms it"
 	pl.served[node] = true
 }
 
@@ -227,12 +266,14 @@ func compareClaims(a, b sipv1alpha1.AddressClaim) int {
 	return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name), cmp.Compare(a.Pod, b.Pod))
 }
 
-// BindingForNode returns the pool's address bound to a node for its pods, or nil. An address in Error that was last
-// seen on the node still counts: a provider that can't answer for a while is no reason to make the node's pods
-// unready.
+// BindingForNode returns the pool's address bound to a node, ready for its pods, or nil. An address in Error that
+// was last seen on the node still counts: a provider that can't answer for a while is no reason to make the node's
+// pods unready. One with a bind address counts once the node has it (BindAddressReady). A Bound one with a message
+// doesn't count yet: the provider can't use it, or hasn't confirmed binding it.
 func BindingForNode(status *sipv1alpha1.SIPAddressPoolStatus, node string) *sipv1alpha1.PoolAddress {
 	for i, a := range status.Addresses {
-		if a.Node != node || len(a.ClaimedBy) == 0 {
+		if a.Node != node || len(a.ClaimedBy) == 0 || (a.BindAddress != "" && !a.BindAddressReady) ||
+			(a.State == sipv1alpha1.PoolAddressBound && a.Message != "") {
 			continue
 		}
 		if a.State == sipv1alpha1.PoolAddressBound || a.State == sipv1alpha1.PoolAddressError {
@@ -240,6 +281,12 @@ func BindingForNode(status *sipv1alpha1.SIPAddressPoolStatus, node string) *sipv
 		}
 	}
 	return nil
+}
+
+// AwaitingAgent says whether an address is bound for pods but its node's address agent doesn't report its bind
+// address yet (and nothing else holds it back: see BindingForNode).
+func AwaitingAgent(a *sipv1alpha1.PoolAddress) bool {
+	return a.State == sipv1alpha1.PoolAddressBound && a.BindAddress != "" && !a.BindAddressReady && a.Message == ""
 }
 
 // NodeBindAddresses returns the bind addresses a pool gives a node's interface: those of its addresses on the node
@@ -262,6 +309,5 @@ func NodeBindAddresses(status *sipv1alpha1.SIPAddressPoolStatus, node string) []
 // ProviderRead says whether a pool's status comes from a successful read of its provider, so that an address
 // missing from it is really gone.
 func ProviderRead(status *sipv1alpha1.SIPAddressPoolStatus) bool {
-	c := meta.FindStatusCondition(status.Conditions, sipv1alpha1.PoolConditionReady)
-	return c != nil && c.Reason != sipv1alpha1.PoolReasonProviderError && c.Reason != sipv1alpha1.PoolReasonProviderUnavailable
+	return meta.IsStatusConditionTrue(status.Conditions, sipv1alpha1.PoolConditionProviderAvailable)
 }

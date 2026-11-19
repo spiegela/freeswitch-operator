@@ -4,14 +4,17 @@
     run on a laptop, in compose and on a cluster. Defaults suit the compose bench. See bin/env.sh.
   -->
 
-  <!-- The address peers see (ext-sip-ip, ext-rtp-ip). On a cluster freeswitch-operator writes it to the
+  <!-- The address peers see for RTP (ext-rtp-ip). On a cluster freeswitch-operator writes it to the
        downward-API file /etc/freeswitch-operator/podinfo/external-address; without it, this host's address. -->
-  <X-PRE-PROCESS cmd="exec-set" data="external_address=/bin/sh /usr/local/freeswitch/conf/bin/external-address.sh"/>
+  <X-PRE-PROCESS cmd="exec-set" data="external_address=/bin/sh /usr/local/freeswitch/conf/bin/podinfo.sh external-address"/>
+  <!-- The address peers see for SIP (ext-sip-ip): the external address, unless RTP has a bind address of its own.
+       The external address then reaches only that, and SIP, on local_ip_v4, advertises local_ip_v4. -->
+  <X-PRE-PROCESS cmd="exec-set" data="external_sip_address=/bin/sh /usr/local/freeswitch/conf/bin/podinfo.sh external-sip-address $${local_ip_v4}"/>
 
   <!-- The address RTP is bound to (rtp-ip): FreeSWITCH's own, unless the pod's address pool gives it one of its own
        on the node, which freeswitch-operator writes to /etc/freeswitch-operator/podinfo/bind-address. SIP stays on
        local_ip_v4, where Kamailio dispatches to it. -->
-  <X-PRE-PROCESS cmd="exec-set" data="bind_address=/bin/sh /usr/local/freeswitch/conf/bin/bind-address.sh $${local_ip_v4}"/>
+  <X-PRE-PROCESS cmd="exec-set" data="bind_address=/bin/sh /usr/local/freeswitch/conf/bin/podinfo.sh bind-address $${local_ip_v4}"/>
 
   <!-- Where calls from trunks go: the mock backend today, LiveKit SIP later. host[:port] -->
   <X-PRE-PROCESS cmd="exec-set" data="backend_host=/bin/sh /usr/local/freeswitch/conf/bin/env.sh BACKEND_HOST mockbackend:5060"/>

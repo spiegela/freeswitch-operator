@@ -33,6 +33,10 @@ type Address struct {
 	// than the node's own address (a secondary private address, or the address itself on a Local datapath). Empty
 	// when unbound or bound to the node's own address.
 	BindIP string
+	// NotReady, when the provider has bound the address but it can't carry traffic yet (MetalLB hasn't assigned it),
+	// says why. The binding stands, but the node's pods aren't given the address. Unlike Err, it is a definite
+	// answer: an Err keeps the address in use, since the provider may simply not have answered.
+	NotReady string
 	// Err is set when the provider couldn't report on this address; the rest of the fields may be empty.
 	Err error
 }
@@ -53,6 +57,12 @@ type Provider interface {
 	Unbind(ctx context.Context, a Address) error
 }
 
+// Pruner is a provider whose bindings are objects of its own, which can outlive the address's place in the spec:
+// Prune takes back the bindings of addresses no longer in it. The pool calls it after each successful Observe.
+type Pruner interface {
+	Prune(ctx context.Context) error
+}
+
 // Factory builds the provider for a pool, or returns an error the pool reports (a provider not enabled, say).
 type Factory func(ctx context.Context, pool *sipv1alpha1.SIPAddressPool) (Provider, error)
 
@@ -62,24 +72,24 @@ func ProviderName(spec *sipv1alpha1.SIPAddressPoolSpec) string {
 	switch {
 	case spec.AWSElasticIP != nil:
 		return "aws"
+	case spec.MetalLB != nil:
+		return "metallb"
 	default:
 		return ""
 	}
 }
 
-// NeedsNodeAddress says whether a pool's addresses reach a node at an address the node doesn't already have, which
-// the address agent must add to the node's interface before pods can bind it.
-func NeedsNodeAddress(spec *sipv1alpha1.SIPAddressPoolSpec) bool {
-	return spec.AWSElasticIP != nil && spec.AWSElasticIP.PrivateAddress == sipv1alpha1.AWSPrivateAddressSecondary
-}
-
-// ReportedBindAddresses returns the bind addresses an address agent's pod reports on its node's interface, or nil.
-func ReportedBindAddresses(pod *corev1.Pod) []string {
-	v := pod.Annotations[sipv1alpha1.AgentBindAddressesAnnotation]
-	if v == "" {
-		return nil
+// ReportedBindAddresses returns the bind addresses an address agent's pod reports on its node's interface, and
+// whether it reports at all: a new agent pod reports nothing until its first pass.
+func ReportedBindAddresses(pod *corev1.Pod) ([]string, bool) {
+	v, ok := pod.Annotations[sipv1alpha1.AgentBindAddressesAnnotation]
+	if !ok {
+		return nil, false
 	}
-	return strings.Split(v, ",")
+	if v == "" {
+		return []string{}, true
+	}
+	return strings.Split(v, ","), true
 }
 
 // Registry is the providers the manager enabled, by name.

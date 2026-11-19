@@ -1,9 +1,12 @@
 # The operator as built locally and loaded into kind (hack/kind.sh), the same way the Flux example overrides the
-# image of config/default.
+# image of config/default, with the MetalLB address provider and the address agent (deploy/kind/metallb).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../../../config/default
+  - agent
+components:
+  - ../../../config/components/metallb-address-pool
 images:
   - name: controller
     newName: freeswitch-operator
@@ -14,3 +17,15 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
+  - target: {kind: DaemonSet, name: address-agent}
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+  # The address agent's component labels the namespace only where config/default's Namespace is in it; here the
+  # Namespace comes from config/default, so the overlay labels it.
+  - target: {kind: Namespace, name: system}
+    patch: |
+      - op: add
+        path: /metadata/labels/pod-security.kubernetes.io~1enforce
+        value: privileged

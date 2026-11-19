@@ -213,12 +213,13 @@ groups:
             Addresses stay where they are, but nothing new is bound and a replaced node waits. Check the provider's
             credentials and the operator's logs (freeswitch_operator_address_pool_provider_calls_total).
 
-      - alert: EdgePodsAwaitingAddressAgent
-        expr: freeswitch_operator_fleet_pods_awaiting_address_agent > 0
+      - alert: AddressPoolAwaitingAddressAgent
+        expr: freeswitch_operator_address_pool_addresses_awaiting_agent > 0
         for: 5m
         labels: {severity: warning}
         annotations:
-          summary: "{{ $value | humanize }} pod(s) of {{ $labels.kind }} {{ $labels.namespace }}/{{ $labels.name }} wait for the address agent"
+          summary: "{{ $value | humanize }} address(es) of SIPAddressPool {{ $labels.pool }} wait for the address agent"
           description: >
-            Their node holds their pool address, but the address agent on it hasn't reported the bind address on
-            the node's interface. Check that the address agent runs on that node and its logs.
+            Their node holds the address, but its address agent doesn't report the bind address on the node's
+            interface, so the node's pods get no address. Check that the address agent runs on the nodes the pool's
+            status names (its Ready condition says which) and its logs.

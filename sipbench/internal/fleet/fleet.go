@@ -25,6 +25,9 @@ import (
 // RollEnv is the environment variable Roll sets on the fleet's pods.
 const RollEnv = "SIPBENCH_ROLL"
 
+// ClusterLabel names the FreeswitchCluster a pod belongs to. The operator's own label; the bench doesn't import it.
+const ClusterLabel = "sip.instruments.com/cluster"
+
 // ExternalAddressAnnotation is where the operator records the address a FreeSWITCH pod advertises to far ends
 // (its SIPAddressPool's binding, or the node's address). The operator's own constant; the bench doesn't import it.
 const ExternalAddressAnnotation = "sip.instruments.com/external-address"
@@ -254,16 +257,19 @@ func (k *kube) ExternalAddresses(ctx context.Context) (map[string]string, error)
 	if err != nil {
 		return nil, err
 	}
+	pods, err := k.core.CoreV1().Pods(k.ns).List(ctx, metav1.ListOptions{LabelSelector: ClusterLabel + "=" + k.name})
+	if err != nil {
+		return nil, err
+	}
+	byName := map[string]string{}
+	for _, p := range pods.Items {
+		byName[p.Name] = p.Annotations[ExternalAddressAnnotation]
+	}
 	out := map[string]string{}
 	for _, m := range st.Members {
-		pod, err := k.core.CoreV1().Pods(k.ns).Get(ctx, m.Pod, metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			continue // replaced since the status was written
+		if addr, ok := byName[m.Pod]; ok { // a member missing has been replaced since the status was written
+			out[m.Pod] = addr
 		}
-		if err != nil {
-			return nil, err
-		}
-		out[m.Pod] = pod.Annotations[ExternalAddressAnnotation]
 	}
 	return out, nil
 }

@@ -145,7 +145,7 @@ func TestRecordDispatcherSeries(t *testing.T) {
 
 func TestPoolMetrics(t *testing.T) {
 	recordPool("metrics-pool", []sipv1alpha1.PoolAddress{
-		{State: sipv1alpha1.PoolAddressBound}, {State: sipv1alpha1.PoolAddressBound}, {State: sipv1alpha1.PoolAddressError},
+		{State: sipv1alpha1.PoolAddressBound, BindAddress: "10.0.9.1"}, {State: sipv1alpha1.PoolAddressBound}, {State: sipv1alpha1.PoolAddressError},
 	}, 1)
 	recordPoolCall("metrics-pool", "bind", errors.New("throttled"))
 	if got := testutil.ToFloat64(poolAddresses.WithLabelValues("metrics-pool", "Bound")); got != 2 {
@@ -156,6 +156,9 @@ func TestPoolMetrics(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(poolNodesWaiting.WithLabelValues("metrics-pool")); got != 1 {
 		t.Errorf("waiting = %v", got)
+	}
+	if got := testutil.ToFloat64(poolAwaitingAgent.WithLabelValues("metrics-pool")); got != 1 {
+		t.Errorf("awaiting agent = %v", got)
 	}
 	if got := testutil.ToFloat64(poolProviderCalls.WithLabelValues("metrics-pool", "bind", "error")); got != 1 {
 		t.Errorf("bind errors = %v", got)

@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
+	"git.instruments.com/ci/freeswitch-operator/internal/addresspool"
 )
 
 // The operator's own metrics, served with controller-runtime's (reconcile counts and durations, work queues, the
@@ -98,12 +99,6 @@ var (
 		Name: "freeswitch_operator_dispatcher_pending_reload",
 		Help: "1 while the dispatcher list has changed and not every Kamailio is confirmed to hold it, 0 otherwise.",
 	}, fleetLabels)
-	fleetAwaitingAddressAgent = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "freeswitch_operator_fleet_pods_awaiting_address_agent",
-		Help: "Pods whose node holds their pool address but whose address agent hasn't reported the bind address on " +
-			"the node's interface; they start without an address (and wait, when it is required) until it does.",
-	}, fleetLabels)
-
 	// A pool's series name it with pool (pools are cluster-scoped) and go away with it.
 	poolAddresses = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "freeswitch_operator_address_pool_addresses",
@@ -113,9 +108,14 @@ var (
 		Name: "freeswitch_operator_address_pool_nodes_waiting",
 		Help: "Nodes running a pod that uses the pool which hold none of its addresses.",
 	}, []string{poolLabel})
+	poolAwaitingAgent = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "freeswitch_operator_address_pool_addresses_awaiting_agent",
+		Help: "Bound addresses whose node's address agent doesn't report their bind address on the node's interface " +
+			"yet; the node's pods get no address (and wait, when it is required) until it does.",
+	}, []string{poolLabel})
 	poolProviderCalls = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "freeswitch_operator_address_pool_provider_calls_total",
-		Help: "Calls to the pool's provider by call (observe, bind or unbind) and result (ok or error).",
+		Help: "Calls to the pool's provider by call (observe, bind, unbind or prune) and result (ok or error).",
 	}, []string{poolLabel, "call", "result"})
 	poolLastObserved = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "freeswitch_operator_address_pool_last_observed_timestamp_seconds",
@@ -128,7 +128,7 @@ func init() {
 		fleetDesiredReplicas, fleetMembersGauge, fleetOutdatedMembers, fleetCondition, fleetPodReplacements,
 		fleetMaxDrainSeconds, fleetDrainStarted, fleetDrainDuration,
 		dispatcherListUpdates, dispatcherDestinations, dispatcherReloads, dispatcherSetInactive, dispatcherPendingReload,
-		fleetAwaitingAddressAgent, poolAddresses, poolNodesWaiting, poolProviderCalls, poolLastObserved,
+		poolAddresses, poolNodesWaiting, poolAwaitingAgent, poolProviderCalls, poolLastObserved,
 	)
 }
 
@@ -298,7 +298,7 @@ func forgetFleet(f fleetRef) {
 	}{
 		fleetDesiredReplicas, fleetMembersGauge, fleetOutdatedMembers, fleetCondition, fleetPodReplacements,
 		fleetMaxDrainSeconds, fleetDrainStarted, dispatcherListUpdates, dispatcherDestinations, dispatcherReloads,
-		fleetDrainDuration, dispatcherSetInactive, dispatcherPendingReload, fleetAwaitingAddressAgent,
+		fleetDrainDuration, dispatcherSetInactive, dispatcherPendingReload,
 	} {
 		v.DeletePartialMatch(f.partial())
 	}
@@ -316,20 +316,25 @@ func recordPool(pool string, addrs []sipv1alpha1.PoolAddress, waiting int) {
 		sipv1alpha1.PoolAddressFree: 0, sipv1alpha1.PoolAddressBound: 0, sipv1alpha1.PoolAddressIdle: 0,
 		sipv1alpha1.PoolAddressConflict: 0, sipv1alpha1.PoolAddressError: 0,
 	}
-	for _, a := range addrs {
-		counts[a.State]++
+	awaiting := 0
+	for i := range addrs {
+		counts[addrs[i].State]++
+		if addresspool.AwaitingAgent(&addrs[i]) {
+			awaiting++
+		}
 	}
 	for state, n := range counts {
 		poolAddresses.WithLabelValues(pool, string(state)).Set(float64(n))
 	}
 	poolNodesWaiting.WithLabelValues(pool).Set(float64(waiting))
+	poolAwaitingAgent.WithLabelValues(pool).Set(float64(awaiting))
 }
 
 // forgetPool removes every series of a pool that no longer exists.
 func forgetPool(pool string) {
 	for _, v := range []interface {
 		DeletePartialMatch(prometheus.Labels) int
-	}{poolAddresses, poolNodesWaiting, poolProviderCalls, poolLastObserved} {
+	}{poolAddresses, poolNodesWaiting, poolAwaitingAgent, poolProviderCalls, poolLastObserved} {
 		v.DeletePartialMatch(prometheus.Labels{poolLabel: pool})
 	}
 }

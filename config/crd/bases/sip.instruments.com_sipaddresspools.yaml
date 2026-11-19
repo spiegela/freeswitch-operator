@@ -78,7 +78,8 @@ spec:
                       (a cluster endpoint, say) alone; the operator's address agent adds it to the node's interface, and the
                       fleets' pods bind it (sip.instruments.com/bind-address). Secondary needs ec2:AssignPrivateIpAddresses,
                       ec2:UnassignPrivateIpAddresses, ec2:CreateTags and ec2:DeleteTags too. Don't use it on nodes whose CNI hands
-                      out secondary addresses of the primary interface to pods (the VPC CNI does): it could hand out this one.
+                      out secondary addresses of the primary interface to pods (the VPC CNI does): it could hand out this one, fill the
+                      interface's address limit, or release it. The pool refuses new bindings to nodes running the VPC CNI's aws-node.
                     enum:
                     - Primary
                     - Secondary
@@ -91,10 +92,33 @@ spec:
                 - allocationIDs
                 - region
                 type: object
+              metalLB:
+                description: metalLB draws the pool from addresses MetalLB announces,
+                  from each node they are bound to (Local).
+                properties:
+                  addresses:
+                    description: addresses in the pool, IPv4. Each must be in a MetalLB
+                      IPAddressPool, and no other Service may request it.
+                    items:
+                      format: ipv4
+                      type: string
+                    maxItems: 256
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: set
+                  ipAddressPool:
+                    description: |-
+                      ipAddressPool is the MetalLB IPAddressPool the addresses are in (metallb.io/address-pool on each Service).
+                      Empty lets MetalLB find the pool that holds each address.
+                    type: string
+                required:
+                - addresses
+                type: object
             type: object
             x-kubernetes-validations:
             - message: exactly one provider must be set
-              rule: '[has(self.awsElasticIP)].filter(x, x).size() == 1'
+              rule: '[has(self.awsElasticIP), has(self.metalLB)].filter(x, x).size()
+                == 1'
           status:
             description: status defines the observed state of SIPAddressPool
             properties:
@@ -112,6 +136,12 @@ spec:
                         bindAddress is the address on the node that pods bind to send and receive on this one, when it isn't the
                         node's own: the secondary private address a NAT translates it to, or the address itself on a Local datapath.
                       type: string
+                    bindAddressReady:
+                      description: |-
+                        bindAddressReady means the address agent on the node reports bindAddress on the node's interface. Pods are
+                        given an address with a bindAddress only once it is: a pod that binds an address the node doesn't have yet
+                        fails, and both are read once, at start.
+                      type: boolean
                     claimedBy:
                       description: claimedBy are the pods on the node that use the
                         address.
@@ -198,8 +228,9 @@ spec:
                 x-kubernetes-list-type: map
               conditions:
                 description: |-
-                  conditions: Ready (every node running a pod that uses the pool holds one of its addresses, and the provider
-                  answered) and Degraded (a node is waiting for an address, or an address is in Conflict or Error).
+                  conditions: Ready (every node running a pod that uses the pool holds one of its addresses, ready to use, and
+                  the provider answered), Degraded (a node is waiting for an address, or an address is in Conflict or Error),
+                  and ProviderAvailable (the pool read its provider on its last pass).
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

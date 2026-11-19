@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -32,6 +33,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -41,6 +43,7 @@ import (
 	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
 	"git.instruments.com/ci/freeswitch-operator/internal/addresspool"
 	awsaddresses "git.instruments.com/ci/freeswitch-operator/internal/addresspool/aws"
+	metallbaddresses "git.instruments.com/ci/freeswitch-operator/internal/addresspool/metallb"
 	"git.instruments.com/ci/freeswitch-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -68,7 +71,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
-	var addressProviders string
+	var addressProviders providerList
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -86,9 +89,10 @@ func main() {
 		"The directory that contains the metrics server certificate.")
 	flag.StringVar(&metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
-	flag.StringVar(&addressProviders, "address-providers", "",
-		"Comma-separated SIPAddressPool providers to enable (aws). The operator only needs a provider's cloud "+
-			"permissions when it is enabled; a pool whose provider isn't enabled reports ProviderUnavailable.")
+	flag.Var(&addressProviders, "address-providers",
+		"Comma-separated SIPAddressPool providers to enable (aws, metallb); repeating the flag adds to the list. "+
+			"The operator only needs a provider's permissions when it is enabled; a pool whose provider isn't "+
+			"enabled reports ProviderUnavailable.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	opts := zap.Options{
@@ -200,15 +204,19 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "kamailiocluster")
 		os.Exit(1)
 	}
-	providers, err := addressProviderRegistry(context.Background(), addressProviders)
+	// The operator's own namespace, where the address agents run and MetalLB pools keep their Services. Empty
+	// under make run: agents are read in every namespace, and MetalLB pools report ProviderUnavailable.
+	namespace := os.Getenv("POD_NAMESPACE")
+	providers, err := addressProviderRegistry(context.Background(), addressProviders, mgr.GetClient(), namespace)
 	if err != nil {
 		setupLog.Error(err, "Failed to enable address providers")
 		os.Exit(1)
 	}
 	if err := (&controller.SIPAddressPoolReconciler{
-		Client:      mgr.GetClient(),
-		Scheme:      mgr.GetScheme(),
-		NewProvider: providers.Factory(),
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		NewProvider:    providers.Factory(),
+		AgentNamespace: namespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "sipaddresspool")
 		os.Exit(1)
@@ -231,24 +239,40 @@ func main() {
 	}
 }
 
+// providerList is --address-providers: comma-separated, and repeating the flag adds to it, so kustomize components
+// that each enable one provider combine.
+type providerList []string
+
+func (l *providerList) String() string { return strings.Join(*l, ",") }
+
+func (l *providerList) Set(v string) error {
+	for name := range strings.SplitSeq(v, ",") {
+		if name = strings.TrimSpace(name); name != "" && !slices.Contains(*l, name) {
+			*l = append(*l, name)
+		}
+	}
+	return nil
+}
+
 // addressProviderRegistry enables the SIPAddressPool providers named in --address-providers.
-func addressProviderRegistry(ctx context.Context, names string) (addresspool.Registry, error) {
+func addressProviderRegistry(
+	ctx context.Context, names providerList, c client.Client, namespace string,
+) (addresspool.Registry, error) {
 	reg := addresspool.Registry{}
-	for name := range strings.SplitSeq(names, ",") {
-		switch name = strings.TrimSpace(name); name {
-		case "":
+	for _, name := range names {
+		switch name {
 		case "aws":
 			f, err := awsaddresses.NewFactory(ctx)
 			if err != nil {
 				return nil, err
 			}
 			reg[name] = f
+		case "metallb":
+			reg[name] = metallbaddresses.NewFactory(c, namespace)
 		default:
-			return nil, fmt.Errorf("unknown address provider %q (known: aws)", name)
+			return nil, fmt.Errorf("unknown address provider %q (known: aws, metallb)", name)
 		}
-		if name != "" {
-			setupLog.Info("Enabled address provider", "provider", name)
-		}
+		setupLog.Info("Enabled address provider", "provider", name)
 	}
 	return reg, nil
 }
