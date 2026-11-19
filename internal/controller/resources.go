@@ -166,7 +166,7 @@ func scriptsConfigMapName(fsc *sipv1alpha1.FreeswitchCluster) string {
 // selectorLabels identify a cluster's pods. They never change after creation (StatefulSet selectors are immutable).
 func selectorLabels(fsc *sipv1alpha1.FreeswitchCluster) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":     "freeswitch",
+		sipv1alpha1.AppNameLabel:     "freeswitch",
 		"app.kubernetes.io/instance": fsc.Name,
 		sipv1alpha1.ClusterLabel:     fsc.Name,
 	}
@@ -246,7 +246,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		{Name: "FS_EXTERNAL_ADDRESS_FILE", Value: externalAddrFile},
 		{Name: "FS_MAX_DRAIN_SECONDS", Value: strconv.FormatInt(cfg.maxDrainSeconds, 10)},
 		{Name: "FS_REQUIRE_EXTERNAL_ADDRESS", Value: strconv.FormatBool(cfg.requireAddress)},
-	}, livenessEnv(cfg.liveness), fsc.Spec.Env)
+	}, livenessEnv(cfg.liveness), bindAddressEnv(cfg.addressSource), fsc.Spec.Env)
 
 	volumes := []corev1.Volume{
 		{
@@ -258,13 +258,8 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		},
 		{
 			// Downward-API files update in place when the annotation changes; environment variables would not.
-			Name: volumePodInfo,
-			VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{
-				Items: []corev1.DownwardAPIVolumeFile{{
-					Path:     "external-address",
-					FieldRef: &corev1.ObjectFieldSelector{FieldPath: fmt.Sprintf("metadata.annotations['%s']", sipv1alpha1.ExternalAddressAnnotation)},
-				}},
-			}},
+			Name:         volumePodInfo,
+			VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{Items: podInfoItems(cfg.addressSource)}},
 		},
 	}
 	mounts := []corev1.VolumeMount{
@@ -359,6 +354,27 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 			},
 		},
 	}
+}
+
+// podInfoItems are the downward-API files a fleet's pods read their addresses from. Only a fleet that draws from a
+// pool gets bind-address, so other fleets' pod templates stay as they were.
+func podInfoItems(source sipv1alpha1.ExternalAddressSource) []corev1.DownwardAPIVolumeFile {
+	annotation := func(key string) *corev1.ObjectFieldSelector {
+		return &corev1.ObjectFieldSelector{FieldPath: fmt.Sprintf("metadata.annotations['%s']", key)}
+	}
+	items := []corev1.DownwardAPIVolumeFile{{Path: "external-address", FieldRef: annotation(sipv1alpha1.ExternalAddressAnnotation)}}
+	if source == sipv1alpha1.ExternalAddressAddressPool {
+		items = append(items, corev1.DownwardAPIVolumeFile{Path: "bind-address", FieldRef: annotation(sipv1alpha1.BindAddressAnnotation)})
+	}
+	return items
+}
+
+// bindAddressEnv points FreeSWITCH's config at the bind-address file, for a fleet that draws from a pool.
+func bindAddressEnv(source sipv1alpha1.ExternalAddressSource) []corev1.EnvVar {
+	if source != sipv1alpha1.ExternalAddressAddressPool {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "FS_BIND_ADDRESS_FILE", Value: bindAddrFile}}
 }
 
 // addressWaitContainers holds FreeSWITCH back until the pod knows its external address, for a fleet that draws

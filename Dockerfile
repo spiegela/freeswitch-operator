@@ -23,6 +23,7 @@ COPY . .
 # by leaving it empty we can ensure that the container and binary shipped on it will have the same platform.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o freeswitch-exporter ./cmd/freeswitch-exporter
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o address-agent ./cmd/address-agent
 
 # The FreeSWITCH exporter, a separate image (docker build --target exporter) so that a new operator release
 # doesn't change the FreeSWITCH pod template, which would roll every fleet.
@@ -38,6 +39,8 @@ ENTRYPOINT ["/freeswitch-exporter"]
 FROM gcr.io/distroless/static:nonroot AS manager
 WORKDIR /
 COPY --from=builder /workspace/manager .
+# The address agent ships in the manager's image, so the two move together; only its DaemonSet runs it.
+COPY --from=builder /workspace/address-agent .
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

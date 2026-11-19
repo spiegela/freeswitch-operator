@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
 )
 
@@ -217,8 +219,8 @@ func TestDecideRecordsClaims(t *testing.T) {
 		t.Fatalf("claims not recorded: %+v", got)
 	}
 	st := &sipv1alpha1.SIPAddressPoolStatus{Addresses: p.Status}
-	if a := AddressForNode(st, "a"); a != "203.0.113.1" {
-		t.Errorf("AddressForNode = %q", a)
+	if b := BindingForNode(st, "a"); b == nil || b.Address != "203.0.113.1" {
+		t.Errorf("BindingForNode = %+v", b)
 	}
 
 	// Once the pod has gone, the address is idle and remembers who used it.
@@ -227,7 +229,74 @@ func TestDecideRecordsClaims(t *testing.T) {
 	if got.State != sipv1alpha1.PoolAddressIdle || len(got.ClaimedBy) != 0 || len(got.LastClaimedBy) != 1 {
 		t.Fatalf("idle address: %+v", got)
 	}
-	if a := AddressForNode(&sipv1alpha1.SIPAddressPoolStatus{Addresses: p.Status}, "a"); a != "" {
-		t.Errorf("idle address handed out: %q", a)
+	if b := BindingForNode(&sipv1alpha1.SIPAddressPoolStatus{Addresses: p.Status}, "a"); b != nil {
+		t.Errorf("idle address handed out: %+v", b)
+	}
+}
+
+// A bind address is read from the provider, kept while the provider can't answer, and forgotten when the address
+// is given to another node (its bind address there is the provider's to report).
+func TestDecideBindAddress(t *testing.T) {
+	bound := addr("eip1", "i-a")
+	bound.BindIP = "10.0.9.1"
+	p := Decide(Input{Observed: []Address{bound}, Nodes: nodes("a"), Claimants: []Claimant{claimant("edge-0", "a")}})
+	if got := p.Status[0]; got.State != sipv1alpha1.PoolAddressBound || got.BindAddress != "10.0.9.1" {
+		t.Fatalf("bound: %+v", got)
+	}
+	failed := Address{ID: "eip1", Err: errors.New("throttled")}
+	p = Decide(Input{Observed: []Address{failed}, Nodes: nodes("a"), Claimants: []Claimant{claimant("edge-0", "a")}, Previous: p.Status})
+	if got := p.Status[0]; got.State != sipv1alpha1.PoolAddressError || got.BindAddress != "10.0.9.1" {
+		t.Fatalf("error: %+v", got)
+	}
+	if b := BindingForNode(&sipv1alpha1.SIPAddressPoolStatus{Addresses: p.Status}, "a"); b == nil || b.BindAddress != "10.0.9.1" {
+		t.Fatalf("BindingForNode = %+v", b)
+	}
+
+	// The pod moves to node b; node a keeps the address idle until b takes it.
+	p = Decide(Input{Observed: []Address{bound}, Nodes: nodes("a", "b"), Claimants: []Claimant{claimant("edge-0", "b")}, Previous: p.Status})
+	if got := p.Status[0]; got.Node != "b" || got.BindAddress != "" {
+		t.Fatalf("moved: %+v", got)
+	}
+}
+
+func TestNeedsNodeAddress(t *testing.T) {
+	spec := &sipv1alpha1.SIPAddressPoolSpec{AWSElasticIP: &sipv1alpha1.AWSElasticIPPool{}}
+	if NeedsNodeAddress(spec) {
+		t.Error("Primary needs a node address")
+	}
+	spec.AWSElasticIP.PrivateAddress = sipv1alpha1.AWSPrivateAddressSecondary
+	if !NeedsNodeAddress(spec) {
+		t.Error("Secondary doesn't")
+	}
+}
+
+func TestNodeBindAddresses(t *testing.T) {
+	st := &sipv1alpha1.SIPAddressPoolStatus{Addresses: []sipv1alpha1.PoolAddress{
+		{ID: "bound", Node: "a", State: sipv1alpha1.PoolAddressBound, BindAddress: "10.0.9.1"},
+		{ID: "idle", Node: "a", State: sipv1alpha1.PoolAddressIdle, BindAddress: "10.0.9.2"},
+		{ID: "error", Node: "a", State: sipv1alpha1.PoolAddressError, BindAddress: "10.0.9.3"},
+		{ID: "conflict", Node: "a", State: sipv1alpha1.PoolAddressConflict, BindAddress: "10.0.9.4"},
+		{ID: "none", Node: "a", State: sipv1alpha1.PoolAddressBound},
+		{ID: "other", Node: "b", State: sipv1alpha1.PoolAddressBound, BindAddress: "10.0.9.5"},
+	}}
+	if got, want := NodeBindAddresses(st, "a"), []string{"10.0.9.1", "10.0.9.2", "10.0.9.3"}; !slices.Equal(got, want) {
+		t.Errorf("NodeBindAddresses = %v, want %v", got, want)
+	}
+}
+
+func TestProviderRead(t *testing.T) {
+	for reason, want := range map[string]bool{
+		"":                                  false,
+		"AddressesBound":                    true,
+		sipv1alpha1.PoolReasonProviderError: false,
+		sipv1alpha1.PoolReasonProviderUnavailable: false,
+	} {
+		st := &sipv1alpha1.SIPAddressPoolStatus{}
+		if reason != "" {
+			st.Conditions = []metav1.Condition{{Type: sipv1alpha1.PoolConditionReady, Reason: reason}}
+		}
+		if got := ProviderRead(st); got != want {
+			t.Errorf("reason %q: ProviderRead = %v, want %v", reason, got, want)
+		}
 	}
 }

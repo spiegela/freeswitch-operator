@@ -8,6 +8,7 @@ const (
 	podInfoDir       = mountRoot + "/podinfo"
 	configDir        = mountRoot + "/config"
 	externalAddrFile = podInfoDir + "/external-address"
+	bindAddrFile     = podInfoDir + "/bind-address"
 
 	// drainMarker lives in the container's own filesystem, not a volume, so a restarted container starts clean.
 	drainMarker = "/tmp/freeswitch-operator-draining"

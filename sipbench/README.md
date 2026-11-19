@@ -154,6 +154,7 @@ calls:
       digits: null               # e.g. "4321"
       endedBy: local             # local: the runner hung up; remote: the edge did
       codec: PCMU
+      mediaAddress: fleet        # the answer's SDP c= (audio's, else the session's): an IP, or fleet (see below)
       backend:                   # what the mock recorded (needs the mock)
         calls: 1                 # legs that reached it; 0 means none must have
         referAccepted: true
@@ -169,8 +170,9 @@ Capabilities a run provides are set with `-caps` (default `mock,esl,codec:pcmu,c
 the backend is mockbackend, `esl` when the runner can reach FreeSWITCH's event socket, `codec:*` for codecs the
 edge and runner both support, `proxy` when the edge address is Kamailio rather than a FreeSWITCH node, `fleet`, added by `-fleet namespace/name` (`SIPBENCH_FLEET`), when the runner
 can act on the FreeswitchCluster under test, `netem` when the runner may impair its own traffic with tc (it
-needs `NET_ADMIN`; compose and the kind Job provide both), and `sip-trace` when the edge address is a SIP node's
-own address, not a Service VIP, so a call can keep all its SIP on one socket (see Impairments below).
+needs `NET_ADMIN`; compose and the kind Job provide both), `sip-trace` when the edge address is a SIP node's
+own address, not a Service VIP, so a call can keep all its SIP on one socket (see Impairments below), and
+`address-pool` when the FreeswitchCluster under test draws its external address from a SIPAddressPool.
 
 ### Raw messages: what sipgo won't send
 
@@ -232,6 +234,12 @@ member's address. Whatever happens, a scenario ends with its cordoned nodes unco
 put back. Every action but `hangup` needs the `fleet` capability, and a scenario using them must say
 `requires: [fleet]`. The runner's access is in `k8s/runner-rbac.yaml`. Results carry a `timeline` of what each
 action did and when.
+
+`expect.mediaAddress: fleet` also needs it: the address the edge's answer gives for media must be one of the
+fleet's pods' external addresses, as the operator records them in each pod's `sip.instruments.com/external-address`
+annotation (a SIPAddressPool's binding, such as an Elastic IP). They are read after the calls, so a pod replaced
+during the scenario counts with its replacement's. Every answered call's result carries `mediaAddress`, checked
+or not.
 
 ### Impairments: a bad network between the carrier and the edge
 

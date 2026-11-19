@@ -190,6 +190,17 @@ cases:
     status: covered
     scenarios: [bad-config-stops-roll]
 
+  - id: sb-pool-media-address
+    ref: pool-media-address
+    title: The edge advertises its pod's external address for media
+    area: media
+    component: operator
+    expect: >
+      The answer's SDP connection address is the external address the operator recorded on one of the fleet's pods
+      (its SIPAddressPool's binding), and audio sent there arrives: each side hears the other's tone.
+    status: covered
+    scenarios: [pool-media-address]
+
   - id: sb-silent-node-stays-in-rotation
     ref: silent-node-stays-in-rotation
     title: A request every node discards doesn't take the nodes out of rotation

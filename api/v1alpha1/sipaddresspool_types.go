@@ -44,7 +44,30 @@ type AWSElasticIPPool struct {
 	// +kubebuilder:validation:items:Pattern=`^eipalloc-[0-9a-f]+$`
 	// +listType=set
 	AllocationIDs []string `json:"allocationIDs"`
+
+	// privateAddress is the private address on each node that an Elastic IP translates to. Primary (the default)
+	// uses the node's own address, the primary private address of its primary network interface, and refuses a
+	// node that already holds an Elastic IP outside the pool. Secondary assigns the node's primary interface a
+	// secondary private address for the Elastic IP, which leaves an Elastic IP already on the node's own address
+	// (a cluster endpoint, say) alone; the operator's address agent adds it to the node's interface, and the
+	// fleets' pods bind it (sip.instruments.com/bind-address). Secondary needs ec2:AssignPrivateIpAddresses,
+	// ec2:UnassignPrivateIpAddresses, ec2:CreateTags and ec2:DeleteTags too. Don't use it on nodes whose CNI hands
+	// out secondary addresses of the primary interface to pods (the VPC CNI does): it could hand out this one.
+	// +kubebuilder:validation:Enum=Primary;Secondary
+	// +kubebuilder:default=Primary
+	// +optional
+	PrivateAddress AWSPrivateAddress `json:"privateAddress,omitempty"`
 }
+
+// AWSPrivateAddress is which private address on a node an Elastic IP is associated with.
+type AWSPrivateAddress string
+
+const (
+	// AWSPrivateAddressPrimary associates the Elastic IP with the node's own address.
+	AWSPrivateAddressPrimary AWSPrivateAddress = "Primary"
+	// AWSPrivateAddressSecondary associates it with a secondary private address assigned for it.
+	AWSPrivateAddressSecondary AWSPrivateAddress = "Secondary"
+)
 
 // AddressDatapath says how traffic for a pool's address reaches the node it is bound to.
 // +kubebuilder:validation:Enum=NAT;Local
@@ -67,6 +90,14 @@ const (
 	AddressFencingAuthoritative AddressFencing = "Authoritative"
 	// AddressFencingAdvisory means a node cut off from the cluster may go on holding the address.
 	AddressFencingAdvisory AddressFencing = "Advisory"
+)
+
+// The pool's Ready condition, and the reasons it gives when the pool couldn't read its provider. The address agent
+// reads them to tell whether a pool's status is current.
+const (
+	PoolConditionReady            = "Ready"
+	PoolReasonProviderUnavailable = "ProviderUnavailable"
+	PoolReasonProviderError       = "ProviderError"
 )
 
 // PoolAddressState is where one of a pool's addresses stands.
@@ -107,6 +138,10 @@ type PoolAddress struct {
 	// address is the IP address peers see.
 	// +optional
 	Address string `json:"address,omitempty"`
+	// bindAddress is the address on the node that pods bind to send and receive on this one, when it isn't the
+	// node's own: the secondary private address a NAT translates it to, or the address itself on a Local datapath.
+	// +optional
+	BindAddress string `json:"bindAddress,omitempty"`
 	// state of the address.
 	State PoolAddressState `json:"state"`
 	// node the address is bound to.

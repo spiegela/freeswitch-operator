@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"fmt"
 	"slices"
 	"strconv"
 
@@ -101,7 +100,7 @@ func kamailioConfigName(kc *sipv1alpha1.KamailioCluster, hash string) string {
 
 func kamailioSelectorLabels(kc *sipv1alpha1.KamailioCluster) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":         "kamailio",
+		sipv1alpha1.AppNameLabel:         "kamailio",
 		"app.kubernetes.io/instance":     kc.Name,
 		sipv1alpha1.KamailioClusterLabel: kc.Name,
 	}
@@ -181,12 +180,7 @@ func buildKamailioStatefulSet(kc *sipv1alpha1.KamailioCluster, configName, confi
 			LocalObjectReference: corev1.LocalObjectReference{Name: kamailioScriptsName(kc)},
 			DefaultMode:          ptr.To[int32](0o755),
 		}}},
-		{Name: volumePodInfo, VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{
-			Items: []corev1.DownwardAPIVolumeFile{{
-				Path:     "external-address",
-				FieldRef: &corev1.ObjectFieldSelector{FieldPath: fmt.Sprintf("metadata.annotations['%s']", sipv1alpha1.ExternalAddressAnnotation)},
-			}},
-		}}},
+		{Name: volumePodInfo, VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{Items: podInfoItems(cfg.addressSource)}}},
 		{Name: volumeConfig, VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: configName},
 		}}},

@@ -14,6 +14,9 @@ spec:
   # Keep one more address than nodes, for the node that replaces one.
   awsElasticIP:
     region: us-east-1
+    # Primary (the default): each Elastic IP goes on the node's own address. Secondary: on a secondary private address
+    # assigned for it, for nodes whose own address already holds an Elastic IP (needs config/components/address-agent).
+    privateAddress: Primary
     allocationIDs:
       - eipalloc-0123456789abcdef0
       - eipalloc-0123456789abcdef1

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -26,6 +27,9 @@ type fakeEC2 struct {
 	assocN  int
 	calls   []string
 	failErr error
+	// failAssociate makes AssociateAddress fail.
+	failAssociate error
+	nextIP        int
 }
 
 func newFakeEC2() *fakeEC2 {
@@ -37,7 +41,79 @@ func (f *fakeEC2) addEIP(id, ip string) {
 }
 
 func (f *fakeEC2) addInstance(instance, eni, privateIP string) {
-	f.enis[instance] = ec2types.NetworkInterface{NetworkInterfaceId: awssdk.String(eni), PrivateIpAddress: awssdk.String(privateIP)}
+	f.enis[instance] = ec2types.NetworkInterface{
+		NetworkInterfaceId: awssdk.String(eni), PrivateIpAddress: awssdk.String(privateIP),
+		PrivateIpAddresses: []ec2types.NetworkInterfacePrivateIpAddress{{PrivateIpAddress: awssdk.String(privateIP), Primary: awssdk.Bool(true)}},
+	}
+}
+
+// secondaries are eni-a's secondary private addresses.
+func (f *fakeEC2) secondaries() []string {
+	const eniID = "eni-a"
+	var out []string
+	for _, eni := range f.enis {
+		if awssdk.ToString(eni.NetworkInterfaceId) != eniID {
+			continue
+		}
+		for _, pa := range eni.PrivateIpAddresses {
+			if !awssdk.ToBool(pa.Primary) {
+				out = append(out, awssdk.ToString(pa.PrivateIpAddress))
+			}
+		}
+	}
+	return out
+}
+
+// tag is eipalloc-1's private address tag.
+func (f *fakeEC2) tag() string {
+	for _, t := range f.addrs["eipalloc-1"].Tags {
+		if awssdk.ToString(t.Key) == PrivateAddressTag {
+			return awssdk.ToString(t.Value)
+		}
+	}
+	return ""
+}
+
+func (f *fakeEC2) AssignPrivateIpAddresses(_ context.Context, in *ec2.AssignPrivateIpAddressesInput, _ ...func(*ec2.Options)) (*ec2.AssignPrivateIpAddressesOutput, error) {
+	f.calls = append(f.calls, "AssignPrivateIpAddresses "+awssdk.ToString(in.NetworkInterfaceId))
+	for instance, eni := range f.enis {
+		if awssdk.ToString(eni.NetworkInterfaceId) == awssdk.ToString(in.NetworkInterfaceId) {
+			f.nextIP++
+			ip := "10.0.9." + strconv.Itoa(f.nextIP)
+			eni.PrivateIpAddresses = append(eni.PrivateIpAddresses, ec2types.NetworkInterfacePrivateIpAddress{PrivateIpAddress: awssdk.String(ip), Primary: awssdk.Bool(false)})
+			f.enis[instance] = eni
+			return &ec2.AssignPrivateIpAddressesOutput{AssignedPrivateIpAddresses: []ec2types.AssignedPrivateIpAddress{{PrivateIpAddress: awssdk.String(ip)}}}, nil
+		}
+	}
+	return nil, notFound("InvalidNetworkInterfaceID.NotFound")
+}
+
+func (f *fakeEC2) UnassignPrivateIpAddresses(_ context.Context, in *ec2.UnassignPrivateIpAddressesInput, _ ...func(*ec2.Options)) (*ec2.UnassignPrivateIpAddressesOutput, error) {
+	f.calls = append(f.calls, "UnassignPrivateIpAddresses "+awssdk.ToString(in.NetworkInterfaceId)+" "+strings.Join(in.PrivateIpAddresses, ","))
+	for instance, eni := range f.enis {
+		if awssdk.ToString(eni.NetworkInterfaceId) == awssdk.ToString(in.NetworkInterfaceId) {
+			eni.PrivateIpAddresses = slices.DeleteFunc(slices.Clone(eni.PrivateIpAddresses), func(pa ec2types.NetworkInterfacePrivateIpAddress) bool {
+				return slices.Contains(in.PrivateIpAddresses, awssdk.ToString(pa.PrivateIpAddress))
+			})
+			f.enis[instance] = eni
+			return &ec2.UnassignPrivateIpAddressesOutput{}, nil
+		}
+	}
+	return nil, notFound("InvalidNetworkInterfaceID.NotFound")
+}
+
+func (f *fakeEC2) CreateTags(_ context.Context, in *ec2.CreateTagsInput, _ ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
+	f.calls = append(f.calls, "CreateTags "+in.Resources[0])
+	a := f.addrs[in.Resources[0]]
+	a.Tags = append(a.Tags, in.Tags...)
+	return &ec2.CreateTagsOutput{}, nil
+}
+
+func (f *fakeEC2) DeleteTags(_ context.Context, in *ec2.DeleteTagsInput, _ ...func(*ec2.Options)) (*ec2.DeleteTagsOutput, error) {
+	f.calls = append(f.calls, "DeleteTags "+in.Resources[0])
+	a := f.addrs[in.Resources[0]]
+	a.Tags = slices.DeleteFunc(a.Tags, func(t ec2types.Tag) bool { return awssdk.ToString(t.Key) == awssdk.ToString(in.Tags[0].Key) })
+	return &ec2.DeleteTagsOutput{}, nil
 }
 
 func notFound(code string) error { return &smithy.GenericAPIError{Code: code, Message: "not found"} }
@@ -69,6 +145,16 @@ func (f *fakeEC2) DescribeAddresses(_ context.Context, in *ec2.DescribeAddresses
 func (f *fakeEC2) DescribeNetworkInterfaces(_ context.Context, in *ec2.DescribeNetworkInterfacesInput, _ ...func(*ec2.Options)) (*ec2.DescribeNetworkInterfacesOutput, error) {
 	f.calls = append(f.calls, "DescribeNetworkInterfaces")
 	out := &ec2.DescribeNetworkInterfacesOutput{}
+	if awssdk.ToString(in.Filters[0].Name) == "addresses.private-ip-address" {
+		for _, eni := range f.enis {
+			for _, pa := range eni.PrivateIpAddresses {
+				if awssdk.ToString(pa.PrivateIpAddress) == in.Filters[0].Values[0] {
+					out.NetworkInterfaces = append(out.NetworkInterfaces, eni)
+				}
+			}
+		}
+		return out, nil
+	}
 	if eni, ok := f.enis[in.Filters[0].Values[0]]; ok && in.Filters[1].Values[0] == "0" {
 		out.NetworkInterfaces = []ec2types.NetworkInterface{eni}
 	}
@@ -77,6 +163,9 @@ func (f *fakeEC2) DescribeNetworkInterfaces(_ context.Context, in *ec2.DescribeN
 
 func (f *fakeEC2) AssociateAddress(_ context.Context, in *ec2.AssociateAddressInput, _ ...func(*ec2.Options)) (*ec2.AssociateAddressOutput, error) {
 	f.calls = append(f.calls, "AssociateAddress "+awssdk.ToString(in.AllocationId)+" "+awssdk.ToString(in.NetworkInterfaceId)+" "+awssdk.ToString(in.PrivateIpAddress))
+	if f.failAssociate != nil {
+		return nil, f.failAssociate
+	}
 	a := f.addrs[awssdk.ToString(in.AllocationId)]
 	if a.AssociationId != nil && !awssdk.ToBool(in.AllowReassociation) {
 		return nil, &smithy.GenericAPIError{Code: "Resource.AlreadyAssociated"}
@@ -189,6 +278,107 @@ func TestBindRefusesAnInstanceHoldingAnotherElasticIP(t *testing.T) {
 	err := p.Bind(ctx, obs[0], "i-a")
 	if err == nil || !strings.Contains(err.Error(), "not in the pool") {
 		t.Fatalf("Bind = %v, want a refusal", err)
+	}
+}
+
+func secondaryPool(ids ...string) *sipv1alpha1.AWSElasticIPPool {
+	p := pool(ids...)
+	p.PrivateAddress = sipv1alpha1.AWSPrivateAddressSecondary
+	return p
+}
+
+// A node whose own address already holds an Elastic IP (a cluster endpoint) takes a pool address on a secondary
+// private address, and gives it back on unbinding, leaving its own Elastic IP alone.
+func TestSecondaryBindObserveUnbind(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeEC2()
+	f.addEIP("eipalloc-endpoint", "198.51.100.9")
+	f.addEIP("eipalloc-1", "203.0.113.1")
+	f.addInstance("i-a", "eni-a", "10.0.1.10")
+	endpoint := New(f, pool("eipalloc-endpoint"))
+	e, _ := endpoint.Observe(ctx)
+	if err := endpoint.Bind(ctx, e[0], "i-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	p := New(f, secondaryPool("eipalloc-1"))
+	obs, _ := p.Observe(ctx)
+	if err := p.Bind(ctx, obs[0], "i-a"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.secondaries(); len(got) != 1 || f.tag() != got[0] {
+		t.Fatalf("secondaries %v, tag %q", got, f.tag())
+	}
+	ip := f.secondaries()[0]
+	if !slices.Contains(f.calls, "AssociateAddress eipalloc-1 eni-a "+ip) {
+		t.Errorf("did not associate with the secondary address: %v", f.calls)
+	}
+	obs, _ = p.Observe(ctx)
+	if obs[0].NodeID != "i-a" || obs[0].BindIP != ip {
+		t.Fatalf("after bind: %+v", obs[0])
+	}
+	if awssdk.ToString(f.addrs["eipalloc-endpoint"].PrivateIpAddress) != "10.0.1.10" {
+		t.Errorf("the endpoint's Elastic IP moved: %+v", f.addrs["eipalloc-endpoint"])
+	}
+
+	if err := p.Unbind(ctx, obs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.secondaries(); len(got) != 0 || f.tag() != "" {
+		t.Errorf("after unbind: secondaries %v, tag %q", got, f.tag())
+	}
+	if f.addrs["eipalloc-endpoint"].AssociationId == nil {
+		t.Error("unbinding took the endpoint's Elastic IP off too")
+	}
+	if err := p.Unbind(ctx, obs[0]); err != nil {
+		t.Errorf("unbinding again: %v", err)
+	}
+}
+
+// A failed association takes back the secondary address it assigned, so a retry doesn't pile them up.
+func TestSecondaryBindFailureTakesTheAddressBack(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeEC2()
+	f.addEIP("eipalloc-1", "203.0.113.1")
+	f.addInstance("i-a", "eni-a", "10.0.1.10")
+	f.failAssociate = &smithy.GenericAPIError{Code: "UnauthorizedOperation"}
+	p := New(f, secondaryPool("eipalloc-1"))
+	obs, _ := p.Observe(ctx)
+	if err := p.Bind(ctx, obs[0], "i-a"); err == nil {
+		t.Fatal("bind succeeded")
+	}
+	if got := f.secondaries(); len(got) != 0 || f.tag() != "" {
+		t.Errorf("left behind: secondaries %v, tag %q", got, f.tag())
+	}
+}
+
+// Unbinding never takes back an address the tag doesn't name, nor a primary address a tag names.
+func TestSecondaryUnbindLeavesUntaggedAddresses(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeEC2()
+	f.addEIP("eipalloc-1", "203.0.113.1")
+	f.addInstance("i-a", "eni-a", "10.0.1.10")
+	// Associated by hand with the node's own address, as a pool switched from Primary would find it.
+	if err := New(f, pool("eipalloc-1")).Bind(ctx, addresspool.Address{ID: "eipalloc-1"}, "i-a"); err != nil {
+		t.Fatal(err)
+	}
+	p := New(f, secondaryPool("eipalloc-1"))
+	obs, _ := p.Observe(ctx)
+	if obs[0].BindIP != "10.0.1.10" {
+		t.Errorf("BindIP = %q, want the node's own address", obs[0].BindIP)
+	}
+	if err := p.Unbind(ctx, obs[0]); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "UnassignPrivateIpAddresses") {
+			t.Errorf("unassigned an address the pool didn't assign: %v", f.calls)
+		}
+	}
+
+	f.addrs["eipalloc-1"].Tags = []ec2types.Tag{{Key: awssdk.String(PrivateAddressTag), Value: awssdk.String("10.0.1.10")}}
+	if err := p.Unbind(ctx, addresspool.Address{ID: "eipalloc-1"}); err == nil {
+		t.Error("took back a primary address")
 	}
 }
 

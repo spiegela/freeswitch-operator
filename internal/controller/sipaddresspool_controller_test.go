@@ -89,7 +89,8 @@ var _ = Describe("SIPAddressPool controller", func() {
 	syncFleet := func(w world) {
 		var pods corev1.PodList
 		Expect(k8sClient.List(ctx, &pods, client.InNamespace(w.ns))).To(Succeed())
-		Expect(syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items)).To(Succeed())
+		_, err := syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items)
+		Expect(err).NotTo(HaveOccurred())
 	}
 
 	It("binds an address to each node running a pod of a fleet that uses the pool, and the pods advertise it", func() {
@@ -147,7 +148,7 @@ var _ = Describe("SIPAddressPool controller", func() {
 		w.fake.ResetCalls()
 		_, pool := reconcilePool(w)
 		Expect(w.fake.CallLog()).To(Equal([]string{"unbind " + id1, "bind " + id1 + " " + c}))
-		Expect(addresspool.AddressForNode(&pool.Status, c)).To(Equal("203.0.113.21"))
+		Expect(addresspool.BindingForNode(&pool.Status, c)).To(HaveField("Address", "203.0.113.21"))
 		syncFleet(w)
 		Expect(annotation(w.ns, "edge-1")).To(Equal("203.0.113.21"))
 	})
@@ -177,8 +178,10 @@ var _ = Describe("SIPAddressPool controller", func() {
 
 		var pods corev1.PodList
 		Expect(k8sClient.List(ctx, &pods, client.InNamespace(w.ns), client.MatchingLabels{sipv1alpha1.KamailioClusterLabel: "proxy"})).To(Succeed())
-		Expect(syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items)).To(Succeed())
-		Expect(annotation(w.ns, "proxy-0")).To(Equal(addresspool.AddressForNode(&pool.Status, proxyNode)))
+		_, err := syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(addresspool.BindingForNode(&pool.Status, proxyNode)).NotTo(BeNil())
+		Expect(annotation(w.ns, "proxy-0")).To(Equal(addresspool.BindingForNode(&pool.Status, proxyNode).Address))
 		Expect(annotation(w.ns, "proxy-0")).NotTo(BeEmpty())
 	})
 
@@ -212,6 +215,47 @@ var _ = Describe("SIPAddressPool controller", func() {
 		Expect(pool.Status.Addresses[0].State).To(Equal(sipv1alpha1.PoolAddressBound))
 		syncFleet(w)
 		Expect(annotation(w.ns, "edge-0")).To(Equal("203.0.113.40"))
+	})
+
+	It("gives pods a secondary bind address only once the node's address agent has it on the interface", func() {
+		w := setup("203.0.113.70")
+		var pool sipv1alpha1.SIPAddressPool
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: w.pool}, &pool)).To(Succeed())
+		pool.Spec.AWSElasticIP.PrivateAddress = sipv1alpha1.AWSPrivateAddressSecondary
+		Expect(k8sClient.Update(ctx, &pool)).To(Succeed())
+		id := fmt.Sprintf("eipalloc-%d0", poolCounter)
+		w.fake.BindIPs = map[string]string{id: "10.0.9.70"}
+		a := node(w, "a")
+		Expect(k8sClient.Create(ctx, fsPod(w.ns, "edge-0", a, "r1"))).To(Succeed())
+		bindAnnotation := func() string {
+			var p corev1.Pod
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: w.ns, Name: "edge-0"}, &p)).To(Succeed())
+			return p.Annotations[sipv1alpha1.BindAddressAnnotation]
+		}
+
+		By("the bind pass doesn't know the bind address yet; the confirming pass reads it")
+		_, st := reconcilePool(w)
+		Expect(st.Status.Addresses[0].BindAddress).To(BeEmpty())
+		_, st = reconcilePool(w)
+		Expect(st.Status.Addresses[0].BindAddress).To(Equal("10.0.9.70"))
+
+		By("no agent has reported it, so the pod gets neither address")
+		syncFleet(w)
+		Expect(annotation(w.ns, "edge-0")).To(BeEmpty())
+		Expect(bindAnnotation()).To(BeEmpty())
+
+		By("the agent on the node reports it")
+		agentNS := newNamespace(ctx)
+		agent := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: agentNS,
+				Labels:      map[string]string{"app.kubernetes.io/name": sipv1alpha1.AddressAgentName},
+				Annotations: map[string]string{sipv1alpha1.AgentBindAddressesAnnotation: "10.0.9.70"}},
+			Spec: corev1.PodSpec{NodeName: a, Containers: []corev1.Container{{Name: "agent", Image: "agent"}}},
+		}
+		Expect(k8sClient.Create(ctx, agent)).To(Succeed())
+		syncFleet(w)
+		Expect(annotation(w.ns, "edge-0")).To(Equal("203.0.113.70"))
+		Expect(bindAnnotation()).To(Equal("10.0.9.70"))
 	})
 
 	It("reports a provider that isn't enabled", func() {

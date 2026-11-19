@@ -29,6 +29,10 @@ type Address struct {
 	NodeID string
 	// BindingID is the provider's handle on the current binding (an association ID), for Unbind.
 	BindingID string
+	// BindIP is the address on the node that pods bind to use this one, when the provider binds it somewhere other
+	// than the node's own address (a secondary private address, or the address itself on a Local datapath). Empty
+	// when unbound or bound to the node's own address.
+	BindIP string
 	// Err is set when the provider couldn't report on this address; the rest of the fields may be empty.
 	Err error
 }
@@ -61,6 +65,21 @@ func ProviderName(spec *sipv1alpha1.SIPAddressPoolSpec) string {
 	default:
 		return ""
 	}
+}
+
+// NeedsNodeAddress says whether a pool's addresses reach a node at an address the node doesn't already have, which
+// the address agent must add to the node's interface before pods can bind it.
+func NeedsNodeAddress(spec *sipv1alpha1.SIPAddressPoolSpec) bool {
+	return spec.AWSElasticIP != nil && spec.AWSElasticIP.PrivateAddress == sipv1alpha1.AWSPrivateAddressSecondary
+}
+
+// ReportedBindAddresses returns the bind addresses an address agent's pod reports on its node's interface, or nil.
+func ReportedBindAddresses(pod *corev1.Pod) []string {
+	v := pod.Annotations[sipv1alpha1.AgentBindAddressesAnnotation]
+	if v == "" {
+		return nil
+	}
+	return strings.Split(v, ",")
 }
 
 // Registry is the providers the manager enabled, by name.

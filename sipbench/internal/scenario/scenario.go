@@ -4,6 +4,7 @@ package scenario
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,8 +24,8 @@ type Scenario struct {
 	Area string `yaml:"area,omitempty"`
 	// Requires lists capabilities the run must provide, or the scenario is skipped: a backend kind ("mock",
 	// "livekit-sip", "runtime"), "esl" (the runner can reach FreeSWITCH's event socket), or an edge feature
-	// such as "codec:g722", "fleet" (the runner can act on the FreeSWITCH fleet; see Actions), or "proxy" (the
-	// edge address is Kamailio, not a FreeSWITCH node).
+	// such as "codec:g722", "fleet" (the runner can act on the FreeSWITCH fleet and read it; see Actions and
+	// Expect.MediaAddress), or "proxy" (the edge address is Kamailio, not a FreeSWITCH node).
 	Requires []string `yaml:"requires,omitempty"`
 	// Setup and Teardown are FreeSWITCH API commands run over the event socket around the scenario.
 	Setup    []string `yaml:"setup,omitempty"`
@@ -209,6 +210,9 @@ type Expect struct {
 	EndedBy string `yaml:"endedBy,omitempty"`
 	// Codec negotiated with the edge: PCMU or PCMA.
 	Codec string `yaml:"codec,omitempty"`
+	// MediaAddress is the address the edge's answer (the 200's SDP) must give for media: c= in the audio section,
+	// else the session's. An IP address, or MediaAddressFleet.
+	MediaAddress string `yaml:"mediaAddress,omitempty"`
 	// Backend checks what the mock backend recorded for this call.
 	Backend *EndExpect `yaml:"backend,omitempty"`
 	// Target checks what the transfer target recorded for this call.
@@ -229,6 +233,10 @@ type Expect struct {
 	// SIP checks the messages that crossed the runner's socket for this call.
 	SIP []SIPExpect `yaml:"sip,omitempty"`
 }
+
+// MediaAddressFleet as an expected media address means the external address of one of the fleet's pods, as the
+// operator recorded it when the check runs: the scenario must require fleet.
+const MediaAddressFleet = "fleet"
 
 // EndExpect is what the backend or a transfer target must have seen of a call.
 type EndExpect struct {
@@ -507,6 +515,9 @@ func (s *Scenario) Validate() error {
 	if err := s.validateActions(ids); err != nil {
 		return err
 	}
+	if s.addressesFromFleet() && !slices.Contains(s.Requires, "fleet") {
+		return fmt.Errorf("scenario %q checks media addresses against the fleet, so it must require fleet", s.Name)
+	}
 	if s.Backend != nil {
 		for name, r := range s.Backend.Routes {
 			if len(r.Steps) == 0 {
@@ -550,6 +561,9 @@ func validateCall(c Call) error {
 	}
 	if c.Expect.Target != nil && c.Expect.Target.OtherNodeThan != "" {
 		return fmt.Errorf("otherNodeThan is for the backend only")
+	}
+	if a := c.Expect.MediaAddress; a != "" && a != MediaAddressFleet && net.ParseIP(a) == nil {
+		return fmt.Errorf("expect.mediaAddress %q is neither an IP address nor %s", a, MediaAddressFleet)
 	}
 	return validateMeasures(c)
 }
@@ -741,14 +755,19 @@ func (s *Scenario) validateActions(calls map[string]bool) error {
 	return nil
 }
 
-// NeedsFleet reports whether any action acts on the fleet.
+// NeedsFleet reports whether the scenario needs the runner's fleet: an action acts on it, or a call's media
+// address is checked against it.
 func (s *Scenario) NeedsFleet() bool {
 	for i := range s.Actions {
 		if s.Actions[i].OnFleet() {
 			return true
 		}
 	}
-	return false
+	return s.addressesFromFleet()
+}
+
+func (s *Scenario) addressesFromFleet() bool {
+	return slices.ContainsFunc(s.Calls, func(c Call) bool { return c.Expect.MediaAddress == MediaAddressFleet })
 }
 
 // Missing returns the capabilities s requires that caps lacks.

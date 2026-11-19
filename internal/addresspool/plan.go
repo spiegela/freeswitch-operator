@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+
 	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
 )
 
@@ -128,7 +130,7 @@ func (pl *planner) observe(i int, a Address) {
 	case a.Err != nil:
 		st.Address = cmp.Or(a.IP, p.Address)
 		st.State, st.Node, st.NodeID, st.Message = sipv1alpha1.PoolAddressError, p.Node, p.NodeID, a.Err.Error()
-		st.ClaimedBy = p.ClaimedBy
+		st.ClaimedBy, st.BindAddress = p.ClaimedBy, p.BindAddress
 		// Not knowing where an address is now is no reason to give its node another one.
 		if p.Node != "" && (p.State == sipv1alpha1.PoolAddressBound || p.State == sipv1alpha1.PoolAddressError) {
 			pl.served[p.Node] = true
@@ -140,9 +142,9 @@ func (pl *planner) observe(i int, a Address) {
 		switch {
 		case inCluster && len(pl.claims[node]) > 0 && !pl.served[node]:
 			pl.served[node] = true
-			st.State, st.Node, st.NodeID = sipv1alpha1.PoolAddressBound, node, a.NodeID
+			st.State, st.Node, st.NodeID, st.BindAddress = sipv1alpha1.PoolAddressBound, node, a.NodeID, a.BindIP
 		case inCluster:
-			st.State, st.Node, st.NodeID = sipv1alpha1.PoolAddressIdle, node, a.NodeID
+			st.State, st.Node, st.NodeID, st.BindAddress = sipv1alpha1.PoolAddressIdle, node, a.NodeID, a.BindIP
 		case p.NodeID == a.NodeID:
 			// The pool bound it to a node that has left the cluster.
 			pl.steps[i] = append(pl.steps[i], Step{Unbind: true, Address: a})
@@ -216,7 +218,8 @@ func (pl *planner) give(node string, i int) {
 	}
 	id := pl.nodeIDByName[node]
 	pl.steps[i] = append(pl.steps[i], Step{Address: a, NodeID: id, Node: node})
-	pl.status[i].State, pl.status[i].Node, pl.status[i].NodeID = sipv1alpha1.PoolAddressBound, node, id
+	// The bind address, if the provider uses one, is known once the provider has bound it: the next pass reads it.
+	pl.status[i].State, pl.status[i].Node, pl.status[i].NodeID, pl.status[i].BindAddress = sipv1alpha1.PoolAddressBound, node, id, ""
 	pl.served[node] = true
 }
 
@@ -224,17 +227,41 @@ func compareClaims(a, b sipv1alpha1.AddressClaim) int {
 	return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name), cmp.Compare(a.Pod, b.Pod))
 }
 
-// AddressForNode returns the address a pool has bound to a node for its pods, or empty. An address in Error that
-// was last seen on the node still counts: a provider that can't answer for a while is no reason to make the
-// node's pods unready.
-func AddressForNode(status *sipv1alpha1.SIPAddressPoolStatus, node string) string {
-	for _, a := range status.Addresses {
+// BindingForNode returns the pool's address bound to a node for its pods, or nil. An address in Error that was last
+// seen on the node still counts: a provider that can't answer for a while is no reason to make the node's pods
+// unready.
+func BindingForNode(status *sipv1alpha1.SIPAddressPoolStatus, node string) *sipv1alpha1.PoolAddress {
+	for i, a := range status.Addresses {
 		if a.Node != node || len(a.ClaimedBy) == 0 {
 			continue
 		}
 		if a.State == sipv1alpha1.PoolAddressBound || a.State == sipv1alpha1.PoolAddressError {
-			return a.Address
+			return &status.Addresses[i]
 		}
 	}
-	return ""
+	return nil
+}
+
+// NodeBindAddresses returns the bind addresses a pool gives a node's interface: those of its addresses on the node
+// that are bound, idle or unreadable, claimed or not, so a node keeps an address while a provider can't answer and
+// has it before a pod claims it.
+func NodeBindAddresses(status *sipv1alpha1.SIPAddressPoolStatus, node string) []string {
+	var out []string
+	for _, a := range status.Addresses {
+		if a.Node != node || a.BindAddress == "" {
+			continue
+		}
+		switch a.State {
+		case sipv1alpha1.PoolAddressBound, sipv1alpha1.PoolAddressIdle, sipv1alpha1.PoolAddressError:
+			out = append(out, a.BindAddress)
+		}
+	}
+	return out
+}
+
+// ProviderRead says whether a pool's status comes from a successful read of its provider, so that an address
+// missing from it is really gone.
+func ProviderRead(status *sipv1alpha1.SIPAddressPoolStatus) bool {
+	c := meta.FindStatusCondition(status.Conditions, sipv1alpha1.PoolConditionReady)
+	return c != nil && c.Reason != sipv1alpha1.PoolReasonProviderError && c.Reason != sipv1alpha1.PoolReasonProviderUnavailable
 }

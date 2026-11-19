@@ -201,6 +201,8 @@ type CallResult struct {
 	EchoMs map[string]int `json:"echoMs,omitempty"`
 	// RTP is the stream the caller received, by sequence number.
 	RTP *RTPStats `json:"rtp,omitempty"`
+	// MediaAddress is where the edge's answer said to send media (its SDP's connection address), checked or not.
+	MediaAddress string `json:"mediaAddress,omitempty"`
 	// SIP is every SIP message that crossed the caller's socket, when the scenario records them.
 	SIP     []netem.TraceEntry `json:"sip,omitempty"`
 	Error   string             `json:"error,omitempty"`
@@ -262,7 +264,7 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 	}
 
 	if s.NeedsFleet() && r.cfg.Fleet == nil {
-		res.Status, res.Reason = statusFail, "the scenario acts on the fleet, and the runner has none (-fleet)"
+		res.Status, res.Reason = statusFail, "the scenario needs the fleet, and the runner has none (-fleet)"
 		return res
 	}
 
@@ -373,6 +375,7 @@ func (r *Runner) Run(ctx context.Context, s *scenario.Scenario) (res Result) {
 // call's own, then those across calls and across repeats.
 func (r *Runner) checkCalls(ctx context.Context, s *scenario.Scenario, results []CallResult) []string {
 	var failures []string
+	addrs := &fleetAddresses{fleet: r.cfg.Fleet}
 	for i, c := range s.Calls {
 		cr := &results[i]
 		if r.cfg.MockURL != "" {
@@ -383,7 +386,9 @@ func (r *Runner) checkCalls(ctx context.Context, s *scenario.Scenario, results [
 			cr.Backend = calls
 		}
 		cr.Target = r.tstore.Calls(cr.BenchCall)
-		for _, f := range check(c, *cr, r.cfg.MockURL != "") {
+		fs := check(c, *cr, r.cfg.MockURL != "")
+		fs = append(fs, addrs.check(ctx, c.Expect.MediaAddress, *cr)...)
+		for _, f := range fs {
 			failures = append(failures, fmt.Sprintf("call %s: %s", c.ID, f))
 		}
 	}
@@ -543,6 +548,7 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 	cr.Status = 200
 	if res := d.InviteResponse; res != nil {
 		cr.ResponseHeaders = responseHeaders(res)
+		cr.MediaAddress = sdpConnectionAddress(res.Body())
 	}
 	st.answer()
 	answeredAt := time.Now()

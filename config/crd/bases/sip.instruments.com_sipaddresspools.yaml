@@ -68,6 +68,21 @@ spec:
                     minItems: 1
                     type: array
                     x-kubernetes-list-type: set
+                  privateAddress:
+                    default: Primary
+                    description: |-
+                      privateAddress is the private address on each node that an Elastic IP translates to. Primary (the default)
+                      uses the node's own address, the primary private address of its primary network interface, and refuses a
+                      node that already holds an Elastic IP outside the pool. Secondary assigns the node's primary interface a
+                      secondary private address for the Elastic IP, which leaves an Elastic IP already on the node's own address
+                      (a cluster endpoint, say) alone; the operator's address agent adds it to the node's interface, and the
+                      fleets' pods bind it (sip.instruments.com/bind-address). Secondary needs ec2:AssignPrivateIpAddresses,
+                      ec2:UnassignPrivateIpAddresses, ec2:CreateTags and ec2:DeleteTags too. Don't use it on nodes whose CNI hands
+                      out secondary addresses of the primary interface to pods (the VPC CNI does): it could hand out this one.
+                    enum:
+                    - Primary
+                    - Secondary
+                    type: string
                   region:
                     description: region the Elastic IPs and the edge nodes are in.
                     minLength: 1
@@ -91,6 +106,11 @@ spec:
                   properties:
                     address:
                       description: address is the IP address peers see.
+                      type: string
+                    bindAddress:
+                      description: |-
+                        bindAddress is the address on the node that pods bind to send and receive on this one, when it isn't the
+                        node's own: the secondary private address a NAT translates it to, or the address itself on a Local datapath.
                       type: string
                     claimedBy:
                       description: claimedBy are the pods on the node that use the

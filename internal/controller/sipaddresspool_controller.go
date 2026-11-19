@@ -75,6 +75,9 @@ func (r *SIPAddressPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	var pool sipv1alpha1.SIPAddressPool
 	if err := r.Get(ctx, req.NamespacedName, &pool); err != nil {
+		if apierrors.IsNotFound(err) {
+			forgetPool(req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if pool.DeletionTimestamp != nil {
@@ -90,7 +93,7 @@ func (r *SIPAddressPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		provider, err = r.NewProvider(ctx, &pool)
 	}
 	if err != nil {
-		setPoolConditions(status, gen, metav1.ConditionFalse, "ProviderUnavailable", err.Error())
+		setPoolConditions(status, gen, metav1.ConditionFalse, sipv1alpha1.PoolReasonProviderUnavailable, err.Error())
 		return ctrl.Result{RequeueAfter: poolRetry}, r.writePoolStatus(ctx, &pool, status)
 	}
 	caps := provider.Capabilities()
@@ -117,13 +120,16 @@ func (r *SIPAddressPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if in.Claimants, err = r.poolClaimants(ctx, pool.Name); err != nil {
 		return ctrl.Result{}, err
 	}
-	if in.Observed, err = provider.Observe(ctx); err != nil {
-		setPoolConditions(status, gen, metav1.ConditionFalse, "ProviderError", err.Error())
+	in.Observed, err = provider.Observe(ctx)
+	recordPoolCall(pool.Name, "observe", err)
+	if err != nil {
+		setPoolConditions(status, gen, metav1.ConditionFalse, sipv1alpha1.PoolReasonProviderError, err.Error())
 		if werr := r.writePoolStatus(ctx, &pool, status); werr != nil {
 			return ctrl.Result{}, werr
 		}
 		return ctrl.Result{}, fmt.Errorf("reading the pool from its provider: %w", err)
 	}
+	poolLastObserved.WithLabelValues(pool.Name).SetToCurrentTime()
 
 	plan := addresspool.Decide(in)
 	byID := map[string]int{}
@@ -136,9 +142,11 @@ func (r *SIPAddressPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			if s.Unbind {
 				log.Info("unbinding address", "address", s.Address.IP, "id", s.Address.ID, "from", s.Address.NodeID)
 				err = provider.Unbind(ctx, s.Address)
+				recordPoolCall(pool.Name, "unbind", err)
 			} else {
 				log.Info("binding address", "address", s.Address.IP, "id", s.Address.ID, "node", s.Node)
 				err = provider.Bind(ctx, s.Address, s.NodeID)
+				recordPoolCall(pool.Name, "bind", err)
 			}
 			if err != nil {
 				log.Error(err, "address provider call failed", "id", s.Address.ID)
@@ -157,6 +165,7 @@ func (r *SIPAddressPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 	status.Addresses = plan.Status
+	recordPool(pool.Name, status.Addresses, len(plan.Waiting))
 
 	var problems []string
 	for _, n := range slices.Sorted(maps.Keys(plan.Waiting)) {
@@ -243,7 +252,7 @@ func setPoolConditions(status *sipv1alpha1.SIPAddressPoolStatus, gen int64, read
 	if ready != metav1.ConditionTrue {
 		degraded = metav1.ConditionTrue
 	}
-	meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionReady, Status: ready, Reason: reason, Message: msg, ObservedGeneration: gen})
+	meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: sipv1alpha1.PoolConditionReady, Status: ready, Reason: reason, Message: msg, ObservedGeneration: gen})
 	meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionDegraded, Status: degraded, Reason: reason, Message: msg, ObservedGeneration: gen})
 }
 

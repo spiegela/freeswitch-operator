@@ -98,6 +98,28 @@ actions:
 	}
 }
 
+func TestParseMediaAddress(t *testing.T) {
+	for _, addr := range []string{"203.0.113.5", "2001:db8::5"} {
+		if _, err := Parse([]byte("name: x\ncalls: [{id: a, to: b, expect: {status: 200, mediaAddress: '" + addr + "'}}]")); err != nil {
+			t.Errorf("%s: %v", addr, err)
+		}
+	}
+	s, err := Parse([]byte(fleetCalls))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.NeedsFleet() {
+		t.Errorf("requiring fleet alone doesn't need it")
+	}
+	s, err = Parse([]byte("name: x\nrequires: [fleet]\ncalls: [{id: a, to: b, expect: {status: 200, mediaAddress: fleet}}]"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.NeedsFleet() {
+		t.Errorf("checking media addresses against the fleet needs it")
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	cases := map[string]string{
 		"unknown field":      "name: x\nbogus: 1\noptions: {expectStatus: 200}",
@@ -132,7 +154,10 @@ func TestParseErrors(t *testing.T) {
 			"impairments: [{link: carrier-edge, direction: both, traffic: rtp, loss: 5%}]",
 		"drop unrequired": "name: x\nrequires: [netem]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
 			"impairments: [{link: carrier-edge, direction: to-edge, traffic: sip, drop: first INVITE}]",
-		"sip unrequired": "name: x\ncalls: [{id: a, to: b, expect: {status: 200, sip: [{out: INVITE, min: 2}]}}]",
+		"sip unrequired":           "name: x\ncalls: [{id: a, to: b, expect: {status: 200, sip: [{out: INVITE, min: 2}]}}]",
+		"media address name":       "name: x\ncalls: [{id: a, to: b, expect: {status: 200, mediaAddress: edge.example}}]",
+		"media address pool":       "name: x\nrequires: [fleet]\ncalls: [{id: a, to: b, expect: {status: 200, mediaAddress: pool}}]",
+		"media address unrequired": "name: x\ncalls: [{id: a, to: b, expect: {status: 200, mediaAddress: fleet}}]",
 		"reorder alone": "name: x\nrequires: [netem]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
 			"impairments: [{link: carrier-edge, direction: both, traffic: rtp, reorder: 5%}]",
 	}

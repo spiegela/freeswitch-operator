@@ -33,6 +33,9 @@ const (
 
 var fleetLabels = []string{"kind", "namespace", "name"}
 
+// poolLabel names a SIPAddressPool in its series.
+const poolLabel = "pool"
+
 func withLabels(extra ...string) []string {
 	return append(append([]string{}, fleetLabels...), extra...)
 }
@@ -95,6 +98,29 @@ var (
 		Name: "freeswitch_operator_dispatcher_pending_reload",
 		Help: "1 while the dispatcher list has changed and not every Kamailio is confirmed to hold it, 0 otherwise.",
 	}, fleetLabels)
+	fleetAwaitingAddressAgent = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "freeswitch_operator_fleet_pods_awaiting_address_agent",
+		Help: "Pods whose node holds their pool address but whose address agent hasn't reported the bind address on " +
+			"the node's interface; they start without an address (and wait, when it is required) until it does.",
+	}, fleetLabels)
+
+	// A pool's series name it with pool (pools are cluster-scoped) and go away with it.
+	poolAddresses = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "freeswitch_operator_address_pool_addresses",
+		Help: "The pool's addresses by state: Free, Bound, Idle, Conflict or Error.",
+	}, []string{poolLabel, "state"})
+	poolNodesWaiting = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "freeswitch_operator_address_pool_nodes_waiting",
+		Help: "Nodes running a pod that uses the pool which hold none of its addresses.",
+	}, []string{poolLabel})
+	poolProviderCalls = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "freeswitch_operator_address_pool_provider_calls_total",
+		Help: "Calls to the pool's provider by call (observe, bind or unbind) and result (ok or error).",
+	}, []string{poolLabel, "call", "result"})
+	poolLastObserved = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "freeswitch_operator_address_pool_last_observed_timestamp_seconds",
+		Help: "When the pool last read its provider successfully (Unix time). It rereads every 5 minutes.",
+	}, []string{poolLabel})
 )
 
 func init() {
@@ -102,6 +128,7 @@ func init() {
 		fleetDesiredReplicas, fleetMembersGauge, fleetOutdatedMembers, fleetCondition, fleetPodReplacements,
 		fleetMaxDrainSeconds, fleetDrainStarted, fleetDrainDuration,
 		dispatcherListUpdates, dispatcherDestinations, dispatcherReloads, dispatcherSetInactive, dispatcherPendingReload,
+		fleetAwaitingAddressAgent, poolAddresses, poolNodesWaiting, poolProviderCalls, poolLastObserved,
 	)
 }
 
@@ -244,11 +271,15 @@ func recordReload(f fleetRef, err error) {
 }
 
 func recordSetInactive(f fleetRef, err error) {
-	result := reloadOK
+	dispatcherSetInactive.WithLabelValues(f.labels(resultLabel(err))...).Inc()
+}
+
+// resultLabel is a call's result label: ok, or error.
+func resultLabel(err error) string {
 	if err != nil {
-		result = reloadError
+		return reloadError
 	}
-	dispatcherSetInactive.WithLabelValues(f.labels(result)...).Inc()
+	return reloadOK
 }
 
 func recordPendingReload(f fleetRef, pending bool) {
@@ -267,9 +298,38 @@ func forgetFleet(f fleetRef) {
 	}{
 		fleetDesiredReplicas, fleetMembersGauge, fleetOutdatedMembers, fleetCondition, fleetPodReplacements,
 		fleetMaxDrainSeconds, fleetDrainStarted, dispatcherListUpdates, dispatcherDestinations, dispatcherReloads,
-		fleetDrainDuration, dispatcherSetInactive, dispatcherPendingReload,
+		fleetDrainDuration, dispatcherSetInactive, dispatcherPendingReload, fleetAwaitingAddressAgent,
 	} {
 		v.DeletePartialMatch(f.partial())
 	}
 	drains.forget(f)
+}
+
+// recordPoolCall counts one provider call.
+func recordPoolCall(pool, call string, err error) {
+	poolProviderCalls.WithLabelValues(pool, call, resultLabel(err)).Inc()
+}
+
+// recordPool sets a pool's state series from one pass.
+func recordPool(pool string, addrs []sipv1alpha1.PoolAddress, waiting int) {
+	counts := map[sipv1alpha1.PoolAddressState]int{
+		sipv1alpha1.PoolAddressFree: 0, sipv1alpha1.PoolAddressBound: 0, sipv1alpha1.PoolAddressIdle: 0,
+		sipv1alpha1.PoolAddressConflict: 0, sipv1alpha1.PoolAddressError: 0,
+	}
+	for _, a := range addrs {
+		counts[a.State]++
+	}
+	for state, n := range counts {
+		poolAddresses.WithLabelValues(pool, string(state)).Set(float64(n))
+	}
+	poolNodesWaiting.WithLabelValues(pool).Set(float64(waiting))
+}
+
+// forgetPool removes every series of a pool that no longer exists.
+func forgetPool(pool string) {
+	for _, v := range []interface {
+		DeletePartialMatch(prometheus.Labels) int
+	}{poolAddresses, poolNodesWaiting, poolProviderCalls, poolLastObserved} {
+		v.DeletePartialMatch(prometheus.Labels{poolLabel: pool})
+	}
 }

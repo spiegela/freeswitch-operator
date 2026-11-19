@@ -27,6 +27,18 @@ const (
 	// ExternalAddressAnnotation is set by the operator on each FreeSWITCH pod to the public address peers
 	// should see. The pod reads it from its downward-API volume, which updates in place.
 	ExternalAddressAnnotation = "sip.instruments.com/external-address"
+	// BindAddressAnnotation is set by the operator on each pod of a fleet whose pool needs an address on the node
+	// (a secondary private address, or a Local datapath): the address the pod binds its peer-facing traffic to
+	// (FreeSWITCH's RTP, Kamailio's peer listener). The operator sets it, and the external address with it, only
+	// once the address agent reports the node has the address on an interface.
+	BindAddressAnnotation = "sip.instruments.com/bind-address"
+	// AgentBindAddressesAnnotation is set by the address agent on its own pod: the pools' bind addresses its node
+	// has on an interface, comma-separated and sorted.
+	AgentBindAddressesAnnotation = "sip.instruments.com/bind-addresses"
+	// AppNameLabel is the well-known label naming an application.
+	AppNameLabel = "app.kubernetes.io/name"
+	// AddressAgentName is the AppNameLabel of the address agent's pods.
+	AddressAgentName = "freeswitch-operator-address-agent"
 
 	// ClusterLabel names the FreeswitchCluster a pod belongs to.
 	ClusterLabel = "sip.instruments.com/cluster"

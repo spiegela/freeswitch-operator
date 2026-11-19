@@ -24,6 +24,9 @@ type Fake struct {
 	FailBind, FailUnbind map[string]error
 	// ObserveErr makes Observe fail.
 	ObserveErr error
+	// BindIPs, when set, are the bind addresses Observe reports for bound addresses, by address ID, as a provider
+	// that binds to a secondary private address does.
+	BindIPs map[string]string
 }
 
 // NewFake returns a Fake holding the given addresses, ID to IP, in order.
@@ -56,6 +59,7 @@ func (f *Fake) Observe(context.Context) ([]Address, error) {
 		a := Address{ID: id, IP: f.ips[id], NodeID: f.boundTo[id]}
 		if a.NodeID != "" {
 			a.BindingID = "binding-" + id
+			a.BindIP = f.BindIPs[id]
 		}
 		out = append(out, a)
 	}

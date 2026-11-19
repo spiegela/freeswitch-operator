@@ -8,6 +8,11 @@
        downward-API file /etc/freeswitch-operator/podinfo/external-address; without it, this host's address. -->
   <X-PRE-PROCESS cmd="exec-set" data="external_address=/bin/sh /usr/local/freeswitch/conf/bin/external-address.sh"/>
 
+  <!-- The address RTP is bound to (rtp-ip): FreeSWITCH's own, unless the pod's address pool gives it one of its own
+       on the node, which freeswitch-operator writes to /etc/freeswitch-operator/podinfo/bind-address. SIP stays on
+       local_ip_v4, where Kamailio dispatches to it. -->
+  <X-PRE-PROCESS cmd="exec-set" data="bind_address=/bin/sh /usr/local/freeswitch/conf/bin/bind-address.sh $${local_ip_v4}"/>
+
   <!-- Where calls from trunks go: the mock backend today, LiveKit SIP later. host[:port] -->
   <X-PRE-PROCESS cmd="exec-set" data="backend_host=/bin/sh /usr/local/freeswitch/conf/bin/env.sh BACKEND_HOST mockbackend:5060"/>
   <!-- Where transfers asked for by the backend (REFER) are placed. host[:port] -->

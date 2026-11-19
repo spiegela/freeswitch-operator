@@ -139,9 +139,11 @@ func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	pods := podList.Items
 	slices.SortFunc(pods, func(a, b corev1.Pod) int { return strings.Compare(a.Name, b.Name) })
 
-	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods); err != nil {
+	awaiting, err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
+	fleetAwaitingAddressAgent.WithLabelValues(fleet.labels()...).Set(float64(awaiting))
 	if err := r.pruneConfigSnapshots(ctx, &kc, configName, sts, pods); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -642,6 +644,18 @@ func (r *KamailioClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return out
 	})
 
+	var fleets fleetLister = func(ctx context.Context) ([]client.Object, []sipv1alpha1.ExternalAddressSpec, error) {
+		var list sipv1alpha1.KamailioClusterList
+		if err := r.List(ctx, &list); err != nil {
+			return nil, nil, err
+		}
+		objs := make([]client.Object, len(list.Items))
+		specs := make([]sipv1alpha1.ExternalAddressSpec, len(list.Items))
+		for i := range list.Items {
+			objs[i], specs[i] = &list.Items[i], list.Items[i].Spec.ExternalAddress
+		}
+		return objs, specs, nil
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sipv1alpha1.KamailioCluster{}).
 		Owns(&appsv1.StatefulSet{}).
@@ -653,18 +667,8 @@ func (r *KamailioClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.ConfigMap{}, fleetListToProxies).
 		Watches(&corev1.Pod{}, podToProxy).
 		Watches(&corev1.Node{}, nodeToProxies).
-		Watches(&sipv1alpha1.SIPAddressPool{}, poolToFleets(func(ctx context.Context) ([]client.Object, []sipv1alpha1.ExternalAddressSpec, error) {
-			var list sipv1alpha1.KamailioClusterList
-			if err := r.List(ctx, &list); err != nil {
-				return nil, nil, err
-			}
-			objs := make([]client.Object, len(list.Items))
-			specs := make([]sipv1alpha1.ExternalAddressSpec, len(list.Items))
-			for i := range list.Items {
-				objs[i], specs[i] = &list.Items[i], list.Items[i].Spec.ExternalAddress
-			}
-			return objs, specs, nil
-		})).
+		Watches(&sipv1alpha1.SIPAddressPool{}, poolToFleets(fleets)).
+		Watches(&corev1.Pod{}, agentToFleets(mgr.GetClient(), fleets), agentReports).
 		Named("kamailiocluster").
 		Complete(r)
 }
