@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -339,13 +340,45 @@ type Action struct {
 // Empty is an action with no settings: write it as {}.
 type Empty struct{}
 
-// BreakConfig replaces text in one key of a ConfigMap.
+// BreakConfig replaces text in one key of a ConfigMap: the first occurrence of Replace (literal text), or the
+// first match of Match (a Go regular expression, for text that differs between clusters, such as a port), never
+// both. With may refer to Match's groups as $1 or ${name}.
 type BreakConfig struct {
 	ConfigMap string `yaml:"configMap"`
 	Key       string `yaml:"key"`
-	Replace   string `yaml:"replace"`
+	Replace   string `yaml:"replace,omitempty"`
+	Match     string `yaml:"match,omitempty"`
 	With      string `yaml:"with"`
 }
+
+// Apply returns s with the replacement made. It fails if there is nothing to replace or the replacement changes
+// nothing, since a scenario that breaks nothing would test nothing.
+func (b *BreakConfig) Apply(s string) (string, error) {
+	var out string
+	if b.Match == "" {
+		if !strings.Contains(s, b.Replace) {
+			return "", fmt.Errorf("no %q to replace", b.Replace)
+		}
+		out = strings.Replace(s, b.Replace, b.With, 1)
+	} else {
+		re, err := regexp.Compile(b.Match)
+		if err != nil {
+			return "", err
+		}
+		loc := re.FindStringSubmatchIndex(s)
+		if loc == nil {
+			return "", fmt.Errorf("nothing matches %q", b.Match)
+		}
+		out = s[:loc[0]] + string(re.ExpandString(nil, b.With, s, loc)) + s[loc[1]:]
+	}
+	if out == s {
+		return "", fmt.Errorf("replacing with %q changes nothing", b.With)
+	}
+	return out, nil
+}
+
+// Target is what b looks for: Replace or Match.
+func (b *BreakConfig) Target() string { return b.Replace + b.Match }
 
 // WaitMember waits for the pod that carries call Of to reach State: Active, Draining, Starting, or Gone (no
 // longer a member).
@@ -726,8 +759,13 @@ func (s *Scenario) validateActions(calls map[string]bool) error {
 		switch {
 		case a.BreakConfig != nil:
 			b := a.BreakConfig
-			if b.ConfigMap == "" || b.Key == "" || b.Replace == "" || b.Replace == b.With {
-				return fmt.Errorf("%s: breakConfig needs configMap, key, and replace different from with", label)
+			if b.ConfigMap == "" || b.Key == "" || (b.Replace == "") == (b.Match == "") ||
+				(b.Replace != "" && b.Replace == b.With) {
+				return fmt.Errorf("%s: breakConfig needs configMap, key, and one of replace (different from with) "+
+					"or match", label)
+			}
+			if _, err := regexp.Compile(b.Match); err != nil {
+				return fmt.Errorf("%s: breakConfig.match: %w", label, err)
 			}
 		case a.WaitMember != nil:
 			if !calls[a.WaitMember.Of] {

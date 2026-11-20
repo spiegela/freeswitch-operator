@@ -27,7 +27,7 @@ actions:
     breakConfig:
       configMap: freeswitch-profiles
       key: trunks.xml
-      replace: '<param name="sip-port" value="5060"/>'
+      match: '<param name="sip-port" value="[0-9]+"/>'   # whatever SIP port the fleet uses
       with: '<param name="sip-port" value="5061"/>'
   - expectRollStuck: {forMs: 90000, timeoutMs: 180000}
   - restoreConfig: {}

@@ -222,7 +222,7 @@ the RFC 4475 or ETSI texts.
 | `drainNodeOf: <call>` | what `kubectl drain` does to the call's edge node: cordon it, evict the FreeSWITCH pod |
 | `uncordon: {}` | uncordon every node this scenario cordoned |
 | `rollFleet: {}` | set `SIPBENCH_ROLL` on the fleet's pod template, so the operator rolls every pod |
-| `breakConfig: {configMap, key, replace, with}` | edit a ConfigMap the fleet reads |
+| `breakConfig: {configMap, key, replace or match, with}` | edit a ConfigMap the fleet reads: the first `replace` (literal text) or the first match of `match` (a Go regular expression; `with` may use `$1`) |
 | `restoreConfig: {}` | put back every ConfigMap `breakConfig` edited |
 | `waitMember: {of: <call>, state, timeoutMs}` | wait until the call's pod is `Active`, `Draining`, `Starting` or `Gone` |
 | `waitFleetCurrent: {timeoutMs}` | wait until every pod runs the latest template and takes calls |

@@ -207,14 +207,15 @@ func (t *timeline) do(ctx context.Context, a *scenario.Action) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if !strings.Contains(orig, b.Replace) {
-			return "", fmt.Errorf("ConfigMap %s key %s has no %q to replace", b.ConfigMap, b.Key, b.Replace)
+		broken, err := b.Apply(orig)
+		if err != nil {
+			return "", fmt.Errorf("ConfigMap %s key %s: %w", b.ConfigMap, b.Key, err)
 		}
-		if err := f.SetConfigMapKey(ctx, b.ConfigMap, b.Key, strings.Replace(orig, b.Replace, b.With, 1)); err != nil {
+		if err := f.SetConfigMapKey(ctx, b.ConfigMap, b.Key, broken); err != nil {
 			return "", err
 		}
 		t.broken = append(t.broken, brokenKey{configMap: b.ConfigMap, key: b.Key, original: orig})
-		return fmt.Sprintf("ConfigMap %s key %s: %q -> %q", b.ConfigMap, b.Key, b.Replace, b.With), nil
+		return fmt.Sprintf("ConfigMap %s key %s: %q -> %q", b.ConfigMap, b.Key, b.Target(), b.With), nil
 
 	case a.RestoreConfig != nil:
 		keys, err := t.restore(ctx)

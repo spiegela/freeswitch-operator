@@ -174,7 +174,7 @@ requires: [mock, fleet]
 calls:
   - {id: a, to: long, steps: [{tone: {hz: 600, ms: 20000}}], expect: {status: 200}}
 actions:
-  - {afterAnswered: a, breakConfig: {configMap: profiles, key: trunks.xml, replace: 'value="5060"', with: 'value="5061"'}}
+  - {afterAnswered: a, breakConfig: {configMap: profiles, key: trunks.xml, match: 'value="[0-9]+"', with: 'value="5061"'}}
   - {waitFleetCurrent: {timeoutMs: 600}}
 `))
 	if err != nil {

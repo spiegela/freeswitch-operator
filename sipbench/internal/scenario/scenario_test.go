@@ -138,6 +138,9 @@ func TestParseErrors(t *testing.T) {
 		"bad member state":   fleetCalls + "actions: [{waitMember: {of: a, state: Sleepy}}]",
 		"no stuck time":      fleetCalls + "actions: [{expectRollStuck: {}}]",
 		"break nothing":      fleetCalls + "actions: [{breakConfig: {configMap: c, key: k, replace: x, with: x}}]",
+		"break neither":      fleetCalls + "actions: [{breakConfig: {configMap: c, key: k, with: x}}]",
+		"break both":         fleetCalls + "actions: [{breakConfig: {configMap: c, key: k, replace: x, match: y, with: z}}]",
+		"break bad match":    fleetCalls + "actions: [{breakConfig: {configMap: c, key: k, match: '(', with: z}}]",
 		"duplicate action":   fleetCalls + "actions: [{name: n, rollFleet: {}}, {name: n, uncordon: {}}]",
 		"start after none":   "name: x\nrequires: [fleet]\ncalls: [{id: a, to: b, startAfter: n, expect: {status: 200}}]",
 		"fleet unrequired":   "name: x\ncalls: [{id: a, to: b, expect: {status: 200}}]\nactions: [{rollFleet: {}}]",
@@ -166,6 +169,34 @@ func TestParseErrors(t *testing.T) {
 			t.Errorf("%s: expected an error", name)
 		} else if strings.TrimSpace(err.Error()) == "" {
 			t.Errorf("%s: empty error", name)
+		}
+	}
+}
+
+func TestBreakConfigApply(t *testing.T) {
+	const profile = `<param name="sip-ip" value="x"/><param name="sip-port" value="5062"/><param name="sip-port" value="5070"/>`
+	for name, c := range map[string]struct {
+		b    BreakConfig
+		want string // empty: an error
+	}{
+		"replace": {BreakConfig{Replace: `value="5062"`, With: `value="5061"`},
+			`<param name="sip-ip" value="x"/><param name="sip-port" value="5061"/><param name="sip-port" value="5070"/>`},
+		"replace missing": {BreakConfig{Replace: `value="5060"`, With: `value="5061"`}, ""},
+		"match first only": {BreakConfig{Match: `<param name="sip-port" value="[0-9]+"/>`, With: `<param name="sip-port" value="5061"/>`},
+			`<param name="sip-ip" value="x"/><param name="sip-port" value="5061"/><param name="sip-port" value="5070"/>`},
+		"match groups": {BreakConfig{Match: `(name="sip-port" value=)"[0-9]+"`, With: `${1}"5061"`},
+			`<param name="sip-ip" value="x"/><param name="sip-port" value="5061"/><param name="sip-port" value="5070"/>`},
+		"match missing":   {BreakConfig{Match: `name="tls-port"`, With: "x"}, ""},
+		"match unchanged": {BreakConfig{Match: `value="50[0-9]2"`, With: `value="5062"`}, ""},
+	} {
+		got, err := c.b.Apply(profile)
+		switch {
+		case c.want == "" && err == nil:
+			t.Errorf("%s: got %s, want an error", name, got)
+		case c.want != "" && err != nil:
+			t.Errorf("%s: %v", name, err)
+		case got != c.want:
+			t.Errorf("%s: got\n%s\nwant\n%s", name, got, c.want)
 		}
 	}
 }
