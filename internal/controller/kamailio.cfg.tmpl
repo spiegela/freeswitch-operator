@@ -13,6 +13,9 @@
 #                  PRIVATE_ADDR, and each request leaves from the side it is going to
 #
 # Dispatcher sets, in priority order:{{range .Sets}} {{.}}{{else}} none{{end}}
+{{- if .TrustedPeers}}
+# Trusted peers:{{range .TrustedPeers}} {{.Name}}{{end}}
+{{- end}}
 
 #!define SIP_PORT {{.SIPPort}}
 #!define RPC_PORT {{.RPCPort}}
@@ -72,6 +75,9 @@ loadmodule "dispatcher.so"
 loadmodule "xhttp.so"
 loadmodule "jsonrpcs.so"
 loadmodule "xhttp_prom.so"
+{{- if .TrustedPeers}}
+loadmodule "ipops.so"
+{{- end}}
 
 # Set to 1 over JSON-RPC by the pod's drain: new calls from peers then get 503 and go to another Kamailio.
 modparam("pv", "shvset", "draining=i:0")
@@ -102,7 +108,8 @@ modparam("tm", "remap_503_500", 0)
 # Kamailio's own statistics (tm, sl, core, ...) as kamailio_* metrics, kept however long they go unchanged, and the
 # counters below. A rejected request's source and Call-ID go to the log, not into labels.
 #   kamailio_rejected_requests_total{reason}  requests refused before any node saw them: display_name (400 here),
-#                                             sanity (sanity's own 4xx), uri_scheme (416)
+#                                             sanity (sanity's own 4xx), uri_scheme (416){{if .TrustedPeers}}, untrusted_source
+#                                             (dropped unanswered: not a trusted peer or one of our nodes){{end}}
 #   kamailio_node_silent_timeouts_total       a node didn't answer a request within DS_FR_TIMER
 #   kamailio_silent_drops_total{cause}        every node tried stayed silent and the caller got 408: cause request
 #                                             when a node answered another call meanwhile (the nodes are up and
@@ -121,6 +128,16 @@ modparam("jsonrpcs", "pretty_format", 1)
 modparam("jsonrpcs", "transport", 1)
 
 request_route {
+{{- if .TrustedPeers}}
+	# Only trusted peers (spec.trustedPeers) and our own nodes get anything from us, an error included: a request
+	# from anywhere else is dropped before it is parsed further, so scanners learn nothing. In-dialog requests are
+	# checked too, so a forged Route set can't make Kamailio relay for a stranger.
+	if (!ds_is_from_list() && !route(TRUSTED_PEER)) {
+		prom_counter_inc("rejected_requests_total", "1", "untrusted_source");
+		xlog("L_INFO", "dropped $rm from untrusted $si:$sp\n");
+		exit;
+	}
+{{- end}}
 	# Adds Max-Forwards: 70 when missing (RFC 3261's recommended value), decrements it otherwise.
 	if (!mf_process_maxfwd_header("70")) {
 		sl_send_reply("483", "Too Many Hops");
@@ -243,7 +260,18 @@ route[ANY_ACTIVE] {
 	return -1;
 }
 
-# Whether From and To are well formed where Kamailio's parser is lenient and FreeSWITCH's isn't: a display name
+{{if .TrustedPeers}}# Whether the request's source is in spec.trustedPeers.
+route[TRUSTED_PEER] {
+{{- range .TrustedPeers}}
+	# {{.Name}}
+	if (is_in_subnet("$si", "{{.Subnets}}")) {
+		return 1;
+	}
+{{- end}}
+	return -1;
+}
+
+{{end}}# Whether From and To are well formed where Kamailio's parser is lenient and FreeSWITCH's isn't: a display name
 # (NAME_ADDR), or, for a bare addr-spec, no comma or question mark (RFC 3261 20: a URI with either must be in <>).
 route[DISPLAY_NAMES] {
 	if ($hdr(From) =~ "<") {

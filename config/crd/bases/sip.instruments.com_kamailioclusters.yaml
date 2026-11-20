@@ -473,6 +473,45 @@ spec:
                       type: string
                   type: object
                 type: array
+              trustedPeers:
+                description: |-
+                  trustedPeers, when set, are the only sources Kamailio takes requests from, besides the FreeSWITCH nodes in
+                  spec.dispatch: any request from another address (a new call, a keepalive, a request inside a dialog) is
+                  dropped unanswered and counted in kamailio_rejected_requests_total{reason="untrusted_source"}. Empty trusts
+                  every source. Changing this list rolls the Kamailio pods.
+
+                  It guards signaling only. Media goes straight between peers and FreeSWITCH, so a firewall in front of the
+                  FreeSWITCH nodes' RTP ports should admit the peers' media addresses, which often differ from these.
+                items:
+                  description: TrustedPeer is a SIP peer (a carrier, a PBX, a test
+                    bench) whose addresses may start calls through Kamailio.
+                  properties:
+                    addresses:
+                      description: addresses the peer's signaling comes from, as CIDRs
+                        (IPv4 or IPv6; a single address is a /32 or /128).
+                      items:
+                        format: cidr
+                        type: string
+                      maxItems: 64
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    name:
+                      description: name of the peer, for people reading the spec and
+                        the rendered config.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*$
+                      type: string
+                  required:
+                  - addresses
+                  - name
+                  type: object
+                maxItems: 32
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
             required:
             - image
             type: object

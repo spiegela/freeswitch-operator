@@ -30,3 +30,9 @@ spec:
   dispatch:
     - freeswitchCluster: edge
   reloadDelaySeconds: 75
+  # Only these sources (and the fleets above) may send requests; the rest are dropped unanswered. Omit to trust
+  # every source. Media doesn't pass through Kamailio: open the FreeSWITCH nodes' RTP range to the peers' media
+  # addresses separately.
+  trustedPeers:
+    - name: carrier
+      addresses: ["198.51.100.0/30", "203.0.113.0/30"]

@@ -67,6 +67,22 @@ type DispatchTarget struct {
 	FreeswitchCluster string `json:"freeswitchCluster"`
 }
 
+// TrustedPeer is a SIP peer (a carrier, a PBX, a test bench) whose addresses may start calls through Kamailio.
+type TrustedPeer struct {
+	// name of the peer, for people reading the spec and the rendered config.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]*$`
+	Name string `json:"name"`
+
+	// addresses the peer's signaling comes from, as CIDRs (IPv4 or IPv6; a single address is a /32 or /128).
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:Format=cidr
+	// +listType=set
+	Addresses []string `json:"addresses"`
+}
+
 // KamailioClusterSpec defines the desired state of KamailioCluster.
 // +kubebuilder:validation:XValidation:rule="self.sip.port != self.rpc.port",message="sip.port and rpc.port must differ"
 // +kubebuilder:validation:XValidation:rule="self.metrics.port != self.sip.port && self.metrics.port != self.rpc.port",message="metrics.port must differ from sip.port and rpc.port"
@@ -137,6 +153,19 @@ type KamailioClusterSpec struct {
 	// +kubebuilder:validation:MaxItems=16
 	// +optional
 	Dispatch []DispatchTarget `json:"dispatch,omitempty"`
+
+	// trustedPeers, when set, are the only sources Kamailio takes requests from, besides the FreeSWITCH nodes in
+	// spec.dispatch: any request from another address (a new call, a keepalive, a request inside a dialog) is
+	// dropped unanswered and counted in kamailio_rejected_requests_total{reason="untrusted_source"}. Empty trusts
+	// every source. Changing this list rolls the Kamailio pods.
+	//
+	// It guards signaling only. Media goes straight between peers and FreeSWITCH, so a firewall in front of the
+	// FreeSWITCH nodes' RTP ports should admit the peers' media addresses, which often differ from these.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	TrustedPeers []TrustedPeer `json:"trustedPeers,omitempty"`
 
 	// reloadDelaySeconds is how long after a dispatcher list change the operator asks Kamailio to reload it,
 	// to give the kubelet time to update the mounted file. It then checks the list was loaded, and reloads
