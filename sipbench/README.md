@@ -355,7 +355,9 @@ A minimal SBC, deliberately small enough to read in one sitting:
   cluster). `backend` on 5080 faces the backend. RFC 2833 on both (payload type 101). Codecs PCMU and PCMA.
   `sip-options-respond-503-on-busy` makes OPTIONS answer 503 when the node is paused or full, so a dispatcher
   probe takes it out of rotation.
-- **Dialplan.** `trunks` context: bridge `sofia/backend/<user>@$${backend_host}`, carrying X- headers.
+- **Dialplan.** `trunks` context: bridge `sofia/backend/<user>@$${backend_host}`, carrying X- headers. A called
+  number `lk<number>` is bridged as `<number>` to `$${livekit_host}` instead: LiveKit SIP, where an agent answers
+  (the backend when `LIVEKIT_HOST` is unset).
   `inherit_codec` keeps the backend leg on the caller's codec.
 - **Fallback.** When the bridge fails (the backend rejects, doesn't answer within `RING_TIMEOUT`, or can't be
   reached), the edge does not pass the failure back. It answers with `X-Fallback-Reason: <originate
@@ -370,8 +372,8 @@ A minimal SBC, deliberately small enough to read in one sitting:
   new INVITEs get 503. Each bridged call uses two sessions.
 - **Calls from the backend** (`backend` context) are refused with 403 until outbound routing is designed.
 - **Variables** come from the environment at start through `X-PRE-PROCESS cmd="exec-set"` (`bin/env.sh`):
-  `BACKEND_HOST`, `TRANSFER_HOST`, `UNREACHABLE_HOST`, `RING_TIMEOUT`, `FALLBACK_TONE_HZ`, `FALLBACK_TONE_MS`,
-  `ESL_LISTEN_IP`.
+  `BACKEND_HOST`, `LIVEKIT_HOST`, `TRANSFER_HOST`, `UNREACHABLE_HOST`, `RING_TIMEOUT`, `FALLBACK_TONE_HZ`,
+  `FALLBACK_TONE_MS`, `ESL_LISTEN_IP`.
 - **External address.** `ext-sip-ip`/`ext-rtp-ip` on `trunks` come from
   `/etc/freeswitch-operator/podinfo/external-address` (override the path with `FS_EXTERNAL_ADDRESS_FILE`), or this
   host's first IPv4 address when the file is absent (`bin/podinfo.sh`; dual-stack hosts may list IPv6 first). With a
