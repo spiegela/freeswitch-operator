@@ -374,11 +374,11 @@ A minimal SBC, deliberately small enough to read in one sitting:
 - **Variables** come from the environment at start through `X-PRE-PROCESS cmd="exec-set"` (`bin/env.sh`):
   `BACKEND_HOST`, `LIVEKIT_HOST`, `TRANSFER_HOST`, `UNREACHABLE_HOST`, `RING_TIMEOUT`, `FALLBACK_TONE_HZ`,
   `FALLBACK_TONE_MS`, `ESL_LISTEN_IP`.
-- **External address.** `ext-sip-ip`/`ext-rtp-ip` on `trunks` come from
+- **External address.** `ext-rtp-ip` on `trunks` comes from
   `/etc/freeswitch-operator/podinfo/external-address` (override the path with `FS_EXTERNAL_ADDRESS_FILE`), or this
   host's first IPv4 address when the file is absent (`bin/podinfo.sh`; dual-stack hosts may list IPv6 first). With a
-  `bind-address` file (`FS_BIND_ADDRESS_FILE`) RTP binds that address (`rtp-ip`) and `ext-sip-ip` stays
-  `local_ip_v4`, where SIP listens. FreeSWITCH uses the `ext-` addresses only for peers outside the profile's
+  `bind-address` file (`FS_BIND_ADDRESS_FILE`) RTP binds that address (`rtp-ip`). `ext-sip-ip` is always
+  `local_ip_v4`, where SIP listens and Kamailio reaches it. FreeSWITCH uses the `ext-` addresses only for peers outside the profile's
   `local-network-acl`, and every call on a cluster comes from Kamailio's private address, so `trunks` sets it to
   `nowhere`, an ACL that matches nothing (`acl.conf.xml`): every caller, sipbench inside the cluster too, is offered
   the external address. With the default (`localnet.auto`) an AWS pool's carriers were offered the private bind

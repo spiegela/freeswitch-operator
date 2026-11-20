@@ -184,7 +184,9 @@ Kamailio's own OPTIONS probing (`ds_ping_interval`) stays on as a backstop, and 
 
 ### 4. External addresses (v0 node addresses; pool in M3)
 
-FreeSWITCH must put its public address in SDP and SIP headers (`ext-rtp-ip`, `ext-sip-ip`). The operator writes it
+FreeSWITCH must put its public address in SDP (`ext-rtp-ip`); its SIP headers keep its own address (`ext-sip-ip`),
+since peers signal only through Kamailio, which reaches it there and advertises the public address itself. The
+operator writes it
 on each pod as the annotation `sip.instruments.com/external-address`; the pod reads it from its downward-API
 volume, which, unlike environment variables, updates in place. The bundled `vars.xml` example uses FreeSWITCH's
 `exec-set` pre-processor to read it at start.
@@ -286,9 +288,10 @@ Kamailio dispatches to it there, and peers only ever signal through Kamailio.
 
 - **FreeSWITCH** gets a `bind-address` downward-API file (`FS_BIND_ADDRESS_FILE`) in a fleet that draws from a pool;
   sipbench's config ([`bin/podinfo.sh`](sipbench/freeswitch/conf/bin/podinfo.sh)) sets `rtp-ip` from it,
-  falling back to `local_ip_v4`, and then advertises the external address for RTP only (`ext-rtp-ip`): `ext-sip-ip`
-  stays `local_ip_v4`, since the external address reaches only the bind address, where SIP doesn't listen, and a
-  Contact naming it strands the dialog's ACK and BYE. FreeSWITCH uses the `ext-` addresses only for peers outside
+  falling back to `local_ip_v4`, and then advertises the external address for RTP only (`ext-rtp-ip`). `ext-sip-ip`
+  is always `local_ip_v4`, with a pool or without: the external address may reach only the bind address, where SIP
+  doesn't listen, or reach the node only through the cloud's translation, and a Contact naming it strands the
+  dialog's ACK and BYE or sends them the long way round. FreeSWITCH uses the `ext-` addresses only for peers outside
   the profile's `local-network-acl`, and with the default (`localnet.auto`) Kamailio, which every call comes
   through, is inside it: on a `NAT` pool carriers were then offered the private bind address, and their media never
   arrived. So the `trunks` profile sets `local-network-acl` to an ACL that matches nothing, and every caller gets
