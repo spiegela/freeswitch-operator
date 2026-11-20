@@ -378,7 +378,11 @@ A minimal SBC, deliberately small enough to read in one sitting:
   `/etc/freeswitch-operator/podinfo/external-address` (override the path with `FS_EXTERNAL_ADDRESS_FILE`), or this
   host's first IPv4 address when the file is absent (`bin/podinfo.sh`; dual-stack hosts may list IPv6 first). With a
   `bind-address` file (`FS_BIND_ADDRESS_FILE`) RTP binds that address (`rtp-ip`) and `ext-sip-ip` stays
-  `local_ip_v4`, where SIP listens.
+  `local_ip_v4`, where SIP listens. FreeSWITCH uses the `ext-` addresses only for peers outside the profile's
+  `local-network-acl`, and every call on a cluster comes from Kamailio's private address, so `trunks` sets it to
+  `nowhere`, an ACL that matches nothing (`acl.conf.xml`): every caller, sipbench inside the cluster too, is offered
+  the external address. With the default (`localnet.auto`) an AWS pool's carriers were offered the private bind
+  address, and their media never arrived.
 - **Event socket** on 8021 (password `ClueCon`, limited to private ranges by the `bench` ACL), on all addresses
   by default for the compose runner. On a cluster set `ESL_LISTEN_IP=127.0.0.1`: `fs_cli` and the operator's ready
   and drain scripts reach it there. Change the password before exposing it anywhere.

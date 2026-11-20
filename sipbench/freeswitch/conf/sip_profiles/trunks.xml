@@ -12,6 +12,17 @@
     <param name="rtp-ip" value="$${bind_address}"/>
     <param name="ext-sip-ip" value="$${external_sip_address}"/>
     <param name="ext-rtp-ip" value="$${external_address}"/>
+    <!--
+      FreeSWITCH uses ext-sip-ip and ext-rtp-ip only for peers outside local-network-acl, and every call here comes
+      through Kamailio, on a private address. With the default (localnet.auto) it offered carriers rtp-ip, its
+      private address (on AWS, a pool's secondary private address), and their media never arrived. Nothing is local,
+      so every caller gets the external address. Where rtp-ip already is that address (a Local pool such as MetalLB;
+      compose, where it is the container's own) nothing changes. Behind a NAT, callers inside the cluster (sipbench)
+      reach it through the cloud's translation, so the node's security group must let them in. SIP is unaffected
+      while ext-sip-ip is local_ip_v4 (any pool with a bind address); without one (NodeExternalIP), Contact names
+      the external address to Kamailio too. See bin/podinfo.sh.
+    -->
+    <param name="local-network-acl" value="nowhere"/>
     <param name="sip-port" value="5060"/>
     <!-- A real edge lists each trunk's addresses in an ACL; the bench allows its own network. -->
     <param name="apply-inbound-acl" value="bench"/>

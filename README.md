@@ -288,7 +288,12 @@ Kamailio dispatches to it there, and peers only ever signal through Kamailio.
   sipbench's config ([`bin/podinfo.sh`](sipbench/freeswitch/conf/bin/podinfo.sh)) sets `rtp-ip` from it,
   falling back to `local_ip_v4`, and then advertises the external address for RTP only (`ext-rtp-ip`): `ext-sip-ip`
   stays `local_ip_v4`, since the external address reaches only the bind address, where SIP doesn't listen, and a
-  Contact naming it strands the dialog's ACK and BYE. The operator renders Kamailio's config but not FreeSWITCH's: a
+  Contact naming it strands the dialog's ACK and BYE. FreeSWITCH uses the `ext-` addresses only for peers outside
+  the profile's `local-network-acl`, and with the default (`localnet.auto`) Kamailio, which every call comes
+  through, is inside it: on a `NAT` pool carriers were then offered the private bind address, and their media never
+  arrived. So the `trunks` profile sets `local-network-acl` to an ACL that matches nothing, and every caller gets
+  the external address; callers inside the cluster (sipbench) reach it through the cloud's translation, so the
+  node's security group must let them in. The operator renders Kamailio's config but not FreeSWITCH's: a
   FreeSWITCH config of your own needs the same, or its RTP leaves from the node's address and the pool's address
   never carries it.
 - **Kamailio** with a bind address listens on it, advertising the public address, and separately on the pod's own
