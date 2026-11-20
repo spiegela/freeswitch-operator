@@ -7,5 +7,7 @@
       <node type="allow" cidr="192.168.0.0/16"/>
       <node type="allow" cidr="127.0.0.0/8"/>
     </list>
+    <!-- Matches nothing: the trunks profile's local-network-acl (sip_profiles/trunks.xml). -->
+    <list name="nowhere" default="deny"/>
   </network-lists>
 </configuration>

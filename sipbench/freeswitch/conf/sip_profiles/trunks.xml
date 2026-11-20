@@ -1,6 +1,6 @@
 <!--
   trunks: the profile far ends reach (carriers, PBXs), and the one Kamailio dispatches to on a cluster.
-  The external address is what peers see; see bin/podinfo.sh.
+  The external address is what peers see for media; see bin/podinfo.sh.
 -->
 <profile name="trunks">
   <gateways/>
@@ -10,8 +10,22 @@
     <param name="dialplan" value="XML"/>
     <param name="sip-ip" value="$${local_ip_v4}"/>
     <param name="rtp-ip" value="$${bind_address}"/>
-    <param name="ext-sip-ip" value="$${external_sip_address}"/>
+    <!--
+      SIP advertises its own address, where it listens: peers signal only through Kamailio, which record-routes and
+      reaches it there. The external address may reach only RTP's bind address, or reach the node only through the
+      cloud's translation, and a Contact naming it would send the dialog's ACK and BYE the long way, or nowhere.
+    -->
+    <param name="ext-sip-ip" value="$${local_ip_v4}"/>
     <param name="ext-rtp-ip" value="$${external_address}"/>
+    <!--
+      FreeSWITCH uses ext-sip-ip and ext-rtp-ip only for peers outside local-network-acl, and every call here comes
+      through Kamailio, on a private address. With the default (localnet.auto) it offered carriers rtp-ip, its
+      private address (on AWS, a pool's secondary private address), and their media never arrived. Nothing is local,
+      so every caller gets the external address. Where rtp-ip already is that address (a Local pool such as MetalLB;
+      compose, where it is the container's own) nothing changes. Behind a NAT, callers inside the cluster (sipbench)
+      reach it through the cloud's translation, so the node's security group must let them in.
+    -->
+    <param name="local-network-acl" value="nowhere"/>
     <param name="sip-port" value="5060"/>
     <!-- A real edge lists each trunk's addresses in an ACL; the bench allows its own network. -->
     <param name="apply-inbound-acl" value="bench"/>
