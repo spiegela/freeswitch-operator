@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const sofiaTwoProfiles = "                     Name\t   Type\t                                      Data\tState\n" +
@@ -170,5 +171,42 @@ func TestLiveScriptKeepsUnderTheProbeTimeout(t *testing.T) {
 		if !strings.Contains(string(got), want) {
 			t.Fatalf("timeout %s: fs_cli called with %q, want %q", timeout, got, want)
 		}
+	}
+}
+
+func TestAddressWaitScript(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "external-address")
+	if err := os.WriteFile(f, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", addressWaitScript)
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "FS_EXTERNAL_ADDRESS_FILE=" + f}
+	var out strings.Builder
+	cmd.Stdout = &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case <-done:
+		t.Fatalf("returned with an empty file: %q", out.String())
+	case <-time.After(1500 * time.Millisecond):
+	}
+	if err := os.WriteFile(f, []byte("203.0.113.10"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("still waiting after the address appeared")
+	}
+	if !strings.Contains(out.String(), "waiting for this node's address") || !strings.Contains(out.String(), "external address 203.0.113.10") {
+		t.Errorf("output %q", out.String())
 	}
 }

@@ -31,4 +31,4 @@ configMapGenerator:
   - name: freeswitch-bin           # path: bin
     files:
       - conf/bin/env.sh
-      - conf/bin/external-address.sh
+      - conf/bin/podinfo.sh

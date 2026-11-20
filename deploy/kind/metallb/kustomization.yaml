@@ -1,0 +1,19 @@
+# MetalLB in L2 mode on kind's Docker network, for the SIPAddressPool the edge draws from (hack/kind.sh applies it
+# before the operator, then the IPAddressPool, L2Advertisement and SIPAddressPool, whose addresses it picks from the
+# network's subnet). The speaker gets every toleration, so it runs on the tainted edge nodes, where the addresses
+# are announced from.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://raw.githubusercontent.com/metallb/metallb/v0.16.2/config/manifests/metallb-native.yaml
+images:
+  - name: quay.io/metallb/controller
+    digest: sha256:34a6f107f29c4fc6e9d084a7f3bdb781aae7b5ee2b534195a2775ab68c09c503
+  - name: quay.io/metallb/speaker
+    digest: sha256:01666518b091a6651d68891c802db84b2219495d7e0e41c2e61c46f9976be231
+patches:
+  - target: {kind: DaemonSet, name: speaker}
+    patch: |
+      - op: replace
+        path: /spec/template/spec/tolerations
+        value: [{operator: Exists}]

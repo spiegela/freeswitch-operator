@@ -98,6 +98,28 @@ actions:
 	}
 }
 
+func TestParseMediaAddress(t *testing.T) {
+	for _, addr := range []string{"203.0.113.5", "2001:db8::5"} {
+		if _, err := Parse([]byte("name: x\ncalls: [{id: a, to: b, expect: {status: 200, mediaAddress: '" + addr + "'}}]")); err != nil {
+			t.Errorf("%s: %v", addr, err)
+		}
+	}
+	s, err := Parse([]byte(fleetCalls))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.NeedsFleet() {
+		t.Errorf("requiring fleet alone doesn't need it")
+	}
+	s, err = Parse([]byte("name: x\nrequires: [fleet]\ncalls: [{id: a, to: b, expect: {status: 200, mediaAddress: fleet}}]"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.NeedsFleet() {
+		t.Errorf("checking media addresses against the fleet needs it")
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	cases := map[string]string{
 		"unknown field":      "name: x\nbogus: 1\noptions: {expectStatus: 200}",
@@ -116,6 +138,9 @@ func TestParseErrors(t *testing.T) {
 		"bad member state":   fleetCalls + "actions: [{waitMember: {of: a, state: Sleepy}}]",
 		"no stuck time":      fleetCalls + "actions: [{expectRollStuck: {}}]",
 		"break nothing":      fleetCalls + "actions: [{breakConfig: {configMap: c, key: k, replace: x, with: x}}]",
+		"break neither":      fleetCalls + "actions: [{breakConfig: {configMap: c, key: k, with: x}}]",
+		"break both":         fleetCalls + "actions: [{breakConfig: {configMap: c, key: k, replace: x, match: y, with: z}}]",
+		"break bad match":    fleetCalls + "actions: [{breakConfig: {configMap: c, key: k, match: '(', with: z}}]",
 		"duplicate action":   fleetCalls + "actions: [{name: n, rollFleet: {}}, {name: n, uncordon: {}}]",
 		"start after none":   "name: x\nrequires: [fleet]\ncalls: [{id: a, to: b, startAfter: n, expect: {status: 200}}]",
 		"fleet unrequired":   "name: x\ncalls: [{id: a, to: b, expect: {status: 200}}]\nactions: [{rollFleet: {}}]",
@@ -132,7 +157,10 @@ func TestParseErrors(t *testing.T) {
 			"impairments: [{link: carrier-edge, direction: both, traffic: rtp, loss: 5%}]",
 		"drop unrequired": "name: x\nrequires: [netem]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
 			"impairments: [{link: carrier-edge, direction: to-edge, traffic: sip, drop: first INVITE}]",
-		"sip unrequired": "name: x\ncalls: [{id: a, to: b, expect: {status: 200, sip: [{out: INVITE, min: 2}]}}]",
+		"sip unrequired":           "name: x\ncalls: [{id: a, to: b, expect: {status: 200, sip: [{out: INVITE, min: 2}]}}]",
+		"media address name":       "name: x\ncalls: [{id: a, to: b, expect: {status: 200, mediaAddress: edge.example}}]",
+		"media address pool":       "name: x\nrequires: [fleet]\ncalls: [{id: a, to: b, expect: {status: 200, mediaAddress: pool}}]",
+		"media address unrequired": "name: x\ncalls: [{id: a, to: b, expect: {status: 200, mediaAddress: fleet}}]",
 		"reorder alone": "name: x\nrequires: [netem]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
 			"impairments: [{link: carrier-edge, direction: both, traffic: rtp, reorder: 5%}]",
 	}
@@ -141,6 +169,34 @@ func TestParseErrors(t *testing.T) {
 			t.Errorf("%s: expected an error", name)
 		} else if strings.TrimSpace(err.Error()) == "" {
 			t.Errorf("%s: empty error", name)
+		}
+	}
+}
+
+func TestBreakConfigApply(t *testing.T) {
+	const profile = `<param name="sip-ip" value="x"/><param name="sip-port" value="5062"/><param name="sip-port" value="5070"/>`
+	for name, c := range map[string]struct {
+		b    BreakConfig
+		want string // empty: an error
+	}{
+		"replace": {BreakConfig{Replace: `value="5062"`, With: `value="5061"`},
+			`<param name="sip-ip" value="x"/><param name="sip-port" value="5061"/><param name="sip-port" value="5070"/>`},
+		"replace missing": {BreakConfig{Replace: `value="5060"`, With: `value="5061"`}, ""},
+		"match first only": {BreakConfig{Match: `<param name="sip-port" value="[0-9]+"/>`, With: `<param name="sip-port" value="5061"/>`},
+			`<param name="sip-ip" value="x"/><param name="sip-port" value="5061"/><param name="sip-port" value="5070"/>`},
+		"match groups": {BreakConfig{Match: `(name="sip-port" value=)"[0-9]+"`, With: `${1}"5061"`},
+			`<param name="sip-ip" value="x"/><param name="sip-port" value="5061"/><param name="sip-port" value="5070"/>`},
+		"match missing":   {BreakConfig{Match: `name="tls-port"`, With: "x"}, ""},
+		"match unchanged": {BreakConfig{Match: `value="50[0-9]2"`, With: `value="5062"`}, ""},
+	} {
+		got, err := c.b.Apply(profile)
+		switch {
+		case c.want == "" && err == nil:
+			t.Errorf("%s: got %s, want an error", name, got)
+		case c.want != "" && err != nil:
+			t.Errorf("%s: %v", name, err)
+		case got != c.want:
+			t.Errorf("%s: got\n%s\nwant\n%s", name, got, c.want)
 		}
 	}
 }

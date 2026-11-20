@@ -47,6 +47,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
+	"git.instruments.com/ci/freeswitch-operator/internal/addresspool"
 )
 
 const (
@@ -80,6 +81,7 @@ type FreeswitchClusterReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=services;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;patch;delete
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=sip.instruments.com,resources=sipaddresspools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch
 
@@ -144,7 +146,7 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	pods := podList.Items
 	slices.SortFunc(pods, func(a, b corev1.Pod) int { return strings.Compare(a.Name, b.Name) })
 
-	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, pods); err != nil {
+	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -381,19 +383,25 @@ func templateHash(t *corev1.PodTemplateSpec) (string, error) {
 	return hex.EncodeToString(sum[:8]), nil
 }
 
-// syncExternalAddresses writes each pod's external address annotation from its node. FreeSWITCH and Kamailio pods
-// both read it from their downward-API volume.
-func syncExternalAddresses(ctx context.Context, c client.Client, source sipv1alpha1.ExternalAddressSource, pods []corev1.Pod) error {
+// syncExternalAddresses writes each pod's external address annotation: its node's ExternalIP, or the address the
+// fleet's SIPAddressPool has bound to its node, with the bind address when it has one. FreeSWITCH and Kamailio pods
+// both read them from their downward-API volume.
+func syncExternalAddresses(ctx context.Context, c client.Client, source sipv1alpha1.ExternalAddressSource, poolName string, pods []corev1.Pod) error {
+	var pool sipv1alpha1.SIPAddressPool
+	if source == sipv1alpha1.ExternalAddressAddressPool {
+		// A missing pool binds nothing, so every pod goes without.
+		if err := c.Get(ctx, types.NamespacedName{Name: poolName}, &pool); client.IgnoreNotFound(err) != nil {
+			return err
+		}
+	}
 	for i := range pods {
 		p := &pods[i]
-		if p.DeletionTimestamp != nil {
+		if p.DeletionTimestamp != nil || p.Spec.NodeName == "" {
 			continue
 		}
-		want := ""
-		if source == sipv1alpha1.ExternalAddressNodeExternalIP {
-			if p.Spec.NodeName == "" {
-				continue
-			}
+		want, wantBind := "", ""
+		switch source {
+		case sipv1alpha1.ExternalAddressNodeExternalIP:
 			var node corev1.Node
 			if err := c.Get(ctx, types.NamespacedName{Name: p.Spec.NodeName}, &node); err != nil {
 				if apierrors.IsNotFound(err) {
@@ -402,25 +410,75 @@ func syncExternalAddresses(ctx context.Context, c client.Client, source sipv1alp
 				return err
 			}
 			want = nodeExternalAddress(&node)
+		case sipv1alpha1.ExternalAddressAddressPool:
+			// The pool hands out an address with a bind address only once the node has it on an interface.
+			if b := addresspool.BindingForNode(&pool.Status, p.Spec.NodeName); b != nil {
+				want, wantBind = b.Address, b.BindAddress
+			}
 		}
-		have, present := p.Annotations[sipv1alpha1.ExternalAddressAnnotation]
-		if have == want && (present || want == "") {
-			continue
-		}
-		patch := client.MergeFrom(p.DeepCopy())
-		if p.Annotations == nil {
-			p.Annotations = map[string]string{}
-		}
-		if want == "" {
-			delete(p.Annotations, sipv1alpha1.ExternalAddressAnnotation)
-		} else {
-			p.Annotations[sipv1alpha1.ExternalAddressAnnotation] = want
-		}
-		if err := c.Patch(ctx, p, patch); err != nil && !apierrors.IsNotFound(err) {
+		if err := setAddressAnnotations(ctx, c, p, want, wantBind); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// setAddressAnnotations sets a pod's external and bind address annotations, removing those that are empty.
+func setAddressAnnotations(ctx context.Context, c client.Client, p *corev1.Pod, external, bind string) error {
+	same := func(key, want string) bool {
+		have, present := p.Annotations[key]
+		return have == want && (present || want == "")
+	}
+	if same(sipv1alpha1.ExternalAddressAnnotation, external) && same(sipv1alpha1.BindAddressAnnotation, bind) {
+		return nil
+	}
+	patch := client.MergeFrom(p.DeepCopy())
+	if p.Annotations == nil {
+		p.Annotations = map[string]string{}
+	}
+	for key, want := range map[string]string{sipv1alpha1.ExternalAddressAnnotation: external, sipv1alpha1.BindAddressAnnotation: bind} {
+		if want == "" {
+			delete(p.Annotations, key)
+		} else {
+			p.Annotations[key] = want
+		}
+	}
+	if err := c.Patch(ctx, p, patch); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// fleetsUsingPool maps a SIPAddressPool to the fleets of one kind (listed into newList) that draw from it.
+func fleetsUsingPool(c client.Reader, newList func() client.ObjectList) handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
+		list := newList()
+		if err := c.List(ctx, list); err != nil {
+			return nil
+		}
+		items, err := meta.ExtractList(list)
+		if err != nil {
+			return nil
+		}
+		var out []reconcile.Request
+		for _, item := range items {
+			if f, ok := item.(client.Object); ok && addressPoolName(externalAddressOf(f)) == o.GetName() {
+				out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(f)})
+			}
+		}
+		return out
+	})
+}
+
+// externalAddressOf is a fleet's external address spec.
+func externalAddressOf(o client.Object) sipv1alpha1.ExternalAddressSpec {
+	switch f := o.(type) {
+	case *sipv1alpha1.FreeswitchCluster:
+		return f.Spec.ExternalAddress
+	case *sipv1alpha1.KamailioCluster:
+		return f.Spec.ExternalAddress
+	}
+	return sipv1alpha1.ExternalAddressSpec{}
 }
 
 // syncDispatcher renders the dispatcher list from the ready endpoints, writes it when it changes, takes leaving
@@ -662,6 +720,7 @@ func (r *FreeswitchClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&discoveryv1.EndpointSlice{}, sliceToCluster).
 		Watches(&corev1.Node{}, nodeToClusters).
 		Watches(&corev1.ConfigMap{}, configToClusters).
+		Watches(&sipv1alpha1.SIPAddressPool{}, fleetsUsingPool(mgr.GetClient(), func() client.ObjectList { return &sipv1alpha1.FreeswitchClusterList{} })).
 		Named("freeswitchcluster").
 		Complete(r)
 }

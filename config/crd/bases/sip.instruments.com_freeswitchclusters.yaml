@@ -329,6 +329,17 @@ spec:
               externalAddress:
                 description: externalAddress settings.
                 properties:
+                  addressPoolRef:
+                    description: addressPoolRef names the SIPAddressPool to draw from
+                      when source is AddressPool. Pools are cluster-scoped.
+                    properties:
+                      name:
+                        description: name of the SIPAddressPool.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
                   required:
                     default: true
                     description: |-
@@ -337,12 +348,16 @@ spec:
                     type: boolean
                   source:
                     default: NodeExternalIP
-                    description: source of the address. AddressPool is planned.
+                    description: source of the address.
                     enum:
                     - NodeExternalIP
+                    - AddressPool
                     - None
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: addressPoolRef is set exactly when source is AddressPool
+                  rule: (has(self.source) && self.source == 'AddressPool') == has(self.addressPoolRef)
               image:
                 description: image is the FreeSWITCH image. It must contain freeswitch,
                   fs_cli and /bin/sh.

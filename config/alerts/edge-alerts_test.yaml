@@ -165,3 +165,76 @@ tests:
             exp_annotations:
               summary: "edge-2 is above 80% of its session limit"
               description: Sessions beyond max-sessions are refused. Add nodes or raise the limit.
+
+  # A pool with a node waiting, an address in Error, no spare and a stale provider read; a fleet waiting on its agent.
+  - interval: 1m
+    input_series:
+      - series: 'freeswitch_operator_address_pool_nodes_waiting{job="freeswitch-operator",pool="edge"}'
+        values: '0 1 1 1 1 1 1 1 1 1 1'
+      - series: 'freeswitch_operator_address_pool_addresses{job="freeswitch-operator",pool="edge",state="Error"}'
+        values: '1x40'
+      - series: 'freeswitch_operator_address_pool_addresses{job="freeswitch-operator",pool="edge",state="Free"}'
+        values: '0x40'
+      - series: 'freeswitch_operator_address_pool_addresses{job="freeswitch-operator",pool="edge",state="Idle"}'
+        values: '0x40'
+      - series: 'freeswitch_operator_address_pool_last_observed_timestamp_seconds{job="freeswitch-operator",pool="edge"}'
+        values: '0x40'
+      - series: 'freeswitch_operator_address_pool_addresses_awaiting_agent{job="freeswitch-operator",pool="edge"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AddressPoolNodeWithoutAddress
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: AddressPoolNodeWithoutAddress
+        exp_alerts:
+          - exp_labels: {severity: warning, job: freeswitch-operator, pool: edge}
+            exp_annotations:
+              summary: "1 node(s) using SIPAddressPool edge hold none of its addresses"
+              description: >
+                Their pods have no public address: unready when it is required, advertising the wrong one when not.
+                The pool has no free or idle address left, or binding failed (its Ready condition says which). Add an
+                address to the pool, or free one.
+      - eval_time: 10m
+        alertname: AddressPoolAddressInTrouble
+        exp_alerts:
+          - exp_labels: {severity: warning, job: freeswitch-operator, pool: edge, state: Error}
+            exp_annotations:
+              summary: "SIPAddressPool edge has 1 address(es) in Error"
+              description: >
+                Conflict: bound outside the cluster by something else, which the pool leaves alone. Error: the provider
+                can't report on it, or binding or unbinding it failed. The pool's status says which address and why.
+      - eval_time: 29m
+        alertname: AddressPoolNoSpare
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: AddressPoolNoSpare
+        exp_alerts:
+          - exp_labels: {severity: info, pool: edge}
+            exp_annotations:
+              summary: "SIPAddressPool edge has no spare address"
+              description: >
+                Every address is bound to a node in use, so a replacement node would have to wait for one. Keep one more
+                address than nodes.
+      - eval_time: 15m
+        alertname: AddressPoolProviderUnreadable
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: AddressPoolProviderUnreadable
+        exp_alerts:
+          - exp_labels: {severity: warning, job: freeswitch-operator, pool: edge}
+            exp_annotations:
+              summary: "SIPAddressPool edge hasn't read its provider for 15 minutes"
+              description: >
+                Addresses stay where they are, but nothing new is bound and a replaced node waits. Check the provider's
+                credentials and the operator's logs (freeswitch_operator_address_pool_provider_calls_total).
+      - eval_time: 5m
+        alertname: AddressPoolAwaitingAddressAgent
+        exp_alerts:
+          - exp_labels: {severity: warning, job: freeswitch-operator, pool: edge}
+            exp_annotations:
+              summary: "1 address(es) of SIPAddressPool edge wait for the address agent"
+              description: >
+                Their node holds the address, but its address agent doesn't report the bind address on the node's
+                interface, so the node's pods get no address. Check that the address agent runs on the nodes the pool's
+                status names (its Ready condition says which) and its logs.

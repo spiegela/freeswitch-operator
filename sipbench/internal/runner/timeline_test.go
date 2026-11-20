@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +24,8 @@ type fakeFleet struct {
 	// next, when set, replaces status on each read, letting a test move the fleet along.
 	next  func(n int, s fleet.Status) fleet.Status
 	reads int
+	// external is each pod's external address annotation.
+	external map[string]string
 }
 
 func newFakeFleet() *fakeFleet {
@@ -90,6 +93,12 @@ func (f *fakeFleet) SetConfigMapKey(_ context.Context, name, key, value string) 
 	defer f.mu.Unlock()
 	f.cms[name][key] = value
 	return nil
+}
+
+func (f *fakeFleet) ExternalAddresses(context.Context) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return maps.Clone(f.external), nil
 }
 
 const longRoute = `
@@ -165,7 +174,7 @@ requires: [mock, fleet]
 calls:
   - {id: a, to: long, steps: [{tone: {hz: 600, ms: 20000}}], expect: {status: 200}}
 actions:
-  - {afterAnswered: a, breakConfig: {configMap: profiles, key: trunks.xml, replace: 'value="5060"', with: 'value="5061"'}}
+  - {afterAnswered: a, breakConfig: {configMap: profiles, key: trunks.xml, match: 'value="[0-9]+"', with: 'value="5061"'}}
   - {waitFleetCurrent: {timeoutMs: 600}}
 `))
 	if err != nil {

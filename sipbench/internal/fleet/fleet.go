@@ -25,6 +25,13 @@ import (
 // RollEnv is the environment variable Roll sets on the fleet's pods.
 const RollEnv = "SIPBENCH_ROLL"
 
+// ClusterLabel names the FreeswitchCluster a pod belongs to. The operator's own label; the bench doesn't import it.
+const ClusterLabel = "sip.instruments.com/cluster"
+
+// ExternalAddressAnnotation is where the operator records the address a FreeSWITCH pod advertises to far ends
+// (its SIPAddressPool's binding, or the node's address). The operator's own constant; the bench doesn't import it.
+const ExternalAddressAnnotation = "sip.instruments.com/external-address"
+
 // Member is one FreeSWITCH pod, as the FreeswitchCluster's status lists it.
 type Member struct {
 	Pod      string `json:"pod"`
@@ -94,6 +101,9 @@ type Fleet interface {
 	Roll(ctx context.Context, value string) error
 	ConfigMapKey(ctx context.Context, name, key string) (string, error)
 	SetConfigMapKey(ctx context.Context, name, key, value string) error
+	// ExternalAddresses returns, by pod, each member's ExternalAddressAnnotation ("" for a pod without one). A
+	// member whose pod is already gone is left out.
+	ExternalAddresses(ctx context.Context) (map[string]string, error)
 }
 
 var fscResource = schema.GroupVersionResource{Group: "sip.instruments.com", Version: "v1alpha1", Resource: "freeswitchclusters"}
@@ -240,6 +250,28 @@ func (k *kube) ConfigMapKey(ctx context.Context, name, key string) (string, erro
 		return "", fmt.Errorf("ConfigMap %s has no key %q", name, key)
 	}
 	return v, nil
+}
+
+func (k *kube) ExternalAddresses(ctx context.Context) (map[string]string, error) {
+	st, err := k.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	pods, err := k.core.CoreV1().Pods(k.ns).List(ctx, metav1.ListOptions{LabelSelector: ClusterLabel + "=" + k.name})
+	if err != nil {
+		return nil, err
+	}
+	byName := map[string]string{}
+	for _, p := range pods.Items {
+		byName[p.Name] = p.Annotations[ExternalAddressAnnotation]
+	}
+	out := map[string]string{}
+	for _, m := range st.Members {
+		if addr, ok := byName[m.Pod]; ok { // a member missing has been replaced since the status was written
+			out[m.Pod] = addr
+		}
+	}
+	return out, nil
 }
 
 func (k *kube) SetConfigMapKey(ctx context.Context, name, key, value string) error {

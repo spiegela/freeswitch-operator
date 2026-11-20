@@ -27,4 +27,12 @@ resources:
   kind: KamailioCluster
   path: git.instruments.com/ci/freeswitch-operator/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+  controller: true
+  domain: instruments.com
+  group: sip
+  kind: SIPAddressPool
+  path: git.instruments.com/ci/freeswitch-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"

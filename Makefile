@@ -164,6 +164,9 @@ check-kamailio-cfg: ## Render the KamailioCluster config template's test cases a
 	  docker run --rm -v "$(KAMAILIO_CFG_DIR):/cfg:ro" $(KAMAILIO_IMAGE) -c -f "/cfg/$$name.cfg" \
 	    -A PUBLIC_ADDR=192.0.2.10 -A PRIVATE_ADDR=127.0.0.1 >/dev/null || exit 1; \
 	  echo "kamailio -c $$name.cfg: ok"; \
+	  docker run --rm -v "$(KAMAILIO_CFG_DIR):/cfg:ro" $(KAMAILIO_IMAGE) -c -f "/cfg/$$name.cfg" \
+	    -A PUBLIC_ADDR=192.0.2.10 -A PRIVATE_ADDR=127.0.0.1 -A BIND_ADDR=127.0.0.2 >/dev/null || exit 1; \
+	  echo "kamailio -c $$name.cfg with a bind address: ok"; \
 	done
 
 # The Prometheus image whose promtool checks the alert rules (and which deploy/kind/monitoring runs).

@@ -25,8 +25,11 @@ spec:
     portRangeStart: 16384
     portRangeEnd: 16584
   externalAddress:
-    # kind nodes have no external address; FreeSWITCH advertises the node's own (bin/external-address.sh).
-    source: None
+    # An address MetalLB announces on kind's Docker network (hack/kind.sh makes the pool): FreeSWITCH binds RTP to
+    # it and advertises it (bin/podinfo.sh). SIP stays on the node's own address,
+    # where Kamailio dispatches to it.
+    source: AddressPool
+    addressPoolRef: {name: edge-media}
   config:
     mountPath: /usr/local/freeswitch/conf
     configMapRefs:

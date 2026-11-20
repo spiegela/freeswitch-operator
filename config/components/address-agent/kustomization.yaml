@@ -1,0 +1,21 @@
+# The address agent, for SIPAddressPools whose addresses reach a node at an address the node doesn't already have
+# (an AWS pool with privateAddress Secondary, a MetalLB pool). One pod per node, with host networking and NET_ADMIN:
+# it puts the pools' bind addresses for its node on the node's interface and reports them on its own pod, and the
+# pool gives the address to a fleet's pods only once it has. Add it to config/default's components with the
+# provider's (Flux: `components: [../components/metallb-address-pool, ../components/address-agent]`).
+#
+# It runs the manager's image (/address-agent), so an image override for the manager covers it. Host networking
+# needs the privileged Pod Security level, which this sets on the operator's Namespace when the Namespace is in the
+# same build (config/default's components); an overlay that adds it elsewhere must label it. It tolerates every taint,
+# so it runs on edge nodes; restrict it with a nodeSelector patch if the fleets run on known nodes only.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - daemonset.yaml
+  - rbac.yaml
+patches:
+  - target: {kind: Namespace, name: system}
+    patch: |
+      - op: add
+        path: /metadata/labels/pod-security.kubernetes.io~1enforce
+        value: privileged

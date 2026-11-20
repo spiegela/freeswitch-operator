@@ -1,0 +1,16 @@
+# Turns on the AWS Elastic IP provider for SIPAddressPools (--address-providers=aws). Add it to config/default's
+# components, so its names get config/default's prefix and namespace: a Flux Kustomization on ./config/default
+# takes `components: [../components/aws-address-pool]`.
+#
+# The manager's service account also needs AWS credentials with iam-policy.json: annotate it for IRSA
+#   eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<role>
+# or give it an EKS Pod Identity association. The annotation is yours to add: it names a role in your account.
+# A pool with privateAddress Secondary also needs config/components/address-agent.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target: {kind: Deployment, name: controller-manager}
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --address-providers=aws

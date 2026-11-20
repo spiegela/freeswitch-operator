@@ -8,6 +8,7 @@ const (
 	podInfoDir       = mountRoot + "/podinfo"
 	configDir        = mountRoot + "/config"
 	externalAddrFile = podInfoDir + "/external-address"
+	bindAddrFile     = podInfoDir + "/bind-address"
 
 	// drainMarker lives in the container's own filesystem, not a volume, so a restarted container starts clean.
 	drainMarker = "/tmp/freeswitch-operator-draining"
@@ -105,4 +106,17 @@ if [ "${FS_REQUIRE_EXTERNAL_ADDRESS:-false}" = "true" ]; then
   [ -s ` + externalAddrFile + ` ] || { echo "no external address yet"; exit 1; }
 fi
 exec /bin/sh "$(dirname "$0")/` + startupScriptName + `"
+`
+
+// addressWaitScript runs as an init container in a fleet that draws from a SIPAddressPool: it returns once the
+// downward-API file holds the pod's external address, which the kubelet refreshes in place when the operator sets
+// the annotation (within seconds, checked on kind).
+const addressWaitScript = `f="${FS_EXTERNAL_ADDRESS_FILE}"
+n=0
+until [ -s "$f" ]; do
+  [ $((n % 30)) -eq 0 ] && echo "freeswitch-operator: waiting for this node's address from the pool"
+  n=$((n + 1))
+  sleep 1
+done
+echo "freeswitch-operator: external address $(cat "$f")"
 `

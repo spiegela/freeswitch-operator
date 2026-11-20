@@ -1,6 +1,7 @@
 # What the runner may do to the fleet under test, for the scenarios that require "fleet" (drain-mid-call,
-# rolling-update-live-call, bad-config-stops-roll): read the FreeswitchCluster and roll it, evict its pods, edit
-# the ConfigMaps it reads and put them back, and cordon and uncordon nodes. Only the runner Job uses this account.
+# rolling-update-live-call, bad-config-stops-roll, pool-media-address): read the FreeswitchCluster and roll it,
+# read its pods' external addresses and evict them, edit the ConfigMaps it reads and put them back, and cordon and
+# uncordon nodes. Only the runner Job uses this account.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

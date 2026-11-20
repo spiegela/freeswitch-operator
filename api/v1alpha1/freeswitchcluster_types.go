@@ -27,6 +27,20 @@ const (
 	// ExternalAddressAnnotation is set by the operator on each FreeSWITCH pod to the public address peers
 	// should see. The pod reads it from its downward-API volume, which updates in place.
 	ExternalAddressAnnotation = "sip.instruments.com/external-address"
+	// BindAddressAnnotation is set by the operator on each pod of a fleet whose pool needs an address on the node
+	// (a secondary private address, or a Local datapath): the address the pod binds its peer-facing traffic to
+	// (FreeSWITCH's RTP, Kamailio's peer listener). The operator sets it, and the external address with it, only
+	// once the address agent reports the node has the address on an interface. When it differs from the pod's own
+	// address, the external address reaches only it: whatever listens elsewhere (FreeSWITCH's SIP, on the pod's
+	// own address) must not advertise the external address (ext-sip-ip), or in-dialog requests sent to it are lost.
+	BindAddressAnnotation = "sip.instruments.com/bind-address"
+	// AgentBindAddressesAnnotation is set by the address agent on its own pod: the pools' bind addresses its node
+	// has on an interface, comma-separated and sorted.
+	AgentBindAddressesAnnotation = "sip.instruments.com/bind-addresses"
+	// AppNameLabel is the well-known label naming an application.
+	AppNameLabel = "app.kubernetes.io/name"
+	// AddressAgentName is the AppNameLabel of the address agent's pods.
+	AddressAgentName = "freeswitch-operator-address-agent"
 
 	// ClusterLabel names the FreeswitchCluster a pod belongs to.
 	ClusterLabel = "sip.instruments.com/cluster"
@@ -39,12 +53,14 @@ const (
 )
 
 // ExternalAddressSource says where a FreeSWITCH pod's public address comes from.
-// +kubebuilder:validation:Enum=NodeExternalIP;None
+// +kubebuilder:validation:Enum=NodeExternalIP;AddressPool;None
 type ExternalAddressSource string
 
 const (
 	// ExternalAddressNodeExternalIP uses the ExternalIP address of the node the pod runs on.
 	ExternalAddressNodeExternalIP ExternalAddressSource = "NodeExternalIP"
+	// ExternalAddressAddressPool uses the address a SIPAddressPool binds to the node the pod runs on.
+	ExternalAddressAddressPool ExternalAddressSource = "AddressPool"
 	// ExternalAddressNone gives the pod no external address; FreeSWITCH uses its local address.
 	ExternalAddressNone ExternalAddressSource = "None"
 )
@@ -97,17 +113,29 @@ type RTPSpec struct {
 }
 
 // ExternalAddressSpec says how each pod learns the public address it advertises.
+// +kubebuilder:validation:XValidation:rule="(has(self.source) && self.source == 'AddressPool') == has(self.addressPoolRef)",message="addressPoolRef is set exactly when source is AddressPool"
 type ExternalAddressSpec struct {
-	// source of the address. AddressPool is planned.
+	// source of the address.
 	// +kubebuilder:default=NodeExternalIP
 	// +optional
 	Source ExternalAddressSource `json:"source,omitempty"`
+
+	// addressPoolRef names the SIPAddressPool to draw from when source is AddressPool. Pools are cluster-scoped.
+	// +optional
+	AddressPoolRef *AddressPoolReference `json:"addressPoolRef,omitempty"`
 
 	// required makes a pod unready until it has an external address, so it takes no calls it couldn't
 	// answer correctly. Ignored when source is None.
 	// +kubebuilder:default=true
 	// +optional
 	Required *bool `json:"required,omitempty"`
+}
+
+// AddressPoolReference names a SIPAddressPool.
+type AddressPoolReference struct {
+	// name of the SIPAddressPool.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
 }
 
 // ConfigSpec assembles FreeSWITCH's configuration directory from ConfigMaps.

@@ -63,6 +63,8 @@ rules:
   resources:
   - endpointslices
   verbs:
+  - create
+  - delete
   - get
   - list
   - watch
@@ -83,6 +85,7 @@ rules:
   resources:
   - freeswitchclusters
   - kamailioclusters
+  - sipaddresspools
   verbs:
   - create
   - delete
@@ -96,6 +99,7 @@ rules:
   resources:
   - freeswitchclusters/finalizers
   - kamailioclusters/finalizers
+  - sipaddresspools/finalizers
   verbs:
   - update
 - apiGroups:
@@ -103,6 +107,7 @@ rules:
   resources:
   - freeswitchclusters/status
   - kamailioclusters/status
+  - sipaddresspools/status
   verbs:
   - get
   - patch

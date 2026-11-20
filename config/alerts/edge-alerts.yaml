@@ -169,3 +169,57 @@ groups:
           description: >
             Without it, fleets keep running but nothing updates the dispatcher lists, rolls or drains, and the
             other freeswitch_operator alerts go quiet.
+
+  - name: freeswitch-operator-address-pools
+    rules:
+      - alert: AddressPoolNodeWithoutAddress
+        expr: freeswitch_operator_address_pool_nodes_waiting > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value | humanize }} node(s) using SIPAddressPool {{ $labels.pool }} hold none of its addresses"
+          description: >
+            Their pods have no public address: unready when it is required, advertising the wrong one when not.
+            The pool has no free or idle address left, or binding failed (its Ready condition says which). Add an
+            address to the pool, or free one.
+
+      - alert: AddressPoolAddressInTrouble
+        expr: freeswitch_operator_address_pool_addresses{state=~"Conflict|Error"} > 0
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "SIPAddressPool {{ $labels.pool }} has {{ $value | humanize }} address(es) in {{ $labels.state }}"
+          description: >
+            Conflict: bound outside the cluster by something else, which the pool leaves alone. Error: the provider
+            can't report on it, or binding or unbinding it failed. The pool's status says which address and why.
+
+      - alert: AddressPoolNoSpare
+        expr: sum by (pool) (freeswitch_operator_address_pool_addresses{state=~"Free|Idle"}) == 0
+        for: 30m
+        labels: {severity: info}
+        annotations:
+          summary: "SIPAddressPool {{ $labels.pool }} has no spare address"
+          description: >
+            Every address is bound to a node in use, so a replacement node would have to wait for one. Keep one more
+            address than nodes.
+
+      - alert: AddressPoolProviderUnreadable
+        # The pool rereads its provider every 5 minutes; three missed rereads.
+        expr: time() - freeswitch_operator_address_pool_last_observed_timestamp_seconds > 900
+        labels: {severity: warning}
+        annotations:
+          summary: "SIPAddressPool {{ $labels.pool }} hasn't read its provider for 15 minutes"
+          description: >
+            Addresses stay where they are, but nothing new is bound and a replaced node waits. Check the provider's
+            credentials and the operator's logs (freeswitch_operator_address_pool_provider_calls_total).
+
+      - alert: AddressPoolAwaitingAddressAgent
+        expr: freeswitch_operator_address_pool_addresses_awaiting_agent > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value | humanize }} address(es) of SIPAddressPool {{ $labels.pool }} wait for the address agent"
+          description: >
+            Their node holds the address, but its address agent doesn't report the bind address on the node's
+            interface, so the node's pods get no address. Check that the address agent runs on the nodes the pool's
+            status names (its Ready condition says which) and its logs.

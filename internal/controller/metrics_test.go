@@ -13,6 +13,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+
+	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
 )
 
 func metricsPod(name, uid string, ready bool, deletedAt *time.Time, grace int64) corev1.Pod {
@@ -138,5 +140,31 @@ func TestRecordDispatcherSeries(t *testing.T) {
 	recordPendingReload(f, false)
 	if got := testutil.ToFloat64(dispatcherPendingReload.WithLabelValues(f.labels()...)); got != 0 {
 		t.Errorf("pending reload = %v, want 0", got)
+	}
+}
+
+func TestPoolMetrics(t *testing.T) {
+	recordPool("metrics-pool", []sipv1alpha1.PoolAddress{
+		{State: sipv1alpha1.PoolAddressBound, BindAddress: "10.0.9.1"}, {State: sipv1alpha1.PoolAddressBound}, {State: sipv1alpha1.PoolAddressError},
+	}, 1)
+	recordPoolCall("metrics-pool", "bind", errors.New("throttled"))
+	if got := testutil.ToFloat64(poolAddresses.WithLabelValues("metrics-pool", "Bound")); got != 2 {
+		t.Errorf("Bound = %v", got)
+	}
+	if got := testutil.ToFloat64(poolAddresses.WithLabelValues("metrics-pool", "Free")); got != 0 {
+		t.Errorf("Free = %v, want an explicit zero", got)
+	}
+	if got := testutil.ToFloat64(poolNodesWaiting.WithLabelValues("metrics-pool")); got != 1 {
+		t.Errorf("waiting = %v", got)
+	}
+	if got := testutil.ToFloat64(poolAwaitingAgent.WithLabelValues("metrics-pool")); got != 1 {
+		t.Errorf("awaiting agent = %v", got)
+	}
+	if got := testutil.ToFloat64(poolProviderCalls.WithLabelValues("metrics-pool", "bind", "error")); got != 1 {
+		t.Errorf("bind errors = %v", got)
+	}
+	forgetPool("metrics-pool")
+	if n := testutil.CollectAndCount(poolAddresses); n != 0 {
+		t.Errorf("%d address series left after forgetPool", n)
 	}
 }

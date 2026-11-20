@@ -8,6 +8,9 @@
 # Set per pod by start.sh with -A:
 #   PUBLIC_ADDR    the address advertised in Via and Record-Route
 #   PRIVATE_ADDR   the pod's own address, the only one JSON-RPC and the metrics listen on
+#   BIND_ADDR      only when the pod's address pool gives it an address of its own on the node (a secondary
+#                  private address, or the public address itself): peers are served there and FreeSWITCH on
+#                  PRIVATE_ADDR, and each request leaves from the side it is going to
 #
 # Dispatcher sets, in priority order:{{range .Sets}} {{.}}{{else}} none{{end}}
 
@@ -37,8 +40,17 @@ msg_recv_max_size=65535
 tcp_rd_buf_size=65536
 auto_aliases=no
 
+#!ifdef BIND_ADDR
+# Peers on the pool's address, FreeSWITCH on the pod's own. Listening on both (not 0.0.0.0) makes replies leave
+# from the address the request came to, and the cloud translates only the pool's.
+listen=udp:BIND_ADDR:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
+listen=tcp:BIND_ADDR:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
+listen=udp:PRIVATE_ADDR:SIP_PORT
+listen=tcp:PRIVATE_ADDR:SIP_PORT
+#!else
 listen=udp:0.0.0.0:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
 listen=tcp:0.0.0.0:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
+#!endif
 # JSON-RPC for the operator, on the pod's own address only; every request needs the bearer token.
 listen=tcp:PRIVATE_ADDR:RPC_PORT
 # Prometheus metrics (GET /metrics), on the pod's own address only. Read-only, so no token.
@@ -182,6 +194,7 @@ request_route {
 	# still relays these: they belong to calls already up (a transfer, say).
 	if (ds_is_from_list()) {
 		t_set_fr(FR_INV_TIMER, RELAY_FR_TIMER);
+		route(TO_PEERS);
 		route(RELAY);
 	}
 
@@ -210,6 +223,7 @@ request_route {
 	$avp(arrived) = $TV(s);
 	t_on_reply("NODE_REPLY");
 	t_on_failure("DS_FAILOVER");
+	route(TO_NODES);
 	route(RELAY);
 {{- else}}
 
@@ -249,6 +263,23 @@ route[DISPLAY_NAMES] {
 	return 1;
 }
 
+# With two listeners, a new request goes out from the side it is going to: toward a node from the pod's own address,
+# toward a peer from the pool's. (Requests in a dialog follow the two Record-Routes this leaves, and CANCELs and ACKs
+# their transaction, without help.) force_send_socket finds the TCP listener on the same address for a TCP hop.
+route[TO_NODES] {
+#!ifdef BIND_ADDR
+	force_send_socket(udp:PRIVATE_ADDR:SIP_PORT);
+#!endif
+	return;
+}
+
+route[TO_PEERS] {
+#!ifdef BIND_ADDR
+	force_send_socket(udp:BIND_ADDR:SIP_PORT);
+#!endif
+	return;
+}
+
 route[RELAY] {
 	if (!t_relay()) {
 		sl_reply_error();
@@ -279,6 +310,7 @@ failure_route[DS_FAILOVER] {
 		if (ds_next_dst()) {
 			t_on_reply("NODE_REPLY");
 			t_on_failure("DS_FAILOVER");
+			route(TO_NODES);
 			route(RELAY);
 		}
 		if (t_branch_timeout() && !t_branch_replied()) {

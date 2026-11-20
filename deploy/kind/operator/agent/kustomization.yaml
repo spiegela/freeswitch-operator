@@ -1,0 +1,8 @@
+# The address agent, named and namespaced as config/default names the operator. (A component in the overlay above
+# would get neither: config/default's prefix and namespace apply only inside it.)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: freeswitch-operator-system
+namePrefix: freeswitch-operator-
+components:
+  - ../../../../config/components/address-agent

@@ -139,7 +139,7 @@ func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	pods := podList.Items
 	slices.SortFunc(pods, func(a, b corev1.Pod) int { return strings.Compare(a.Name, b.Name) })
 
-	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, pods); err != nil {
+	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.pruneConfigSnapshots(ctx, &kc, configName, sts, pods); err != nil {
@@ -653,6 +653,7 @@ func (r *KamailioClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.ConfigMap{}, fleetListToProxies).
 		Watches(&corev1.Pod{}, podToProxy).
 		Watches(&corev1.Node{}, nodeToProxies).
+		Watches(&sipv1alpha1.SIPAddressPool{}, fleetsUsingPool(mgr.GetClient(), func() client.ObjectList { return &sipv1alpha1.KamailioClusterList{} })).
 		Named("kamailiocluster").
 		Complete(r)
 }

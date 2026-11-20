@@ -1,6 +1,6 @@
 <!--
   trunks: the profile far ends reach (carriers, PBXs), and the one Kamailio dispatches to on a cluster.
-  The external address is what peers see; see bin/external-address.sh.
+  The external address is what peers see; see bin/podinfo.sh.
 -->
 <profile name="trunks">
   <gateways/>
@@ -9,8 +9,8 @@
     <param name="context" value="trunks"/>
     <param name="dialplan" value="XML"/>
     <param name="sip-ip" value="$${local_ip_v4}"/>
-    <param name="rtp-ip" value="$${local_ip_v4}"/>
-    <param name="ext-sip-ip" value="$${external_address}"/>
+    <param name="rtp-ip" value="$${bind_address}"/>
+    <param name="ext-sip-ip" value="$${external_sip_address}"/>
     <param name="ext-rtp-ip" value="$${external_address}"/>
     <param name="sip-port" value="5060"/>
     <!-- A real edge lists each trunk's addresses in an ACL; the bench allows its own network. -->
