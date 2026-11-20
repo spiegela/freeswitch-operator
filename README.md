@@ -422,6 +422,15 @@ priority order; each must set `spec.dispatcher`, whose `setID` becomes that flee
   - OPTIONS keepalives from peers (no user part), answered by Kamailio itself: `200` with an `Allow` header while any
     set has an active node, `503` while none has or while the pod drains, so peers route elsewhere.
 
+  With `spec.trustedPeers` set, only those sources (each a named list of CIDRs) and the fleet's own FreeSWITCH nodes
+  get any of that: a request from anywhere else, inside a dialog or not, is dropped before Kamailio answers anything,
+  so a scanner learns nothing and a forged route set can't make Kamailio relay for a stranger. It guards signaling
+  only; carriers send media straight to FreeSWITCH (often from other addresses: Twilio signals from `/30`s per edge
+  and sends media from `168.86.128.0/18`), so the firewall in front of the FreeSWITCH nodes' RTP range admits those.
+  Empty trusts every source. The list is in the rendered config, so changing it rolls the fleet; M5's peer resources
+  (loop 9) take it over as a `permissions` table that reloads live. `make check-kamailio-trust` runs Kamailio in the
+  pinned image and checks a trusted source gets an answer and an untrusted one gets none.
+
   It also inserts `Max-Forwards: 70` when missing, refuses requests that require an extension it doesn't support
   (`420`), and takes messages up to 64 KB over UDP and TCP (Kamailio's defaults stop at 32 KB). It answers `400`
   itself to a From or To that every FreeSWITCH node would discard without a word: a display name outside quotes with
@@ -437,7 +446,8 @@ priority order; each must set `spec.dispatcher`, whose `setID` becomes that flee
   address only and without a token, for a Prometheus server or an OpenTelemetry Collector to scrape: Kamailio's own
   statistics (`kamailio_tm_*`, `kamailio_sl_*`, `kamailio_core_*`, ...) and the edge's counters:
   - `kamailio_rejected_requests_total{reason}`: refused before any node saw it; `display_name` (the `400` above),
-    `sanity` (sanity's own `4xx`), `uri_scheme` (`416`).
+    `sanity` (sanity's own `4xx`), `uri_scheme` (`416`), `untrusted_source` (dropped unanswered, with
+    `spec.trustedPeers` set).
   - `kamailio_node_silent_timeouts_total`: a node didn't answer within 5 s.
   - `kamailio_silent_drops_total{cause}`: every node tried stayed silent and the caller got `408`. `cause="request"`
     when a node answered something else meanwhile: the nodes are up and discarded this request, a malformed one we

@@ -118,6 +118,7 @@ func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		MetricsPort:    cfg.metricsPort,
 		DispatcherList: kamailioDispatcher,
 		Sets:           setIDs,
+		TrustedPeers:   kamailioTrustedPeers(kc.Spec.TrustedPeers),
 	})
 	if err != nil {
 		return ctrl.Result{}, err

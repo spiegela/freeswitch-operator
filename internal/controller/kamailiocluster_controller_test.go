@@ -315,6 +315,26 @@ var _ = Describe("KamailioCluster controller", func() {
 		Expect(meta.IsStatusConditionTrue(getProxy(ns).Status.Conditions, conditionProgressing)).To(BeTrue())
 	})
 
+	It("takes trusted peers as named CIDR lists and refuses anything else", func() {
+		ns := newNamespace(ctx)
+		for _, peers := range [][]sipv1alpha1.TrustedPeer{
+			{{Name: "carrier", Addresses: []string{"198.51.100.7"}}},     // an address, not a CIDR
+			{{Name: "carrier", Addresses: []string{"198.51.100.0/33"}}},  // no such prefix
+			{{Name: "carrier", Addresses: []string{}}},                   // no addresses
+			{{Name: "car rier", Addresses: []string{"198.51.100.0/30"}}}, // would land in the config's comments
+			{{Name: "carrier", Addresses: []string{"198.51.100.0/30\", \"0.0.0.0/0"}}},
+		} {
+			err := k8sClient.Create(ctx, newProxy(ns, func(kc *sipv1alpha1.KamailioCluster) { kc.Spec.TrustedPeers = peers }))
+			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "%v: %v", peers, err)
+		}
+		Expect(k8sClient.Create(ctx, newProxy(ns, func(kc *sipv1alpha1.KamailioCluster) {
+			kc.Spec.TrustedPeers = []sipv1alpha1.TrustedPeer{
+				{Name: "twilio", Addresses: []string{"54.172.60.0/30", "54.244.51.0/30"}},
+				{Name: "bench", Addresses: []string{"10.244.0.0/16", "2001:db8::/32"}},
+			}
+		}))).To(Succeed())
+	})
+
 	It("refuses an RPC or metrics port equal to another", func() {
 		ns := newNamespace(ctx)
 		err := k8sClient.Create(ctx, newProxy(ns, func(kc *sipv1alpha1.KamailioCluster) { kc.Spec.RPC.Port = 5060 }))

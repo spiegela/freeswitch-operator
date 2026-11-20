@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
 )
 
 // kamailioConfigCases are rendered by TestKamailioConfigRenders and, with KAMAILIO_CFG_OUT set, written out (with
@@ -13,6 +15,11 @@ var kamailioConfigCases = map[string]kamailioConfigData{
 	"two-sets": {Name: "edge", SIPPort: 5060, RPCPort: 5070, MetricsPort: 5071, DispatcherList: kamailioDispatcher, Sets: []int32{2, 1}},
 	"one-set":  {Name: "edge", SIPPort: 5080, RPCPort: 5071, MetricsPort: 5072, DispatcherList: kamailioDispatcher, Sets: []int32{1}},
 	"no-sets":  {Name: "edge", SIPPort: 5060, RPCPort: 5070, MetricsPort: 5071, DispatcherList: kamailioDispatcher},
+	"trusted-peers": {Name: "edge", SIPPort: 5060, RPCPort: 5070, MetricsPort: 5071, DispatcherList: kamailioDispatcher,
+		Sets: []int32{1}, TrustedPeers: kamailioTrustedPeers([]sipv1alpha1.TrustedPeer{
+			{Name: "carrier", Addresses: []string{"198.51.100.0/30", "203.0.113.8/29"}},
+			{Name: "bench", Addresses: []string{"10.244.0.0/16", "2001:db8::/32"}},
+		})},
 }
 
 func TestKamailioConfigRenders(t *testing.T) {
@@ -72,5 +79,38 @@ func TestKamailioConfigRouting(t *testing.T) {
 	}
 	if strings.Contains(none, "ds_select_routes") || !strings.Contains(none, "spec.dispatch is empty") {
 		t.Error("with no sets every new call gets 503")
+	}
+}
+
+func TestKamailioConfigTrustedPeers(t *testing.T) {
+	cfg, err := renderKamailioConfig(kamailioConfigCases["trusted-peers"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`loadmodule "ipops.so"`,
+		"# Trusted peers: carrier bench",
+		`if (!ds_is_from_list() && !route(TRUSTED_PEER)) {`,
+		`prom_counter_inc("rejected_requests_total", "1", "untrusted_source");`,
+		`if (is_in_subnet("$si", "198.51.100.0/30,203.0.113.8/29")) {`,
+		`if (is_in_subnet("$si", "10.244.0.0/16,2001:db8::/32")) {`,
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("rendered config lacks %q", want)
+		}
+	}
+	// The check comes first: an untrusted source gets no answer at all, not even 483 or 416.
+	if strings.Index(cfg, "route(TRUSTED_PEER)") > strings.Index(cfg, "mf_process_maxfwd_header") {
+		t.Error("the trust check must come before anything that answers")
+	}
+
+	open, err := renderKamailioConfig(kamailioConfigCases["one-set"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unwanted := range []string{"ipops", "TRUSTED_PEER", "untrusted_source\")"} {
+		if strings.Contains(open, unwanted) {
+			t.Errorf("with no trusted peers the config has %q", unwanted)
+		}
 	}
 }

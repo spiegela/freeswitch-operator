@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+
+	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
 )
 
 //go:embed kamailio.cfg.tmpl
@@ -24,6 +26,25 @@ type kamailioConfigData struct {
 	DispatcherList string
 	// Sets are the dispatcher set IDs in priority order.
 	Sets []int32
+	// TrustedPeers are the sources that may send requests, besides the dispatched nodes. Empty trusts every source.
+	TrustedPeers []kamailioTrustedPeer
+}
+
+// kamailioTrustedPeer is one spec.trustedPeers entry as the config uses it.
+type kamailioTrustedPeer struct {
+	Name string
+	// Subnets is the peer's CIDRs, comma-separated, as ipops' is_in_subnet takes them.
+	Subnets string
+}
+
+// kamailioTrustedPeers turns spec.trustedPeers into config data. The API validates names and CIDRs, so nothing here
+// can break the config's quoting.
+func kamailioTrustedPeers(peers []sipv1alpha1.TrustedPeer) []kamailioTrustedPeer {
+	out := make([]kamailioTrustedPeer, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, kamailioTrustedPeer{Name: p.Name, Subnets: strings.Join(p.Addresses, ",")})
+	}
+	return out
 }
 
 // Rules is the ds_select_routes rule string: every set, in priority order, round-robin (algorithm 4) within each.
