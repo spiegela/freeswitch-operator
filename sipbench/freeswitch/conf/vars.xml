@@ -16,8 +16,10 @@
        local_ip_v4, where Kamailio dispatches to it. -->
   <X-PRE-PROCESS cmd="exec-set" data="bind_address=/bin/sh /usr/local/freeswitch/conf/bin/podinfo.sh bind-address $${local_ip_v4}"/>
 
-  <!-- Where calls from trunks go: the mock backend today, LiveKit SIP later. host[:port] -->
+  <!-- Where calls from trunks go: the mock backend in the bench (but see livekit_host). host[:port] -->
   <X-PRE-PROCESS cmd="exec-set" data="backend_host=/bin/sh /usr/local/freeswitch/conf/bin/env.sh BACKEND_HOST mockbackend:5060"/>
+  <!-- Where calls to "lk<number>" go: LiveKit SIP, where an agent answers. The backend when unset. host[:port] -->
+  <X-PRE-PROCESS cmd="exec-set" data="livekit_host=/bin/sh /usr/local/freeswitch/conf/bin/env.sh LIVEKIT_HOST $${backend_host}"/>
   <!-- Where transfers asked for by the backend (REFER) are placed. host[:port] -->
   <X-PRE-PROCESS cmd="exec-set" data="transfer_host=/bin/sh /usr/local/freeswitch/conf/bin/env.sh TRANSFER_HOST sipbench:5090"/>
   <!-- An address that never answers, for the unreachable-backend scenario (TEST-NET-1). Bench only. -->

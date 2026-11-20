@@ -11,6 +11,18 @@
     <extension name="backend-target" continue="true">
       <condition field="destination_number" expression="^.+$">
         <action application="set" data="bench_target_host=$${backend_host}" inline="true"/>
+        <action application="set" data="bench_target_user=${destination_number}" inline="true"/>
+      </condition>
+    </extension>
+
+    <!--
+      A called number starting with "lk" goes to LiveKit SIP (livekit_host) without the prefix, so an agent can take
+      the call while every other number stays on the backend. Without LIVEKIT_HOST it is the backend too.
+    -->
+    <extension name="livekit-target" continue="true">
+      <condition field="destination_number" expression="^lk(.+)$">
+        <action application="set" data="bench_target_host=$${livekit_host}" inline="true"/>
+        <action application="set" data="bench_target_user=$1" inline="true"/>
       </condition>
     </extension>
 
@@ -46,7 +58,7 @@
         <!-- A REFER from the backend transfers this caller through the transfers context. -->
         <action application="set" data="force_transfer_context=transfers"/>
         <action application="set" data="force_transfer_dialplan=XML"/>
-        <action application="bridge" data="{force_transfer_context=transfers,force_transfer_dialplan=XML}sofia/backend/$1@${bench_target_host}"/>
+        <action application="bridge" data="{force_transfer_context=transfers,force_transfer_dialplan=XML}sofia/backend/${bench_target_user}@${bench_target_host}"/>
         <!-- Reached only when the bridge failed: the fallback. -->
         <action application="set" data="sip_rh_X-Fallback-Reason=${originate_disposition}"/>
         <action application="answer"/>
