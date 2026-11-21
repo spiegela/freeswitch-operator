@@ -62,8 +62,10 @@ type Call struct {
 	Digits      string         `json:"digits"`
 	MediaFrames int64          `json:"mediaFrames"`
 
-	Refer  *ReferResult `json:"refer,omitempty"`
-	Errors []string     `json:"errors,omitempty"`
+	Refer *ReferResult `json:"refer,omitempty"`
+	// Infos are the INFO requests received in the call's dialog, other than keypad tones, in arrival order.
+	Infos  []Info   `json:"infos,omitempty"`
+	Errors []string `json:"errors,omitempty"`
 }
 
 // ReferResult is the outcome of a REFER this end sent.
@@ -100,6 +102,7 @@ func (l *live) snapshot() Call {
 	c.TonesHeard = append([]float64{}, l.call.TonesHeard...)
 	c.AudioGapsMs = maps.Clone(l.call.AudioGapsMs)
 	c.Errors = append([]string(nil), l.call.Errors...)
+	c.Infos = append([]Info(nil), l.call.Infos...)
 	if l.call.Refer != nil {
 		r := *l.call.Refer
 		r.Notify = append([]int(nil), l.call.Refer.Notify...)

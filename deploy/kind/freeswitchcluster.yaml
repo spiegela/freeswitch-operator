@@ -12,6 +12,9 @@ spec:
   args: ["-nonat", "-nf", "-nc", "-conf", "/usr/local/freeswitch/conf", "-log", "/tmp", "-db", "/tmp"]
   env:
     - {name: BACKEND_HOST, value: "mockbackend.telephony.svc.cluster.local:5060"}
+    # "lk<number>" goes here (hack/kind.sh livekit deploys it); without LiveKit those calls fail, and only the
+    # livekit scenarios, skipped then, make them.
+    - {name: LIVEKIT_HOST, value: "livekit-sip.livekit.svc.cluster.local:5060"}
     - {name: TRANSFER_HOST, value: "sipbench.telephony.svc.cluster.local:5090"}
     - {name: ESL_LISTEN_IP, value: "127.0.0.1"}
   nodeSelector:
