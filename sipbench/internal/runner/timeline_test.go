@@ -2,6 +2,8 @@ package runner
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"maps"
 	"strings"
 	"sync"
@@ -26,6 +28,14 @@ type fakeFleet struct {
 	reads int
 	// external is each pod's external address annotation.
 	external map[string]string
+	// blackouts are the nodes taken dark, and until when; deleted, the pods deleted.
+	blackouts map[string]fakeBlackout
+	deleted   []string
+}
+
+type fakeBlackout struct {
+	node  string
+	until time.Time
 }
 
 func newFakeFleet() *fakeFleet {
@@ -99,6 +109,58 @@ func (f *fakeFleet) ExternalAddresses(context.Context) (map[string]string, error
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return maps.Clone(f.external), nil
+}
+
+// StartBlackout takes the node dark at once: the pod reports having started long enough ago that the runner
+// counts the node dark straight away.
+func (f *fakeFleet) StartBlackout(_ context.Context, node string, d time.Duration, image string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if image == "" {
+		return "", errors.New("no image")
+	}
+	if f.blackouts == nil {
+		f.blackouts = map[string]fakeBlackout{}
+	}
+	pod := fmt.Sprintf("sipbench-blackout-%d", len(f.blackouts))
+	f.blackouts[pod] = fakeBlackout{node: node, until: time.Now().Add(d)}
+	return pod, nil
+}
+
+func (f *fakeFleet) Blackout(_ context.Context, pod string) (fleet.BlackoutState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.blackouts[pod]
+	if !ok {
+		return fleet.BlackoutState{}, fmt.Errorf("no pod %s", pod)
+	}
+	st := fleet.BlackoutState{Phase: "Running", StartedAt: time.Now().Add(-fleet.BlackoutDelay - 2*time.Second)}
+	if time.Now().After(b.until) {
+		st.Phase = "Succeeded"
+	}
+	return st, nil
+}
+
+func (f *fakeFleet) NodeReady(_ context.Context, node string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, b := range f.blackouts {
+		if b.node == node && time.Now().Before(b.until) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (f *fakeFleet) PodLog(_ context.Context, pod string) (string, error) {
+	return "dark eth0\nrestored eth0\n", nil
+}
+
+func (f *fakeFleet) DeletePod(_ context.Context, pod string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted = append(f.deleted, pod)
+	return nil
 }
 
 const longRoute = `
@@ -234,5 +296,73 @@ func TestCrossChecks(t *testing.T) {
 	}
 	if out := crossChecks(calls, []CallResult{{Backend: rec("10.0.0.1:5080")}, {}}); len(out) != 1 {
 		t.Errorf("no record should fail: %v", out)
+	}
+}
+
+// A node taken dark: the call's node goes NotReady, comes back Ready once the blackout ends, and the blackout pod
+// is seen to finish, its log noted, and deleted.
+func TestTimelineBlacksOutTheCallsNode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	f := newFakeFleet()
+	r := withFleet(startMock(t, longRoute), f)
+	r.cfg.BlackoutImage = "sipbench:test"
+	r.cfg.Caps[scenario.BlackoutCapability] = true
+	res := runScenario(t, r, `
+name: dark
+requires: [mock, fleet, node-blackout]
+calls:
+  - id: a
+    to: long
+    steps:
+      - tone: {hz: 600, ms: 20000}
+    expect: {status: 200}
+actions:
+  - {afterAnswered: a, afterMs: 300, blackoutNodeOf: {of: a, forMs: 1500}}
+  - {waitNode: {of: a, state: NotReady, timeoutMs: 1000}}
+  - {waitNode: {of: a, state: Ready, timeoutMs: 3000}}
+  - {hangup: a}
+`)
+	if len(f.blackouts) != 1 || f.blackouts["sipbench-blackout-0"].node != "n0" {
+		t.Errorf("blackouts %v, want one on n0 (the node at the call's source)", f.blackouts)
+	}
+	if len(f.deleted) != 1 || f.deleted[0] != "sipbench-blackout-0" {
+		t.Errorf("deleted %v, want the blackout pod", f.deleted)
+	}
+	tl := strings.Join(res.Timeline, "\n  ")
+	for _, want := range []string{"n0 is dark for 1.5s", "node n0 (call a) is NotReady", "node n0 (call a) is Ready",
+		"blackout sipbench-blackout-0 on n0: restored eth0"} {
+		if !strings.Contains(tl, want) {
+			t.Errorf("timeline lacks %q:\n  %s", want, tl)
+		}
+	}
+	if res.Status == statusFail {
+		t.Errorf("failed: %v", res.Failures)
+	}
+}
+
+// Without an image to run, a blackout fails the timeline rather than skipping silently.
+func TestTimelineBlackoutNeedsAnImage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	f := newFakeFleet()
+	r := withFleet(startMock(t, longRoute), f)
+	r.cfg.Caps[scenario.BlackoutCapability] = true
+	s, err := scenario.Parse([]byte(`
+name: dark
+requires: [mock, fleet, node-blackout]
+calls:
+  - {id: a, to: long, steps: [{tone: {hz: 600, ms: 20000}}], expect: {status: 200}}
+actions:
+  - {afterAnswered: a, blackoutNodeOf: {of: a, forMs: 1000}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := r.Run(context.Background(), s)
+	if res.Status != statusFail || !strings.Contains(strings.Join(res.Failures, "\n"), "-blackout-image") {
+		t.Errorf("got %s: %v", res.Status, res.Failures)
 	}
 }

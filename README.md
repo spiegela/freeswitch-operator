@@ -392,7 +392,11 @@ When a node dies mid-call: fence it (its address is unbound before anything else
 the pool's fencing is `Authoritative`, [loop 4](#4-external-addresses-v0-node-addresses-pool-in-m3)), move its address
 to the spare, and have the spare run `sofia recover` against the shared call-tracking database (`track-calls` on the
 SIP profiles, PostgreSQL behind). This is the riskiest loop and the most valuable, so it comes after sipbench can
-kill a node mid-call and check the outcome. Until then a node's calls drop when it dies, and new calls go elsewhere.
+kill a node mid-call and check the outcome, which it now can: `node-lost-mid-call` takes a call's node off the
+network for two minutes (`sipbench blackout`, tc drop filters on the node's own interface) and checks the rest of
+the fleet keeps taking calls. Until failover a node's calls drop when it dies (FreeSWITCH ends them at its media
+timeout, and nothing tells the backend), and new calls go elsewhere: within Kamailio's 5 s failover at first, with
+no delay once the dispatcher's probes have taken the node out.
 
 ### 6. Configuration from git (v0 mounting; M5 typed)
 
@@ -681,7 +685,7 @@ which version runs where.
 | M2b | Bench tooling for the remaining conformance cases: a raw-message sender (RFC 4475 torture tests; first sets in: proxy validation, stray requests and responses, lexical variants, the request-side torture and size cases; responses from a node still need a stand-in node), netem impairment (first set in: loss, burst loss, delay, jitter, reordering and duplication on the carrier-edge link through tc, and named SIP messages dropped or held, over signalling, media, DTMF, one-way audio and a short blackhole; MOS, RFC 3550 jitter and the proxy-node and edge-backend links still to come), and runner features (re-INVITE, hand-set headers, DTMF before answer, full INVITE records) | in progress |
 | M2c | [Metrics and alerts](#metrics-and-alerts): every component exposes metrics an OpenTelemetry Collector scrapes (its prometheus receiver) and sends on over OTLP: Kamailio's `/metrics` (its statistics, refusals, silent drops), FreeSWITCH through an exporter beside each node (sessions, calls, paused, SIP profile state and counters), and the operator's own (controller-runtime's, plus fleet, drain and dispatcher-reload metrics); alert rules with promtool tests; on kind a Collector sending to a Prometheus that evaluates the rules, and scenarios that check counters through it | in progress |
 | M3 | [`SIPAddressPool`](#4-external-addresses-v0-node-addresses-pool-in-m3), shared by both fleets, with providers behind one interface. In: the provider-neutral pool controller (tested against a fake provider); AWS Elastic IPs on the node's own address or a secondary private address (unit-tested against a fake EC2 client); the `bind-address` split in both fleets' config and the address agent that puts bind addresses on nodes; pool metrics and alerts; kustomize components and the IAM policy; sipbench's `mediaAddress` check (`pool-media-address`); MetalLB (a Service per binding), with the kind edge's FreeSWITCH fleet on a MetalLB pool and the bench checking media to the pooled address. Still to come: a run on AWS (the sandbox, then the EKS edge node group); a bench scenario for a replaced node's address | in progress |
-| M4 | v1 failover with fencing and call recovery | planned |
+| M4 | v1 failover with fencing and call recovery. In: sipbench's `node-lost-mid-call`, a node taken dark mid-call (the `blackoutNodeOf` action), checking the rest of the fleet and recording the lost call as the baseline; audio gaps counted up to the call's end, so a call whose audio stops for good fails `maxAudioGapMs`. Still to come: how in-dialog SIP reaches the node that takes a call over, call tracking (PostgreSQL), dead-node detection and fencing, moving the address to a spare and `sofia recover`, a spare edge node on kind | in progress |
 | M5 | Typed peer and ACL resources (loop 9), outbound registrations when a peer needs them (loop 8), sipbench peer mocks; reload without restart | planned |
 | M6 | Peers on the inside network (loop 10): FreeSWITCH inside profile and dispatcher set, Kamailio inside listener, sipbench VPN peer mock | planned |
 

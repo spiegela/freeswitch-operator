@@ -7,6 +7,9 @@
 # SIPBENCH_FLEET names the FreeswitchCluster the fleet scenarios act on (the "fleet" capability), through the
 # sipbench-runner service account (runner-rbac.yaml). Empty, they skip.
 #
+# SIPBENCH_BLACKOUT_IMAGE is the image the node-lost scenarios run on an edge node to take it dark (sipbench
+# blackout, from this same image), adding the "node-blackout" capability. Empty, they skip.
+#
 # NET_ADMIN lets the runner impair its own traffic with tc (the "netem" capability, carrier-edge link only): it
 # changes this pod's network namespace and nothing else.
 #
@@ -45,6 +48,7 @@ spec:
             - {name: SIPBENCH_TARGET, value: "0.0.0.0:5090"}
             - {name: SIPBENCH_CAPS, value: "mock,codec:pcmu,codec:pcma,proxy,netem,sip-trace,address-pool"}  # proxy: the edge address is Kamailio; address-pool: the fleet draws from edge-media
             - {name: SIPBENCH_FLEET, value: "telephony/edge"}    # namespace/name; empty skips the fleet scenarios
+            - {name: SIPBENCH_BLACKOUT_IMAGE, value: "sipbench:dev"}  # this image; empty skips node-blackout scenarios
             - {name: SIPBENCH_PROMETHEUS, value: "http://prometheus.monitoring.svc:9090"}  # metric checks; empty skips them
             - {name: SIPBENCH_RUN, value: ""}             # a regexp picking scenarios by name; hack/kind.sh bench sets it
             - {name: SIPBENCH_JSON, value: ""}            # "-" prints the JSON report after the summary; hack/kind.sh bench sets it

@@ -79,6 +79,9 @@ type Config struct {
 	// PrometheusURL is the metrics backend the scenarios' metric checks query (Prometheus's HTTP API), e.g.
 	// http://prometheus.monitoring.svc:9090. Empty: the checks are reported as not checked.
 	PrometheusURL string
+	// BlackoutImage is the image the blackoutNodeOf action runs on a node (sipbench's own); with it and Fleet,
+	// add scenario.BlackoutCapability to Caps.
+	BlackoutImage string
 	// TCExec runs the tc and ip commands that impair the network; nil runs them for real (see netem.Shaper).
 	TCExec func(ctx context.Context, args ...string) error
 	Log    *slog.Logger
@@ -632,7 +635,7 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 	time.Sleep(100 * time.Millisecond)
 	cr.Codec = eng.Codec()
 	cr.TonesHeard = eng.Heard(uas.MinToneFrames)
-	cr.AudioGapsMs = eng.MaxGapsMs()
+	cr.AudioGapsMs = eng.MaxGapsMs(endedAt)
 	cr.Digits = eng.Digits()
 	cr.MediaFrames = eng.FramesReceived()
 	cr.ToneCoverage = eng.ToneCoverage()

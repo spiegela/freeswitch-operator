@@ -183,10 +183,11 @@ func (e *Engine) Digits() string {
 }
 
 // MaxGapsMs is, for each tone heard, the longest it went missing once it had started, in milliseconds, keyed by
-// frequency ("1000").
-func (e *Engine) MaxGapsMs() map[string]int {
+// frequency ("1000"), for a call that ended at end: a tone that stopped arriving before then counts as missing
+// until end (see tone.Detector.MaxGapsUntil).
+func (e *Engine) MaxGapsMs(end time.Time) map[string]int {
 	out := map[string]int{}
-	for hz, gap := range e.detector.MaxGaps() {
+	for hz, gap := range e.detector.MaxGapsUntil(end) {
 		out[strconv.FormatFloat(hz, 'f', -1, 64)] = int(gap.Milliseconds())
 	}
 	return out

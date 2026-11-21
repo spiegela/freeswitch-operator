@@ -20,6 +20,9 @@ const (
 	defaultFleetWait   = 300 * time.Second
 	defaultRollStarted = 120 * time.Second
 	cleanupTimeout     = 60 * time.Second
+	// A blackout pod must be running within this, and seen to finish within blackoutGrace of its end.
+	blackoutStart = 60 * time.Second
+	blackoutGrace = 3 * time.Minute
 )
 
 // callState is what the timeline can see of, and do to, one call while it runs.
@@ -53,9 +56,10 @@ type timeline struct {
 	done    map[string]chan struct{}
 	aborted chan struct{}
 
-	// What to undo: nodes cordoned, and each edited ConfigMap key's original value.
-	cordoned []string
-	broken   []brokenKey
+	// What to undo: nodes cordoned, each edited ConfigMap key's original value, and blackout pods to see finish.
+	cordoned  []string
+	broken    []brokenKey
+	blackouts []blackoutPod
 	// pods remembers which pod carried each call, once looked up.
 	pods map[string]fleet.Member
 
@@ -65,6 +69,12 @@ type timeline struct {
 }
 
 type brokenKey struct{ configMap, key, original string }
+
+// blackoutPod is a node taken dark, until about the time until.
+type blackoutPod struct {
+	pod, node string
+	until     time.Time
+}
 
 func newTimeline(r *Runner, s *scenario.Scenario, key string, calls map[string]*callState, start time.Time) *timeline {
 	t := &timeline{
@@ -237,6 +247,12 @@ func (t *timeline) do(ctx context.Context, a *scenario.Action) (string, error) {
 
 	case a.ExpectRollStuck != nil:
 		return t.rollStuck(ctx, a.ExpectRollStuck)
+
+	case a.BlackoutNodeOf != nil:
+		return t.blackout(ctx, a.BlackoutNodeOf)
+
+	case a.WaitNode != nil:
+		return t.waitNode(ctx, a.WaitNode)
 	}
 	return "", errors.New("no action")
 }
@@ -296,6 +312,82 @@ func (t *timeline) waitMember(ctx context.Context, w *scenario.WaitMember) (stri
 		return "", fmt.Errorf("pod %s (call %s) is %s, not %s: %w", m.Pod, w.Of, state, w.State, err)
 	}
 	return fmt.Sprintf("pod %s (call %s) is %s", m.Pod, w.Of, w.State), nil
+}
+
+// blackout takes a call's node dark: it starts the blackout pod there, waits for it to run, and returns once
+// the pod has taken the node off the network (fleet.BlackoutDelay after it started).
+func (t *timeline) blackout(ctx context.Context, b *scenario.Blackout) (string, error) {
+	f := t.r.cfg.Fleet
+	if t.r.cfg.BlackoutImage == "" {
+		return "", errors.New("taking a node dark needs the image to run there (-blackout-image)")
+	}
+	m, err := t.memberOf(ctx, b.Of)
+	if err != nil {
+		return "", err
+	}
+	d := time.Duration(b.ForMs) * time.Millisecond
+	pod, err := f.StartBlackout(ctx, m.Node, d, t.r.cfg.BlackoutImage)
+	if err != nil {
+		return "", fmt.Errorf("starting the blackout on %s: %w", m.Node, err)
+	}
+	// Until it is seen running, assume the latest it could go dark.
+	t.blackouts = append(t.blackouts, blackoutPod{pod: pod, node: m.Node,
+		until: time.Now().Add(blackoutStart + fleet.BlackoutDelay + d)})
+	bp := &t.blackouts[len(t.blackouts)-1]
+
+	sctx, cancel := context.WithTimeout(ctx, blackoutStart)
+	defer cancel()
+	var st fleet.BlackoutState
+	for {
+		st, err = f.Blackout(sctx, pod)
+		if err == nil && st.Phase == "Running" && !st.StartedAt.IsZero() {
+			break
+		}
+		if err == nil && st.Finished() {
+			return "", fmt.Errorf("blackout pod %s on %s ended before it ran: %s %s", pod, m.Node, st.Phase, st.Reason)
+		}
+		select {
+		case <-sctx.Done():
+			return "", fmt.Errorf("blackout pod %s on %s not running within %s (%s %s, last error %v)",
+				pod, m.Node, blackoutStart, st.Phase, st.Reason, err)
+		case <-time.After(pollEvery):
+		}
+	}
+	// StartedAt is to the second, so allow for one more before counting the node dark.
+	dark := st.StartedAt.Add(fleet.BlackoutDelay + time.Second)
+	bp.until = dark.Add(d)
+	select {
+	case <-time.After(time.Until(dark)):
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	return fmt.Sprintf("call %s is on %s; %s is dark for %s (pod %s)", b.Of, m.Pod, m.Node, d, pod), nil
+}
+
+// waitNode waits until the node carrying a call is Ready or NotReady.
+func (t *timeline) waitNode(ctx context.Context, w *scenario.WaitNode) (string, error) {
+	m, err := t.memberOf(ctx, w.Of)
+	if err != nil {
+		return "", err
+	}
+	want := w.State == "Ready"
+	ctx, cancel := context.WithTimeout(ctx, msOr(w.TimeoutMs, defaultFleetWait))
+	defer cancel()
+	var lastErr error
+	for {
+		ready, err := t.r.cfg.Fleet.NodeReady(ctx, m.Node)
+		if err == nil && ready == want {
+			return fmt.Sprintf("node %s (call %s) is %s", m.Node, w.Of, w.State), nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("node %s (call %s) not %s: %w (last error: %v)", m.Node, w.Of, w.State, ctx.Err(), lastErr)
+		case <-time.After(pollEvery):
+		}
+	}
 }
 
 func (t *timeline) rollStuck(ctx context.Context, rs *scenario.RollStuck) (string, error) {
@@ -397,8 +489,10 @@ func (t *timeline) restore(ctx context.Context) ([]string, error) {
 	return done, errors.Join(errs...)
 }
 
-// cleanup undoes what the actions left behind, however the scenario ended.
+// cleanup undoes what the actions left behind, however the scenario ended. A node taken dark comes back on its own;
+// cleanup waits for that first, so the next scenario finds the fleet whole.
 func (t *timeline) cleanup() {
+	t.endBlackouts()
 	if len(t.cordoned) == 0 && len(t.broken) == 0 {
 		return
 	}
@@ -414,6 +508,50 @@ func (t *timeline) cleanup() {
 	} else if len(keys) > 0 {
 		t.note("cleanup: restored %s", strings.Join(keys, ", "))
 	}
+}
+
+// endBlackouts waits for each blackout pod to finish, which it can only be seen to do once its node is back on the
+// network, notes what its log says, and deletes it. A pod not seen to finish is deleted anyway (its SIGTERM ends
+// the blackout early, once the node hears of it) and fails the scenario: its node may still be dark.
+func (t *timeline) endBlackouts() {
+	f := t.r.cfg.Fleet
+	for _, b := range t.blackouts {
+		ctx, cancel := context.WithDeadline(context.Background(), b.until.Add(blackoutGrace))
+		var st fleet.BlackoutState
+		var err error
+		for {
+			st, err = f.Blackout(ctx, b.pod)
+			if (err == nil && st.Finished()) || ctx.Err() != nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(pollEvery):
+			}
+		}
+		cancel()
+		ctx, cancel = context.WithTimeout(context.Background(), cleanupTimeout)
+		if log, lerr := f.PodLog(ctx, b.pod); lerr == nil {
+			for line := range strings.Lines(log) {
+				if line = strings.TrimSpace(line); line != "" {
+					t.note("blackout %s on %s: %s", b.pod, b.node, line)
+				}
+			}
+		}
+		switch {
+		case err == nil && st.Phase == "Succeeded":
+		case err == nil && st.Finished():
+			t.fail("blackout %s on %s failed: %s", b.pod, b.node, st.Reason)
+		default:
+			t.fail("blackout %s on %s not seen to finish by %s (%s, last error %v): the node may still be dark",
+				b.pod, b.node, b.until.Add(blackoutGrace).Format(time.TimeOnly), st.Phase, err)
+		}
+		if err := f.DeletePod(ctx, b.pod); err != nil {
+			t.fail("cleanup: deleting blackout pod %s: %v", b.pod, err)
+		}
+		cancel()
+	}
+	t.blackouts = nil
 }
 
 func describe(s fleet.Status) string {

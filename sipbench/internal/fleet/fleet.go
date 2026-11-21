@@ -1,6 +1,7 @@
 // Package fleet lets scenarios act on the FreeSWITCH fleet under test, a FreeswitchCluster on Kubernetes: drain
-// the node a call is on, roll the fleet, break and restore its config, and watch its status. It talks to the API
-// server with client-go and doesn't import the operator, so the bench stays its own module.
+// the node a call is on or take it off the network, roll the fleet, break and restore its config, and watch its
+// status. It talks to the API server with client-go and doesn't import the operator, so the bench stays its own
+// module.
 package fleet
 
 import (
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,6 +22,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/utils/ptr"
 )
 
 // RollEnv is the environment variable Roll sets on the fleet's pods.
@@ -104,6 +107,37 @@ type Fleet interface {
 	// ExternalAddresses returns, by pod, each member's ExternalAddressAnnotation ("" for a pod without one). A
 	// member whose pod is already gone is left out.
 	ExternalAddresses(ctx context.Context) (map[string]string, error)
+	// NodeReady reports whether a node's Ready condition is True.
+	NodeReady(ctx context.Context, node string) (bool, error)
+	// StartBlackout starts a pod on node that takes the node off the network for d, BlackoutDelay after it
+	// starts (sipbench blackout, from image), and returns the pod's name.
+	StartBlackout(ctx context.Context, node string, d time.Duration, image string) (string, error)
+	// Blackout reports on a pod StartBlackout started.
+	Blackout(ctx context.Context, pod string) (BlackoutState, error)
+	// PodLog returns a pod's log.
+	PodLog(ctx context.Context, pod string) (string, error)
+	// DeletePod deletes a pod; one already gone is no error.
+	DeletePod(ctx context.Context, pod string) error
+}
+
+// BlackoutDelay is how long a blackout pod waits after starting before it takes its node dark, so the kubelet
+// can report it running while the node can still reach the API server.
+const BlackoutDelay = 3 * time.Second
+
+// BlackoutState is what the runner sees of a blackout pod.
+type BlackoutState struct {
+	// Phase is the pod's: Pending, Running, Succeeded or Failed.
+	Phase string
+	// StartedAt is when its container started (to the second); zero before then.
+	StartedAt time.Time
+	// Reason explains a pod that is pending or failed, when Kubernetes gives one.
+	Reason string
+}
+
+// Finished reports whether the pod has stopped: a blackout that has ended, and been seen to end, which needs the
+// node back on the network.
+func (b BlackoutState) Finished() bool {
+	return b.Phase == string(corev1.PodSucceeded) || b.Phase == string(corev1.PodFailed)
 }
 
 var fscResource = schema.GroupVersionResource{Group: "sip.instruments.com", Version: "v1alpha1", Resource: "freeswitchclusters"}
@@ -288,4 +322,97 @@ func (k *kube) SetConfigMapKey(ctx context.Context, name, key, value string) err
 		_, err = cms.Update(ctx, cm, metav1.UpdateOptions{FieldManager: "sipbench"})
 		return err
 	})
+}
+
+func (k *kube) NodeReady(ctx context.Context, node string) (bool, error) {
+	n, err := k.core.CoreV1().Nodes().Get(ctx, node, metav1.GetOptions{})
+	if err != nil {
+		return false, err
+	}
+	for _, c := range n.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.Status == corev1.ConditionTrue, nil
+		}
+	}
+	return false, nil
+}
+
+// StartBlackout runs sipbench blackout on node: on the host network, as root with NET_ADMIN (tc on the node's
+// own interface), placed by nodeName and tolerating every taint, so neither the scheduler nor a NotReady or
+// unreachable taint keeps it off the node or evicts it while the node is dark.
+func (k *kube) StartBlackout(ctx context.Context, node string, d time.Duration, image string) (string, error) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "sipbench-blackout-",
+			Namespace:    k.ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":    "sipbench-blackout",
+				"app.kubernetes.io/part-of": "sipbench",
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName:                      node,
+			HostNetwork:                   true,
+			RestartPolicy:                 corev1.RestartPolicyNever,
+			Tolerations:                   []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+			TerminationGracePeriodSeconds: ptr.To[int64](30),
+			AutomountServiceAccountToken:  ptr.To(false),
+			Containers: []corev1.Container{{
+				Name:            "blackout",
+				Image:           image,
+				ImagePullPolicy: corev1.PullIfNotPresent,
+				Args:            []string{"blackout", "-for", d.String(), "-delay", BlackoutDelay.String()},
+				Env: []corev1.EnvVar{{
+					Name:      "SIPBENCH_BLACKOUT_ADDRESS",
+					ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}},
+				}},
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser:    ptr.To[int64](0),
+					RunAsNonRoot: ptr.To(false),
+					Capabilities: &corev1.Capabilities{Add: []corev1.Capability{"NET_ADMIN"}},
+				},
+			}},
+		},
+	}
+	created, err := k.core.CoreV1().Pods(k.ns).Create(ctx, pod, metav1.CreateOptions{FieldManager: "sipbench"})
+	if err != nil {
+		return "", err
+	}
+	return created.Name, nil
+}
+
+func (k *kube) Blackout(ctx context.Context, pod string) (BlackoutState, error) {
+	p, err := k.core.CoreV1().Pods(k.ns).Get(ctx, pod, metav1.GetOptions{})
+	if err != nil {
+		return BlackoutState{}, err
+	}
+	st := BlackoutState{Phase: string(p.Status.Phase), Reason: p.Status.Reason}
+	for _, cs := range p.Status.ContainerStatuses {
+		switch {
+		case cs.State.Running != nil:
+			st.StartedAt = cs.State.Running.StartedAt.Time
+		case cs.State.Terminated != nil:
+			st.StartedAt = cs.State.Terminated.StartedAt.Time
+			if st.Reason == "" && cs.State.Terminated.ExitCode != 0 {
+				st.Reason = fmt.Sprintf("%s (exit %d): %s", cs.State.Terminated.Reason, cs.State.Terminated.ExitCode,
+					strings.TrimSpace(cs.State.Terminated.Message))
+			}
+		case cs.State.Waiting != nil && st.Reason == "":
+			st.Reason = cs.State.Waiting.Reason
+		}
+	}
+	return st, nil
+}
+
+func (k *kube) PodLog(ctx context.Context, pod string) (string, error) {
+	b, err := k.core.CoreV1().Pods(k.ns).GetLogs(pod, &corev1.PodLogOptions{}).DoRaw(ctx)
+	return string(b), err
+}
+
+func (k *kube) DeletePod(ctx context.Context, pod string) error {
+	err := k.core.CoreV1().Pods(k.ns).Delete(ctx, pod, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
 }

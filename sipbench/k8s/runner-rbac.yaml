@@ -1,7 +1,9 @@
 # What the runner may do to the fleet under test, for the scenarios that require "fleet" (drain-mid-call,
-# rolling-update-live-call, bad-config-stops-roll, pool-media-address): read the FreeswitchCluster and roll it,
-# read its pods' external addresses and evict them, edit the ConfigMaps it reads and put them back, and cordon and
-# uncordon nodes. Only the runner Job uses this account.
+# rolling-update-live-call, bad-config-stops-roll, pool-media-address, node-lost-mid-call): read the
+# FreeswitchCluster and roll it, read its pods' external addresses and evict them, edit the ConfigMaps it reads and
+# put them back, cordon and uncordon nodes and read whether they are ready, and, for "node-blackout", start a pod on
+# an edge node that takes the node off the network for a while (host network, root, NET_ADMIN: a bench-only power,
+# for a namespace that admits privileged pods), read its log and delete it. Only the runner Job uses this account.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -21,7 +23,10 @@ rules:
     verbs: ["get", "update"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
   - apiGroups: [""]
     resources: ["pods/eviction"]
     verbs: ["create"]
@@ -43,7 +48,8 @@ subjects:
   - kind: ServiceAccount
     name: sipbench-runner
 ---
-# Nodes are cluster-wide: cordoning one is the only cluster-scoped thing the runner does.
+# Nodes are cluster-wide: cordoning one, and reading whether it is ready, are the only cluster-scoped things the
+# runner does.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

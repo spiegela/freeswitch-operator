@@ -56,7 +56,8 @@ type Call struct {
 
 	Codec      string    `json:"codec,omitempty"`
 	TonesHeard []float64 `json:"tonesHeard"`
-	// AudioGapsMs is, for each tone heard, the longest it went missing once it had started (see tone.Detector).
+	// AudioGapsMs is, for each tone heard, the longest it went missing once it had started, up to the call's end
+	// (see tone.Detector.MaxGapsUntil).
 	AudioGapsMs map[string]int `json:"audioGapsMs,omitempty"`
 	Digits      string         `json:"digits"`
 	MediaFrames int64          `json:"mediaFrames"`
@@ -304,7 +305,7 @@ func Handle( //nolint:gocyclo // one dispatch over every script step; splitting 
 		if eng != nil {
 			c.Codec = eng.Codec()
 			c.TonesHeard = eng.Heard(MinToneFrames)
-			c.AudioGapsMs = eng.MaxGapsMs()
+			c.AudioGapsMs = eng.MaxGapsMs(now)
 			c.Digits = eng.Digits()
 			c.MediaFrames = eng.FramesReceived()
 		}

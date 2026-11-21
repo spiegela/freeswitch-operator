@@ -667,6 +667,8 @@ cases:
       BYE.
     status: planned
     milestone: M4
+    # The node-lost-mid-call scenario already takes the node dark (sipbench blackout) on this timeline and records
+    # the call's audio gap and ending without checking them; M4 adds the recovery expectations to it.
 
   - id: imp-node-partition-fencing
     ref: "kubernetes node lease; RFC 3261 16"

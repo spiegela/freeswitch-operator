@@ -152,12 +152,23 @@ func (d *Detector) Heard(minFrames int) []float64 {
 
 // MaxGaps returns, for each frequency heard, the longest time between two frames that held it: how long the tone
 // was lost for at worst, once it had started. A far end that plays a tone throughout should show only jitter here.
+// A tone that stops for good and never comes back shows no gap: see MaxGapsUntil.
 func (d *Detector) MaxGaps() map[float64]time.Duration {
+	return d.MaxGapsUntil(time.Time{})
+}
+
+// MaxGapsUntil is MaxGaps for a call that ended at end: the time from a tone's last frame to end counts as a gap
+// too, so a tone that stopped arriving partway through (the far end's node went dark, and the call with it) shows
+// how long it was missing rather than nothing. A zero end counts no such tail.
+func (d *Detector) MaxGapsUntil(end time.Time) map[float64]time.Duration {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := make(map[float64]time.Duration, len(d.last))
-	for f := range d.last {
+	for f, last := range d.last {
 		out[f] = d.maxGap[f]
+		if tail := end.Sub(last); !end.IsZero() && tail > out[f] {
+			out[f] = tail
+		}
 	}
 	return out
 }

@@ -60,7 +60,7 @@ const fleetCalls = "name: x\nrequires: [fleet]\ncalls: [{id: a, to: b, expect: {
 func TestParseActions(t *testing.T) {
 	s, err := Parse([]byte(`
 name: x
-requires: [mock, fleet]
+requires: [mock, fleet, node-blackout]
 calls:
   - {id: a, to: agent, expect: {status: 200}}
   - {id: b, to: agent, startAfter: drained, expect: {status: 200, backend: {otherNodeThan: a}}}
@@ -74,6 +74,8 @@ actions:
   - {expectRollStuck: {forMs: 10}}
   - {restoreConfig: {}}
   - {afterEnded: a, waitFleetCurrent: {timeoutMs: 5}}
+  - {blackoutNodeOf: {of: a, forMs: 1000}}
+  - {waitNode: {of: a, state: NotReady}}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +84,8 @@ actions:
 	for i := range s.Actions {
 		kinds = append(kinds, s.Actions[i].Kind())
 	}
-	want := "drainNodeOf waitMember hangup uncordon rollFleet breakConfig expectRollStuck restoreConfig waitFleetCurrent"
+	want := "drainNodeOf waitMember hangup uncordon rollFleet breakConfig expectRollStuck restoreConfig waitFleetCurrent " +
+		"blackoutNodeOf waitNode"
 	if got := strings.Join(kinds, " "); got != want {
 		t.Errorf("kinds = %s", got)
 	}
@@ -122,21 +125,30 @@ func TestParseMediaAddress(t *testing.T) {
 
 func TestParseErrors(t *testing.T) {
 	cases := map[string]string{
-		"unknown field":      "name: x\nbogus: 1\noptions: {expectStatus: 200}",
-		"no name":            "options: {expectStatus: 200}",
-		"nothing to do":      "name: x",
-		"missing status":     "name: x\ncalls: [{id: a, to: b}]",
-		"duplicate id":       "name: x\ncalls: [{id: a, to: b, expect: {status: 200}}, {id: a, to: b, expect: {status: 200}}]",
-		"unknown codec":      "name: x\ncalls: [{id: a, to: b, codecs: [opus], expect: {status: 200}}]",
-		"answer from caller": "name: x\ncalls: [{id: a, to: b, steps: [{answer: {}}], expect: {status: 200}}]",
-		"bad endedBy":        "name: x\ncalls: [{id: a, to: b, expect: {status: 200, endedBy: both}}]",
-		"empty route":        "name: x\noptions: {expectStatus: 200}\nbackend: {routes: {r: {steps: []}}}",
-		"two kinds":          fleetCalls + "actions: [{rollFleet: {}, hangup: a}]",
-		"no kind":            fleetCalls + "actions: [{afterMs: 5}]",
-		"unknown call":       fleetCalls + "actions: [{drainNodeOf: b}]",
-		"unknown trigger":    fleetCalls + "actions: [{afterAnswered: b, rollFleet: {}}]",
-		"bad member state":   fleetCalls + "actions: [{waitMember: {of: a, state: Sleepy}}]",
-		"no stuck time":      fleetCalls + "actions: [{expectRollStuck: {}}]",
+		"unknown field":       "name: x\nbogus: 1\noptions: {expectStatus: 200}",
+		"no name":             "options: {expectStatus: 200}",
+		"nothing to do":       "name: x",
+		"missing status":      "name: x\ncalls: [{id: a, to: b}]",
+		"duplicate id":        "name: x\ncalls: [{id: a, to: b, expect: {status: 200}}, {id: a, to: b, expect: {status: 200}}]",
+		"unknown codec":       "name: x\ncalls: [{id: a, to: b, codecs: [opus], expect: {status: 200}}]",
+		"answer from caller":  "name: x\ncalls: [{id: a, to: b, steps: [{answer: {}}], expect: {status: 200}}]",
+		"bad endedBy":         "name: x\ncalls: [{id: a, to: b, expect: {status: 200, endedBy: both}}]",
+		"empty route":         "name: x\noptions: {expectStatus: 200}\nbackend: {routes: {r: {steps: []}}}",
+		"two kinds":           fleetCalls + "actions: [{rollFleet: {}, hangup: a}]",
+		"no kind":             fleetCalls + "actions: [{afterMs: 5}]",
+		"unknown call":        fleetCalls + "actions: [{drainNodeOf: b}]",
+		"unknown trigger":     fleetCalls + "actions: [{afterAnswered: b, rollFleet: {}}]",
+		"bad member state":    fleetCalls + "actions: [{waitMember: {of: a, state: Sleepy}}]",
+		"no stuck time":       fleetCalls + "actions: [{expectRollStuck: {}}]",
+		"blackout unrequired": fleetCalls + "actions: [{blackoutNodeOf: {of: a, forMs: 1000}}]",
+		"blackout no time": "name: x\nrequires: [fleet, node-blackout]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
+			"actions: [{blackoutNodeOf: {of: a}}]",
+		"blackout too long": "name: x\nrequires: [fleet, node-blackout]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
+			"actions: [{blackoutNodeOf: {of: a, forMs: 3600000}}]",
+		"blackout no call": "name: x\nrequires: [fleet, node-blackout]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
+			"actions: [{blackoutNodeOf: {of: b, forMs: 1000}}]",
+		"bad node state":     fleetCalls + "actions: [{waitNode: {of: a, state: Unknown}}]",
+		"wait node no call":  fleetCalls + "actions: [{waitNode: {of: b, state: Ready}}]",
 		"break nothing":      fleetCalls + "actions: [{breakConfig: {configMap: c, key: k, replace: x, with: x}}]",
 		"break neither":      fleetCalls + "actions: [{breakConfig: {configMap: c, key: k, with: x}}]",
 		"break both":         fleetCalls + "actions: [{breakConfig: {configMap: c, key: k, replace: x, match: y, with: z}}]",
