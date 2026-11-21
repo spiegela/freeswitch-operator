@@ -141,7 +141,7 @@ calls:
     codecs: [pcmu, pcma]         # offered, in order; telephone-event is always offered
     headers: {X-Conversation-Id: 2b9e4c71}
     cancelAfterMs: 0             # >0: CANCEL if not answered by then
-    steps:                       # after answer: tone, digits, wait, echo, hangup
+    steps:                       # after answer: tone, speech, digits, wait, echo, hangup
       - tone: {hz: 600, ms: 7000}
       - hangup: {}
     maxDurationMs: 30000
@@ -161,10 +161,19 @@ calls:
         referAccepted: true
         otherNodeThan: ""        # another call's id: this one must have come from a different edge node
         endedBy: remote
+        infos:                   # INFOs received mid-call (keypad ones aside); each entry counts its matches
+          - {contentType: application/x-barge-in+json, fields: {party: caller}}  # min 1 by default
+          - {contentType: application/x-barge-in+json, fields: {party: agent}, max: 0}
       target:                    # what the transfer target recorded
         answered: true
         tonesHeard: [600]
         headers: {X-Conversation-Id: 2b9e4c71}
+      livekit:                   # what the stand-in LiveKit agent saw of the call (needs livekit)
+        joined: true             # default; false: no participant may join for the call
+        attributes: {sipbench.bargeIn: freeswitch}   # the participant's, LiveKit SIP's own or mapped from headers
+        data:                    # data packets the call's participant sent the room; each entry counts its matches
+          - {topic: barge-in, fields: {party: caller, event: speech-started}}
+          - {topic: barge-in, fields: {party: agent}, max: 0}
 ```
 
 Capabilities a run provides are set with `-caps` (default `mock,esl,codec:pcmu,codec:pcma,sip-trace`): `mock` when
@@ -175,7 +184,26 @@ needs `NET_ADMIN`; compose and the kind Job provide both), `sip-trace` when the 
 own address, not a Service VIP, so a call can keep all its SIP on one socket (see Impairments below), and
 `address-pool` when the FreeswitchCluster under test draws its external address from a SIPAddressPool, and
 `node-blackout`, added by `-blackout-image` (`SIPBENCH_BLACKOUT_IMAGE`) with `-fleet`, when the runner may take an
-edge node off the network (see `blackoutNodeOf` below).
+edge node off the network (see `blackoutNodeOf` below), and `livekit`, added by `-lkagent <url>`
+(`SIPBENCH_LKAGENT`), when calls to `lk<number>` reach LiveKit SIP and the stand-in agent below can be asked what
+its room saw.
+
+### LiveKit: the stand-in agent
+
+`lkagent` (in the same image) stands in for a LiveKit agent. It does not yet stand in for the agent runtime. At
+start it replaces LiveKit SIP's `sipbench` inbound trunk and dispatch rule. The new trunk takes calls from private
+addresses and copies `X-Sipbench-Call` and `X-Barge-In-VAD` into the participant's attributes (`sipbench.call`,
+`sipbench.bargeIn`). The new rule sends every call to the room `sipbench`. It then joins that room, publishes a
+voice track of silence and subscribes to the callers. LiveKit SIP answers a call only after its participant has
+subscribed to someone's track. It records each participant and the data packets they send, and serves them at
+`GET /calls?benchCall=...` for the runner. Two things follow from the room being shared:
+
+- Calls in it at the same time hear each other's callers, so a scenario that checks what the edge hears from the
+  agent runs its calls one after another.
+- LiveKit SIP names a participant `sip_<caller number>`, so concurrent calls need different `from` numbers.
+
+On kind, `hack/kind.sh livekit` deploys it with Valkey, the LiveKit server and our patched LiveKit SIP
+(`deploy/kind/livekit`). `hack/kind.sh bench` then gives the runner `SIPBENCH_LKAGENT`.
 
 ### Raw messages: what sipgo won't send
 
@@ -342,6 +370,7 @@ Routes live in `backends/mock.yaml` and are picked by the Request-URI user; unma
 | `earlyMedia: {hz, ms}` | 183 with SDP, playing a tone |
 | `answer: {}` | 200 OK (after early media if any) |
 | `tone: {hz, ms}` | play a tone |
+| `speech: {ms, seed}` | talk: synthetic speech that voice detectors take for a person (Silero scores it 0.97 to 0.99), with no pauses of its own; it passes for no tone |
 | `digits: {digits, gapMs}` | send RFC 2833 events; put a `wait` first to send them at an offset |
 | `wait: {ms}` | pause; the line carries silence |
 | `echo: {ms}` | play back what is received |
@@ -349,7 +378,9 @@ Routes live in `backends/mock.yaml` and are picked by the Request-URI user; unma
 | `hangup: {}` | BYE |
 
 An answered call is held after its last step until the other end hangs up or `holdMs` passes. Throughout,
-the mock records X- headers, the codec, digits and tones heard, who hung up, and REFER outcomes.
+the mock records X- headers, the codec, digits and tones heard, who hung up, REFER outcomes, and the INFO requests
+it receives (type and body; it answers them 200, or 481 outside a call), which `infos` checks. An INFO's `fields`
+match the top-level members of its JSON body, compared as text.
 
 HTTP API (default `:8080`):
 
@@ -387,9 +418,15 @@ A minimal SBC, deliberately small enough to read in one sitting:
 - **Admission.** `max-sessions` in `switch.conf.xml` (1000), changed live with `fsctl max_sessions N`; past it,
   new INVITEs get 503. Each bridged call uses two sessions.
 - **Calls from the backend** (`backend` context) are refused with 403 until outbound routing is designed.
+- **Barge-in detection** is the agent's (`livekit`, the default) or the edge's (`freeswitch`: echo cancellation and
+  a voice detector on what the caller sends, another on what the backend sends, each detection sent to the backend
+  as a SIP INFO by the exporter's relay; the backend leg sets `fs_send_unsupported_info` so FreeSWITCH sends them), set
+  by `BARGE_IN_VAD` and overridden per call by the caller's `X-Barge-In-VAD` header; the backend leg is told the
+  mode in `X-Barge-In-VAD`. `mod_vad_silero` and `mod_vad_detect` are loaded for it. See "Voice detection for
+  barge-in" in the top-level README.
 - **Variables** come from the environment at start through `X-PRE-PROCESS cmd="exec-set"` (`bin/env.sh`):
   `BACKEND_HOST`, `LIVEKIT_HOST`, `TRANSFER_HOST`, `UNREACHABLE_HOST`, `RING_TIMEOUT`, `FALLBACK_TONE_HZ`,
-  `FALLBACK_TONE_MS`, `ESL_LISTEN_IP`.
+  `FALLBACK_TONE_MS`, `ESL_LISTEN_IP`, `BARGE_IN_VAD`, `BARGE_IN_VAD_ENGINE`, `BARGE_IN_ECHO_CANCEL`.
 - **External address.** `ext-rtp-ip` on `trunks` comes from
   `/etc/freeswitch-operator/podinfo/external-address` (override the path with `FS_EXTERNAL_ADDRESS_FILE`), or this
   host's first IPv4 address when the file is absent (`bin/podinfo.sh`; dual-stack hosts may list IPv6 first). With a
@@ -441,6 +478,7 @@ profiles, and which scenario checks each one. A new scenario needs an entry ther
 ```
 cmd/sipbench        runner CLI: run, validate
 cmd/mockbackend     mock backend
+cmd/lkagent         stand-in LiveKit agent: sets up LiveKit SIP's trunk and rule, records its room
 internal/runner     places calls, answers transfers, checks expectations, reports (summary, JSON, JUnit)
 internal/uas        answering side shared by the mock and transfer targets; call records
 internal/script     steps and the media engine (tones, digits, echo; continuous 20 ms RTP)
@@ -450,6 +488,7 @@ internal/fleet      the FreeswitchCluster scenario actions act on (client-go)
 internal/rawsip     hand-written SIP messages over UDP and TCP, and a lenient parser for what comes back
 internal/netem      impairments: the scenario vocabulary, tc plans, and the SIP layer's drops and holds
 internal/mock       mock config and HTTP API
+internal/lkagent    the LiveKit agent's records and HTTP API
 internal/esl        minimal FreeSWITCH event socket client
 freeswitch/conf     the edge configuration (freeswitch/kustomization.yaml: the same as ConfigMaps)
 backends/mock.yaml  the mock's starting routes

@@ -1,12 +1,15 @@
 package runner
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
 	"strings"
 
+	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/lkagent"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/netem"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/uas"
@@ -49,6 +52,51 @@ func check(c scenario.Call, cr CallResult, haveMock bool) []string {
 	}
 	if e.Target != nil {
 		out = append(out, end("target", cr.Target, *e.Target)...)
+	}
+	if e.LiveKit != nil {
+		out = append(out, livekit(cr.LiveKit, *e.LiveKit)...)
+	}
+	return out
+}
+
+// livekit checks what the stand-in LiveKit agent saw of a call: the participant LiveKit SIP brought into its room
+// (the last, if the call brought more than one) and the data packets that participant sent.
+func livekit(got []lkagent.Participant, x scenario.LiveKitExpect) []string {
+	if !x.WantJoined() {
+		if len(got) > 0 {
+			return []string{fmt.Sprintf("a participant (%s) joined the LiveKit room, want none", got[0].Identity)}
+		}
+		return nil
+	}
+	if len(got) == 0 {
+		return []string{"no participant joined the LiveKit room for the call"}
+	}
+	p := got[len(got)-1]
+	var out []string
+	for _, k := range slices.Sorted(maps.Keys(x.Attributes)) {
+		if v, ok := p.Attributes[k]; !ok || v != x.Attributes[k] {
+			out = append(out, fmt.Sprintf("LiveKit participant attribute %s = %q, want %q", k, v, x.Attributes[k]))
+		}
+	}
+	// Data packets match as INFOs do: the topic in the content type's place.
+	infos := make([]uas.Info, len(p.Data))
+	for i, d := range p.Data {
+		infos[i] = uas.Info{At: d.At, ContentType: d.Topic, Body: d.Payload}
+	}
+	for _, d := range x.Data {
+		n := 0
+		for _, in := range infos {
+			if (d.Topic == "" || in.ContentType == d.Topic) && infoMatches(in, scenario.InfoExpect{Fields: d.Fields}) {
+				n++
+			}
+		}
+		lo, hi := d.Bounds()
+		switch {
+		case n < lo:
+			out = append(out, fmt.Sprintf("LiveKit room received %d %s, want at least %d (received %s)", n, d, lo, infoList(infos)))
+		case hi >= 0 && n > hi:
+			out = append(out, fmt.Sprintf("LiveKit room received %d %s, want at most %d", n, d, hi))
+		}
 	}
 	return out
 }
@@ -99,10 +147,64 @@ func end(name string, calls []uas.Call, e scenario.EndExpect) []string {
 			out = append(out, fmt.Sprintf("%s REFER accepted=%v, want %v%s", name, got, *e.ReferAccepted, detail))
 		}
 	}
+	out = append(out, infos(name, c.Infos, e.Infos)...)
 	for _, err := range c.Errors {
 		out = append(out, fmt.Sprintf("%s error: %s", name, err))
 	}
 	return out
+}
+
+// infos checks the INFO requests an end received against each matcher's bounds.
+func infos(name string, got []uas.Info, want []scenario.InfoExpect) []string {
+	var out []string
+	for _, x := range want {
+		n := 0
+		for _, in := range got {
+			if infoMatches(in, x) {
+				n++
+			}
+		}
+		lo, hi := x.Bounds()
+		switch {
+		case n < lo:
+			out = append(out, fmt.Sprintf("%s received %d %s, want at least %d (received %s)", name, n, x, lo, infoList(got)))
+		case hi >= 0 && n > hi:
+			out = append(out, fmt.Sprintf("%s received %d %s, want at most %d", name, n, x, hi))
+		}
+	}
+	return out
+}
+
+func infoMatches(in uas.Info, x scenario.InfoExpect) bool {
+	if x.ContentType != "" && !strings.EqualFold(in.ContentType, x.ContentType) {
+		return false
+	}
+	if len(x.Fields) == 0 {
+		return true
+	}
+	var body map[string]any
+	if json.Unmarshal([]byte(in.Body), &body) != nil {
+		return false
+	}
+	for k, want := range x.Fields {
+		v, ok := body[k]
+		if !ok || fmt.Sprint(v) != want {
+			return false
+		}
+	}
+	return true
+}
+
+// infoList summarises INFOs for a message: each one's type and body.
+func infoList(got []uas.Info) string {
+	if len(got) == 0 {
+		return "none"
+	}
+	parts := make([]string, len(got))
+	for i, in := range got {
+		parts[i] = in.ContentType + " " + in.Body
+	}
+	return strings.Join(parts, "; ")
 }
 
 func tones(name string, heard, want, notWant []float64) []string {

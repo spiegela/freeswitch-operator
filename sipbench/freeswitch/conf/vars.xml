@@ -31,6 +31,19 @@
   <X-PRE-PROCESS cmd="exec-set" data="fallback_tone_hz=/bin/sh /usr/local/freeswitch/conf/bin/env.sh FALLBACK_TONE_HZ 1400"/>
   <X-PRE-PROCESS cmd="exec-set" data="fallback_tone_ms=/bin/sh /usr/local/freeswitch/conf/bin/env.sh FALLBACK_TONE_MS 3000"/>
 
+  <!-- Barge-in voice detection: who decides the caller is talking over the agent. "livekit" (the default) leaves it to
+       the agent behind LiveKit SIP, and the edge only says so (X-Barge-In-VAD on the backend leg). "freeswitch" has
+       the edge cancel echo and run a voice detector on what the caller sends, and another on what the agent sends
+       (so a consumer knows when we are talking), firing events on the event socket. A call's X-Barge-In-VAD header
+       overrides it. See dialplan/trunks.xml and "Voice detection for barge-in" in the top-level README. -->
+  <X-PRE-PROCESS cmd="exec-set" data="barge_in_vad=/bin/sh /usr/local/freeswitch/conf/bin/env.sh BARGE_IN_VAD livekit"/>
+  <!-- The detector with "freeswitch": silero (mod_vad_silero, a neural model; events carry a probability) or webrtc
+       (mod_vad_detect, FreeSWITCH's libfvad VAD; start and stop events only). -->
+  <X-PRE-PROCESS cmd="exec-set" data="barge_in_vad_engine=/bin/sh /usr/local/freeswitch/conf/bin/env.sh BARGE_IN_VAD_ENGINE silero"/>
+  <!-- Echo cancellation on what the caller sends, with "freeswitch": preprocess's r.echo_cancel value (speexdsp's
+       tail), 0 for none. -->
+  <X-PRE-PROCESS cmd="exec-set" data="barge_in_echo_cancel=/bin/sh /usr/local/freeswitch/conf/bin/env.sh BARGE_IN_ECHO_CANCEL 1024"/>
+
   <!-- Where the event socket listens. The bench's runner uses it for admission tests; on a cluster keep it on
        127.0.0.1, where fs_cli (and the operator's ready and drain scripts) reach it. -->
   <X-PRE-PROCESS cmd="exec-set" data="esl_listen_ip=/bin/sh /usr/local/freeswitch/conf/bin/env.sh ESL_LISTEN_IP 0.0.0.0"/>

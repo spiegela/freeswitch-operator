@@ -4,6 +4,7 @@ package scenario
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -219,6 +220,9 @@ type Expect struct {
 	Backend *EndExpect `yaml:"backend,omitempty"`
 	// Target checks what the transfer target recorded for this call.
 	Target *EndExpect `yaml:"target,omitempty"`
+	// LiveKit checks what the stand-in LiveKit agent saw of this call in its room; the scenario must require
+	// LiveKitCapability.
+	LiveKit *LiveKitExpect `yaml:"livekit,omitempty"`
 
 	// MinToneCoverage: each tone in tonesHeard was detected in at least this share (0-1) of the 20 ms frames
 	// between its first and last detection.
@@ -259,6 +263,51 @@ type EndExpect struct {
 	// OtherNodeThan names another call: this end must have received this call from a different edge node (INVITE
 	// source address) than that one. Backend only.
 	OtherNodeThan string `yaml:"otherNodeThan,omitempty"`
+	// Infos checks the INFO requests this end received mid-call, keypad tones aside: each entry counts those it
+	// matches.
+	Infos []InfoExpect `yaml:"infos,omitempty"`
+}
+
+// InfoExpect matches INFO requests an end received, by content type and JSON body fields, and bounds how many
+// match.
+type InfoExpect struct {
+	// ContentType must equal the INFO's, ignoring case. Empty matches any.
+	ContentType string `yaml:"contentType,omitempty"`
+	// Fields must each be in the INFO's body, a JSON object, with this value (compared as text: "0.5", "true").
+	Fields map[string]string `yaml:"fields,omitempty"`
+	// Min is the fewest that must match: default 1, or 0 when max is set.
+	Min *int `yaml:"min,omitempty"`
+	// Max is the most that may match. 0 means none may.
+	Max *int `yaml:"max,omitempty"`
+}
+
+// Bounds returns the fewest and most INFOs that may match (most -1: no limit).
+func (x InfoExpect) Bounds() (lo, hi int) {
+	lo, hi = 1, -1
+	if x.Max != nil {
+		lo, hi = 0, *x.Max
+	}
+	if x.Min != nil {
+		lo = *x.Min
+	}
+	return lo, hi
+}
+
+// String describes what x matches, for messages.
+func (x InfoExpect) String() string {
+	ct := x.ContentType
+	if ct == "" {
+		ct = "any type"
+	}
+	keys := slices.Sorted(maps.Keys(x.Fields))
+	var fields []string
+	for _, k := range keys {
+		fields = append(fields, k+"="+x.Fields[k])
+	}
+	if len(fields) == 0 {
+		return "INFO (" + ct + ")"
+	}
+	return "INFO (" + ct + ") with " + strings.Join(fields, " ")
 }
 
 // Raw is one hand-written message sent to the edge, and what must come back.
@@ -343,6 +392,59 @@ type Action struct {
 	WaitNode *WaitNode `yaml:"waitNode,omitempty"`
 	// Hangup ends the named call from the runner's side.
 	Hangup string `yaml:"hangup,omitempty"`
+}
+
+// LiveKitCapability is what a run must provide for expect.livekit: the edge sends calls to lk numbers to LiveKit
+// SIP, which takes them into the room of the bench's stand-in agent (cmd/lkagent), and the runner can ask the agent
+// what it saw (-lkagent).
+const LiveKitCapability = "livekit"
+
+// LiveKitExpect checks what the stand-in LiveKit agent saw of a call: the participant LiveKit SIP brought into its
+// room for the call, and the data packets that participant sent.
+type LiveKitExpect struct {
+	// Joined is whether a participant for the call joined the room (default true). With false nothing else is
+	// checked.
+	Joined *bool `yaml:"joined,omitempty"`
+	// Attributes must each be the participant's, with this value: LiveKit SIP's own (sip.callID, sip.trunkPhoneNumber
+	// and so on) and those the agent's trunk maps from the call's headers (sipbench.bargeIn, from X-Barge-In-VAD).
+	Attributes map[string]string `yaml:"attributes,omitempty"`
+	// Data checks the data packets the participant sent: each entry counts those it matches.
+	Data []DataExpect `yaml:"data,omitempty"`
+}
+
+// WantJoined is whether a participant for the call must have joined.
+func (x LiveKitExpect) WantJoined() bool { return x.Joined == nil || *x.Joined }
+
+// DataExpect matches data packets a call's participant sent to the room, by topic and JSON payload fields, and
+// bounds how many match.
+type DataExpect struct {
+	// Topic must equal the packet's. Empty matches any.
+	Topic string `yaml:"topic,omitempty"`
+	// Fields must each be in the packet's payload, a JSON object, with this value (compared as text).
+	Fields map[string]string `yaml:"fields,omitempty"`
+	// Min is the fewest that must match: default 1, or 0 when max is set.
+	Min *int `yaml:"min,omitempty"`
+	// Max is the most that may match. 0 means none may.
+	Max *int `yaml:"max,omitempty"`
+}
+
+// Bounds returns the fewest and most packets that may match (most -1: no limit).
+func (x DataExpect) Bounds() (lo, hi int) { return InfoExpect{Min: x.Min, Max: x.Max}.Bounds() }
+
+// String describes what x matches, for messages.
+func (x DataExpect) String() string {
+	topic := x.Topic
+	if topic == "" {
+		topic = "any topic"
+	}
+	var fields []string
+	for _, k := range slices.Sorted(maps.Keys(x.Fields)) {
+		fields = append(fields, k+"="+x.Fields[k])
+	}
+	if len(fields) == 0 {
+		return "data packet (" + topic + ")"
+	}
+	return "data packet (" + topic + ") with " + strings.Join(fields, " ")
 }
 
 // BlackoutCapability is what a run must provide for BlackoutNodeOf: it can start a privileged pod on an edge
@@ -561,6 +663,11 @@ func (s *Scenario) Validate() error {
 			return fmt.Errorf("call %q: %w", c.ID, err)
 		}
 	}
+	for _, c := range s.Calls {
+		if c.Expect.LiveKit != nil && !slices.Contains(s.Requires, LiveKitCapability) {
+			return fmt.Errorf("call %q: expect.livekit needs requires: [%s]", c.ID, LiveKitCapability)
+		}
+	}
 	if err := s.validateRepeats(); err != nil {
 		return err
 	}
@@ -624,6 +731,23 @@ func validateCall(c Call) error {
 	}
 	if c.Expect.Target != nil && c.Expect.Target.OtherNodeThan != "" {
 		return fmt.Errorf("otherNodeThan is for the backend only")
+	}
+	for name, e := range map[string]*EndExpect{"backend": c.Expect.Backend, "target": c.Expect.Target} {
+		if e == nil {
+			continue
+		}
+		for i, x := range e.Infos {
+			if lo, hi := x.Bounds(); lo < 0 || (x.Max != nil && (hi < 0 || lo > hi)) {
+				return fmt.Errorf("expect.%s.infos[%d]: min and max must be 0 or more, min no more than max", name, i)
+			}
+		}
+	}
+	if lk := c.Expect.LiveKit; lk != nil {
+		for i, x := range lk.Data {
+			if lo, hi := x.Bounds(); lo < 0 || (x.Max != nil && (hi < 0 || lo > hi)) {
+				return fmt.Errorf("expect.livekit.data[%d]: min and max must be 0 or more, min no more than max", i)
+			}
+		}
 	}
 	if a := c.Expect.MediaAddress; a != "" && a != MediaAddressFleet && net.ParseIP(a) == nil {
 		return fmt.Errorf("expect.mediaAddress %q is neither an IP address nor %s", a, MediaAddressFleet)

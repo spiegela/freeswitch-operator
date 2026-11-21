@@ -6,13 +6,14 @@
 //   - ring: {ms: 500}
 //   - answer: {}
 //   - tone: {hz: 1000, ms: 2000}
+//   - speech: {ms: 2000}
 //   - digits: {digits: "123#"}
 //   - wait: {ms: 1000}
 //   - refer: {to: "target-1"}
 //   - hangup: {}
 //
 // Signaling steps (ring, reject, earlyMedia, answer, refer) only make sense on the answering side and are run by
-// that side; media steps (tone, digits, wait, echo, hangup) run on any answered call through Engine.
+// that side; media steps (tone, speech, digits, wait, echo, hangup) run on any answered call through Engine.
 package script
 
 import (
@@ -28,6 +29,7 @@ type Step struct {
 	EarlyMedia *EarlyMedia `yaml:"earlyMedia,omitempty" json:"earlyMedia,omitempty"`
 	Answer     *Answer     `yaml:"answer,omitempty" json:"answer,omitempty"`
 	Tone       *Tone       `yaml:"tone,omitempty" json:"tone,omitempty"`
+	Speech     *Speech     `yaml:"speech,omitempty" json:"speech,omitempty"`
 	Digits     *Digits     `yaml:"digits,omitempty" json:"digits,omitempty"`
 	Wait       *Wait       `yaml:"wait,omitempty" json:"wait,omitempty"`
 	Echo       *Echo       `yaml:"echo,omitempty" json:"echo,omitempty"`
@@ -59,6 +61,14 @@ type Answer struct{}
 type Tone struct {
 	Hz float64 `yaml:"hz" json:"hz"`
 	Ms int     `yaml:"ms" json:"ms"`
+}
+
+// Speech talks for Ms: synthetic speech that voice detectors take for a person (see package speech), with no
+// pauses of its own; put a wait between two to pause. Seed picks the voice's syllables (default 1). Speech is no
+// tone: an end that hears it reports no tone heard.
+type Speech struct {
+	Ms   int    `yaml:"ms" json:"ms"`
+	Seed uint64 `yaml:"seed,omitempty" json:"seed,omitempty"`
 }
 
 // Digits sends keypad tones as RFC 2833 events, GapMs apart.
@@ -104,6 +114,9 @@ func (s Step) Kind() string {
 	if s.Tone != nil {
 		kinds = append(kinds, "tone")
 	}
+	if s.Speech != nil {
+		kinds = append(kinds, "speech")
+	}
 	if s.Digits != nil {
 		kinds = append(kinds, "digits")
 	}
@@ -135,7 +148,7 @@ func Validate(steps []Step, answering bool) error {
 			if !answering {
 				return fmt.Errorf("step %d: %s is only valid on the answering side", i+1, k)
 			}
-		case "refer", "tone", "digits", "wait", "echo", "hangup":
+		case "refer", "tone", "speech", "digits", "wait", "echo", "hangup":
 		default:
 			return fmt.Errorf("step %d: each step must set exactly one action, got %s", i+1, k)
 		}
@@ -144,6 +157,8 @@ func Validate(steps []Step, answering bool) error {
 			return fmt.Errorf("step %d: reject code %d is not a final failure code", i+1, s.Reject.Code)
 		case s.Tone != nil && (s.Tone.Hz <= 0 || s.Tone.Hz >= 4000 || s.Tone.Ms <= 0):
 			return fmt.Errorf("step %d: tone needs 0 < hz < 4000 and ms > 0", i+1)
+		case s.Speech != nil && s.Speech.Ms <= 0:
+			return fmt.Errorf("step %d: speech needs ms > 0", i+1)
 		case s.EarlyMedia != nil && (s.EarlyMedia.Hz <= 0 || s.EarlyMedia.Hz >= 4000 || s.EarlyMedia.Ms <= 0):
 			return fmt.Errorf("step %d: earlyMedia needs 0 < hz < 4000 and ms > 0", i+1)
 		case s.Digits != nil && strings.Trim(s.Digits.Digits, "0123456789*#ABCD") != "":

@@ -1,0 +1,20 @@
+# LiveKit on kind, behind the edge's "lk" numbers: Valkey, the LiveKit server, LiveKit SIP and sipbench's stand-in
+# agent, mirroring platform-gitops apps/livekit (the same versions, ports and settings) with two differences:
+#
+#   - LiveKit SIP is our patched build (LIVEKIT_SIP_IMAGE, livekit-sip:info-dev by default; the sip-info-to-room
+#     branch of github.com/spiegela/sip, a fork of github.com/livekit/sip), which forwards the edge's barge-in SIP INFOs to the room as
+#     data packets (info_topics). Upstream v1.24.0 answers them 405.
+#   - A fixed development API key in a plain Secret, and no webhook, agent runtime or setup job: the stand-in agent
+#     (sipbench's lkagent) sets up the inbound trunk and dispatch rule itself, sending every call into its room.
+#
+# Applied apart from deploy/kind, by hack/kind.sh livekit, because the patched image is built outside this repo.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: livekit
+resources:
+  - namespace.yaml
+  - api-secret.yaml
+  - valkey.yaml
+  - server.yaml
+  - sip.yaml
+  - lkagent.yaml

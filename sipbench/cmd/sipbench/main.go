@@ -121,6 +121,8 @@ func run(args []string) (int, error) {
 	edge := fs.String("edge", env("SIPBENCH_EDGE", "freeswitch:5060"), "edge SIP address (host:port) the far end calls")
 	mockURL := fs.String("mock", env("SIPBENCH_MOCK", "http://mockbackend:8080"),
 		"mock backend control API; empty if the backend is not the mock")
+	lkAgent := fs.String("lkagent", env("SIPBENCH_LKAGENT", ""),
+		"stand-in LiveKit agent's API (cmd/lkagent); adds the livekit capability. Empty: livekit scenarios skip")
 	eslAddr := fs.String("esl", env("SIPBENCH_ESL", "freeswitch:8021"),
 		"FreeSWITCH event socket; empty disables setup/teardown")
 	eslPass := fs.String("esl-password", env("SIPBENCH_ESL_PASSWORD", "ClueCon"), "event socket password")
@@ -191,13 +193,17 @@ func run(args []string) (int, error) {
 			capList = append(capList, scenario.BlackoutCapability)
 		}
 	}
+	if *lkAgent != "" && !capSet[scenario.LiveKitCapability] {
+		capSet[scenario.LiveKitCapability] = true
+		capList = append(capList, scenario.LiveKitCapability)
+	}
 	slices.Sort(capList)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	r := runner.New(runner.Config{
-		Edge: *edge, MockURL: *mockURL, ESL: *eslAddr, ESLPassword: *eslPass,
+		Edge: *edge, MockURL: *mockURL, LKAgentURL: *lkAgent, ESL: *eslAddr, ESLPassword: *eslPass,
 		TargetListen: *target, Caps: capSet, Fleet: fl, BlackoutImage: *blackoutImage, PrometheusURL: strings.TrimRight(*prom, "/"), Log: log,
 	})
 	if err := r.Start(ctx); err != nil {

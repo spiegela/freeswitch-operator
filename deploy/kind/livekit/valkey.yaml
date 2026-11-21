@@ -1,0 +1,52 @@
+# The store LiveKit and LiveKit SIP share: rooms, participants, SIP trunks and dispatch rules, and the bus between
+# them. In memory only: a restart loses the trunk and dispatch rule, which the stand-in agent puts back when it
+# restarts (kubectl -n livekit rollout restart deploy/lkagent).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valkey
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: valkey}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: valkey}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: valkey
+          image: valkey/valkey:8.1.12-alpine
+          imagePullPolicy: IfNotPresent
+          args: ["valkey-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb"]
+          ports:
+            - {name: valkey, containerPort: 6379}
+          readinessProbe:
+            exec: {command: ["valkey-cli", "ping"]}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 192Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+spec:
+  selector: {app.kubernetes.io/name: valkey}
+  ports:
+    - {name: valkey, port: 6379, targetPort: valkey}

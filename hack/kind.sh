@@ -6,8 +6,12 @@
 #   hack/kind.sh deploy    build and load the images, install MetalLB, the operator and the address agent, the
 #                          edge's SIPAddressPool, apply deploy/kind/monitoring and deploy/kind, wait for both
 #                          fleets and for every Kamailio to load the dispatcher list
+#   hack/kind.sh livekit   add LiveKit behind the edge's "lk" numbers (deploy/kind/livekit): Valkey, the server,
+#                          our patched LiveKit SIP (LIVEKIT_SIP_IMAGE, default livekit-sip:info-dev, built from the
+#                          sip-info-to-room branch of github.com/spiegela/sip) and sipbench's stand-in agent; after deploy, which builds sipbench:dev
 #   hack/kind.sh bench [re] run sipbench through Kamailio; an optional regexp picks scenarios by name, and
-#                          SIPBENCH_REPORT=<file> saves the run's JSON report there (for the report card)
+#                          SIPBENCH_REPORT=<file> saves the run's JSON report there (for the report card). With
+#                          LiveKit deployed the runner asks its agent too (the livekit capability)
 #   hack/kind.sh status    both fleets, their members and the dispatcher list each Kamailio has loaded
 #   hack/kind.sh down      delete the cluster
 #
@@ -262,6 +266,33 @@ status() {
   done
 }
 
+livekit() {
+  local sip_image="${LIVEKIT_SIP_IMAGE:-livekit-sip:info-dev}" image
+  if ! docker image inspect "$sip_image" >/dev/null 2>&1; then
+    echo "no local image $sip_image: build our patched LiveKit SIP (docker build -t livekit-sip:info-dev -f" \
+      "build/sip/Dockerfile . on the sip-info-to-room branch of github.com/spiegela/sip) or set" \
+      "LIVEKIT_SIP_IMAGE" >&2
+    return 1
+  fi
+  [ "$sip_image" = livekit-sip:info-dev ] || docker tag "$sip_image" livekit-sip:info-dev
+  say "loading LiveKit's images into kind"
+  for image in $("$KUSTOMIZE" build "$ROOT/deploy/kind/livekit" | awk '$1 ~ /^-?image:$/ {print $NF}' | sort -u); do
+    case "$image" in
+      livekit-sip:info-dev | sipbench:dev) ;;
+      *) docker image inspect "$image" >/dev/null 2>&1 || docker pull -q "$image" >/dev/null ;;
+    esac
+    "$KIND" load docker-image --name "$CLUSTER" "$image" >/dev/null
+  done
+  say "applying LiveKit"
+  "$KUSTOMIZE" build "$ROOT/deploy/kind/livekit" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -
+  # Rebuilt images under the same tags need a restart to be picked up; the agent sets up the trunk again as it starts.
+  "${KUBECTL[@]}" -n livekit rollout restart deployment/livekit-sip deployment/lkagent
+  local d
+  for d in valkey livekit-server livekit-sip lkagent; do
+    "${KUBECTL[@]}" -n livekit rollout status "deployment/$d" --timeout=180s
+  done
+}
+
 bench() {
   local job filter="${1:-}" report="${SIPBENCH_REPORT:-}"
   local -a envs=()
@@ -274,6 +305,9 @@ bench() {
   # nothing, hence the plain cat without either.)
   if [ -n "$filter" ]; then envs+=("SIPBENCH_RUN=$filter"); fi
   if [ -n "$report" ]; then envs+=("SIPBENCH_JSON=-"); fi
+  if "${KUBECTL[@]}" -n livekit get deployment/lkagent >/dev/null 2>&1; then
+    envs+=("SIPBENCH_LKAGENT=http://lkagent.livekit.svc.cluster.local:8080")
+  fi
   local manifest="$ROOT/sipbench/k8s/runner-job.yaml"
   job=$(if [ ${#envs[@]} -gt 0 ]; then
       "${KUBECTL[@]}" set env --local -o yaml -f "$manifest" "${envs[@]}"
@@ -306,6 +340,6 @@ down() { "$KIND" delete cluster --name "$CLUSTER"; }
 cmd="${1:-}"
 shift || true
 case "$cmd" in
-  up | deploy | bench | status | down) "$cmd" "$@" ;;
-  *) sed -n '2,10p' "$0"; exit 2 ;;
+  up | deploy | livekit | bench | status | down) "$cmd" "$@" ;;
+  *) sed -n '2,15p' "$0"; exit 2 ;;
 esac
