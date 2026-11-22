@@ -1,0 +1,53 @@
+# sipbench's stand-in LiveKit agent (sipbench/cmd/lkagent): at start it replaces LiveKit SIP's "sipbench" inbound
+# trunk and dispatch rule with ones taking every call from a private address into the room "sipbench", the call's
+# X-Sipbench-Call and X-Barge-In-VAD headers copied into its participant's attributes. Then it sits in that room,
+# noting who joins and the data packets they send, and serves them by bench call on 8080 for the runner
+# (SIPBENCH_LKAGENT, which hack/kind.sh bench sets when this is deployed).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lkagent
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: lkagent}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: lkagent}
+    spec:
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: lkagent
+          image: sipbench:dev
+          imagePullPolicy: IfNotPresent
+          command: ["lkagent"]
+          env:
+            - {name: LIVEKIT_URL, value: "ws://livekit-server.livekit.svc.cluster.local:7880"}
+          envFrom:
+            - secretRef: {name: livekit-api}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lkagent
+spec:
+  selector: {app.kubernetes.io/name: lkagent}
+  ports:
+    - {name: http, port: 8080, targetPort: http}

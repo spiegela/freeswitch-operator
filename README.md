@@ -572,6 +572,160 @@ FreeSWITCH advertises (loop 4) would send their RTP somewhere they can't reach.
 - **sipbench:** a peer mock on a second network checks that the SDP it receives carries an inside address and that
   audio flows both ways.
 
+## Voice detection for barge-in (proposed)
+
+If FreeSWITCH becomes the voice detector for barge-in (the caller talking over the agent should cut the agent off),
+the edge needs the following. None of it is built or scheduled on a milestone yet.
+
+**Requirements**
+- **In the audio path of every call that should have barge-in, decoding it for the whole call.** Signaling alone,
+  or audio passed straight through (`proxy_media`, `bypass_media`), won't do. The edge already anchors every call's
+  media: FreeSWITCH ends both legs and nothing in sipbench's config bypasses it. But with `inherit_codec` both legs
+  share a codec, so nothing is transcoded today. Detection needs linear audio on every such call, so a decode, plus
+  the detector's own work, so capacity has to be sized (and benched) with detection on every call, not on a few.
+- **Listen only to what arrives from the caller.** On the caller's leg FreeSWITCH keeps the two directions apart:
+  the read stream is what the caller sends, and the write stream is what we send to the caller. Detection runs on
+  the read stream only. On a mixed stream there is no telling who is talking.
+- **Cancel our own echo.** Some of what we play comes back on the caller's side, from speakerphones and some lines.
+  Uncancelled, the detector hears our agent and we barge ourselves. Being in the path is what makes cancelling
+  possible: FreeSWITCH has what it just sent to compare against.
+- **Know when we're talking.** FreeSWITCH sees when our side is playing audio to the caller, so the bar for
+  calling something caller speech can be higher during those moments.
+- **Serve the record-and-send flows too.** If any of the older record-and-send flows stay, the same detector serves
+  them.
+
+**What the image gives us.** These were checked in the pinned image (`drachtio/drachtio-freeswitch-mrf:0.9.6`) by
+listing its modules, applications, linked libraries and usage strings. None of it has been tried on a call yet.
+- `mod_vad_silero`, a Silero neural VAD (ONNX Runtime), as `uuid_vad_silero <uuid> start|stop one-shot|continuous
+  threshold silence-ms speech-pad-ms min-speech-ms [bugname]`. Its threshold is a speech probability, so it can be
+  raised while we play.
+- `mod_vad_detect`, FreeSWITCH's own VAD (libfvad, WebRTC's), as `uuid_vad_detect <uuid> start|stop
+  one-shot|continuous mode silence-ms voice-ms [bugname]`. `vad_test` in `mod_dptools` uses the same VAD.
+- `preprocess` (an application) and `uuid_preprocess` (an API), with `echo_cancel`, `echo_suppress`,
+  `noise_suppress`, `agc` and `dereverb` options, backed by speexdsp, which `libfreeswitch` links. This is the
+  out-of-the-box echo canceller.
+- `mod_avmd` (answering-machine beep detection) and `mod_audio_fork` (streams a call's audio over a websocket),
+  plus several transcription and speech-to-speech modules we don't need for this.
+
+These are drachtio's and jambonz's modules, not stock FreeSWITCH: relying on them ties us to this image or to
+building them ourselves ([decision 4](#decisions)).
+
+**The switch: edge or agent, per call.** To compare detecting in the switch against detecting in LiveKit,
+sipbench's edge configuration loads both modules and makes the choice per call, with a fleet-wide default
+([`vars.xml`](sipbench/freeswitch/conf/vars.xml), [`dialplan/trunks.xml`](sipbench/freeswitch/conf/dialplan/trunks.xml)):
+
+| Variable (a `FreeswitchCluster`'s `spec.env`) | Default | |
+| --- | --- | --- |
+| `BARGE_IN_VAD` | `livekit` | `livekit`: the edge detects nothing, and the agent behind LiveKit SIP runs its own. `freeswitch`: the edge cancels echo and detects, as below |
+| `BARGE_IN_VAD_ENGINE` | `silero` | with `freeswitch`: `silero` (`mod_vad_silero`) or `webrtc` (`mod_vad_detect`) |
+| `BARGE_IN_ECHO_CANCEL` | `1024` | with `freeswitch`: `preprocess`'s `r.echo_cancel` on what the caller sends; `0` for none |
+
+- **Per call:** a caller's `X-Barge-In-VAD: livekit|freeswitch` header overrides the fleet's mode (any other value
+  is ignored). Kamailio's per-peer data (M5) can set it per peer. Changing the fleet's default changes `spec.env`,
+  which rolls the fleet one drained node at a time.
+- **The backend is always told**: the backend leg carries `X-Barge-In-VAD` with the mode in force, so the agent
+  knows whether to run its own detector or listen for the edge's (LiveKit SIP can map a header to a participant
+  attribute).
+- **With `freeswitch`**, once the call is answered: echo cancellation, then a detector, on what the caller sends
+  (media bug `caller`), and a second detector on what the agent sends, which is what the caller hears (media bug
+  `agent`). That second detector is how the edge knows when we're talking. Events go out on the event socket on
+  each change, told apart by `media-bugname`: `CUSTOM vad_silero:detect` (`detected-event: start_talking` or
+  `stop_talking`, with a JSON body carrying the window's `probability`) or `vad_detect:detection` (the same two,
+  no probability). On kind, a call with the mode set gets `preprocess` and `caller` media bugs on the caller's leg
+  and an `agent` bug on the backend leg; a `livekit` call gets none.
+- **Each detection goes to the agent as a SIP INFO** on the backend leg (`Content-Type:
+  application/x-barge-in+json`), whichever party it was heard in:
+  `{"event":"speech-started","party":"caller","engine":"silero","probability":0.98,"at":1795229956441}`.
+  `event` is `speech-started` or `speech-stopped`, `party` is `caller` or `agent`, `probability` is Silero's only,
+  and `at` (Unix ms) is when the speech started or stopped as the detector dates it. The image has no scripting
+  module to do this inside FreeSWITCH, so the metrics exporter beside it does it
+  ([`internal/fsexporter/relay.go`](internal/fsexporter/relay.go)): it subscribes to the detectors' events on the
+  event socket and calls `uuid_send_info` on the call's agent leg (the dialplan names that leg's uuid in advance).
+  This means detections are relayed only in a fleet that sets `spec.metrics`. `-barge-in-relay=false` (or
+  `BARGE_IN_RELAY=false`) turns the relay off. Its metrics are `freeswitch_barge_in_relay_connected` and
+  `freeswitch_barge_in_detections_total{party,event,result}`, where `result` is `relayed`, `no_target` or
+  `failed`. FreeSWITCH sends an INFO only to a far end that says it takes them (`X-FS-Support: send_info`), so the
+  agent leg sets `fs_send_unsupported_info`.
+- **The relay can't see whether the agent accepted an INFO.** `uuid_send_info` returns as soon as the INFO is
+  queued, so a 405 from the far end goes unnoticed and `relayed` counts INFOs sent, not INFOs received.
+- `sipbench`'s `barge-in-vad-mode` checks the switch end to end on kind, against the mock agent:
+  - the default mode, the header override, and audio unaffected both ways with the detectors and the echo
+    canceller in the path;
+  - a caller talking over the agent's tone: the agent gets `caller` start and stop INFOs and no `agent` ones;
+  - an agent talking over the caller's tone: `agent` INFOs and no `caller` ones;
+  - a `livekit` call: no INFOs at all.
+
+  The talking is sipbench's synthetic speech (a `speech` step), which Silero scores 0.97 to 0.99, as it does
+  recorded speech. Tones don't count as speech, and speexdsp logs resetting its echo canceller on them ("acting
+  funny and got slapped"), which pure tones are known to cause.
+
+**First measurements** (kind, one 8 kHz PCMU call from a FreeSWITCH node to the mock backend, about 8 s of
+synthetic speech sent toward the backend and the detectors on that leg). In these runs `mod_vad_silero` had been
+loaded by hand (`load mod_vad_silero`), and then it reported every 60 ms window with its probability rather than
+only changes; loaded at startup it reports changes only, which isn't understood yet. The per-window probabilities
+are what the numbers below count.
+- **Each detector hears only its leg's incoming audio.** With our speech going out and only a tone coming back,
+  Silero's probability stayed under 0.03 throughout; `mod_vad_detect` fired on the incoming tone and not on our
+  speech.
+- **Without echo cancellation we barge ourselves.** With the mock echoing our speech back, Silero put 74% of the
+  windows during our speech at 0.5 or above.
+- **FreeSWITCH's echo canceller helps, but not alone.** With `r.echo_cancel=1024` that fell to 51% over the 8 s:
+  80 to 95% in the first three seconds while speexdsp converges, then 0 to 40%. A longer tail with
+  `r.echo_suppress=-60` gave the same numbers, which isn't explained yet. So the higher bar while we're talking (the
+  `agent` detector) is needed, not optional. The mock's echo is a clean digital copy; a real speakerphone's is
+  harder.
+- **The agent hears of a barge-in about 260 ms after the caller starts talking**, and of the stop about 120 ms
+  after they stop. The relay adds about 10 ms of that. The rest is the detector's own minimums at their defaults:
+  250 ms of speech before it calls a start, and 100 ms of silence before it calls a stop. Both are arguments to
+  `uuid_vad_silero` (`barge_in_vad_args`), so they can be tuned.
+
+**Still to find out**
+- **LiveKit SIP drops the INFOs, so we patch it.** Upstream (`livekit/sip`, read at v1.24.0, the version
+  platform-gitops runs) registers no INFO handler: any INFO gets 405, and nothing in it reaches the room. It maps
+  headers to participant attributes only from the initial INVITE. A patch, on the `sip-info-to-room` branch of
+  [spiegela/sip](https://github.com/spiegela/sip/tree/sip-info-to-room) (a public fork of `livekit/sip`, one commit
+  on v1.24.0), adds a config option, `info_topics`, mapping a body
+  content type to a data packet topic:
+
+  ```yaml
+  info_topics:
+    application/x-barge-in+json: barge-in
+  ```
+
+  An INFO of a listed type on an inbound call is published to the call's room as a reliable data packet from the
+  SIP participant, its body unchanged, and answered 200. Any other type gets 415, and a body over 15 KiB gets 413.
+  Without the option, INFO is answered 405 as before. The agent gets each detection from its room's data callback
+  on topic `barge-in`, from the participant `sip_<number>`.
+  - **Tested:** its unit tests (forwarding in order, content type matching, 415, 413, 481, and 405 without the
+    option) and LiveKit SIP's whole unit suite pass. An integration test against a real LiveKit server in Docker
+    has an agent in the room receive two detections sent as INFO, with the same body as the edge sends. The patched
+    image builds (`livekit-sip:info-dev`, locally).
+  - **Tested end to end on kind** (`hack/kind.sh livekit`, then the bench's `barge-in-livekit` scenario): a caller
+    through Kamailio and the edge to the patched LiveKit SIP, into the room of a stand-in agent (sipbench's
+    `lkagent`). The agent receives the caller's start and stop as data packets on `barge-in` and nothing from the
+    agent's side while it is silent. It also sees the call's mode as a participant attribute, mapped by the trunk's
+    `headers_to_attributes` from `X-Barge-In-VAD`. With the agent detecting, no packets come. The agent gets a start
+    about 270 ms after the speech starts and a stop about 120 ms after it stops, so LiveKit SIP and the room add
+    only a few milliseconds to the relay's figures above.
+  - **Learned on the way:** LiveKit SIP answers a call only once its participant has subscribed to someone's track
+    in the room. An agent that publishes no audio leaves the call ringing until the edge gives up (NO_ANSWER, then
+    the fallback). A real agent publishes its voice. The stand-in publishes silence.
+  - **Still to decide:** the fork lives in a personal GitHub account for now. Still open are which registry serves
+    its image, before platform-gitops can run it, and whether to offer the change upstream (a pull request from the
+    fork), which would spare us carrying it.
+- **What the agent does in each mode:** with `livekit`, its own VAD drives interruptions as today; with
+  `freeswitch`, it should turn that off and act on the edge's signal.
+- **Why a hand-loaded `mod_vad_silero` reported every window** while one loaded at startup reports changes. A
+  consumer wants changes, so this matters only if the per-window mode turns up in production.
+- **The cost of a Silero session per leg**: each detector creates its own ONNX session at answer (about 40 to 60 ms
+  on kind) and holds it for the call.
+- Why the echo canceller's tail setting changed nothing, and how it does on a real speakerphone's echo.
+- **The cost per call** (decode, echo cancellation, Silero on two legs), measured on the bench, and what it does to
+  sessions per node.
+- **Echo on the bench:** with the INFOs, the bench now sees the detector's verdict. A scenario where the agent talks
+  and the caller echoes it back (sipbench's `echo` step) should give no `caller` INFOs. It isn't written yet, and
+  the measurements above suggest it would fail today.
+
 ## Metrics and alerts
 
 **Every component serves Prometheus metrics; an OpenTelemetry Collector scrapes them and sends them on over OTLP,
@@ -636,9 +790,10 @@ flowchart LR
 - **The mock backend** answers what FreeSWITCH bridges to, with behaviour chosen per called number from a YAML file:
   ring, reject with a code, answer, play a tone, send keypad tones, ask for a blind transfer, hang up. It records
   what it received (headers, codecs, digits, audio) for the runner to check.
-- **Backends are pluggable.** A scenario names the capabilities it needs. Today only `mock` exists; `livekit-sip`
-  (LiveKit SIP with a scripted agent) and `runtime` (the real agent runtime) plug in behind the same FreeSWITCH
-  config as those layers exist, and scenarios that need them stop skipping.
+- **Backends are pluggable.** A scenario names the capabilities it needs: `mock`, and `livekit` (LiveKit SIP on
+  the edge's `lk` numbers with a stand-in agent, sipbench's `lkagent`, that records what reaches its room; on kind
+  with `hack/kind.sh livekit`). `runtime` (the real agent runtime) plugs in behind the same FreeSWITCH config once
+  that layer exists, and the scenarios that need it stop skipping.
 - **Each run checks** the SIP ladder (expected messages in order), media in both directions, digits sent equal digits
   received, the outcome (who answered, legs released), and timings.
 
@@ -719,9 +874,20 @@ move (`metrics:` in a scenario); on kind the runner checks them through that Pro
 make kind-up         # create the cluster (about 6 GB of Docker memory)
 make kind-deploy     # build and load the images, install MetalLB and the operator, apply deploy/kind, wait for both fleets
 make kind-bench      # run sipbench through Kamailio; hack/kind.sh bench <regexp> runs a subset
+hack/kind.sh livekit # optional: LiveKit behind the edge's lk numbers, for the livekit scenarios (below)
 hack/kind.sh status  # both fleets' members, the combined dispatcher list, and what each Kamailio has loaded
 make kind-down
 ```
+
+`hack/kind.sh livekit` adds, in the `livekit` namespace ([`deploy/kind/livekit`](deploy/kind/livekit/)):
+
+- Valkey and the LiveKit server, as platform-gitops runs them.
+- Our patched LiveKit SIP. The image `livekit-sip:info-dev` is built from the `sip-info-to-room` branch of
+  [spiegela/sip](https://github.com/spiegela/sip/tree/sip-info-to-room), or set `LIVEKIT_SIP_IMAGE`.
+- sipbench's stand-in agent.
+
+The edge sends `lk<number>` there (`LIVEKIT_HOST`). Once it is up, the bench runs the `livekit` scenarios, which
+otherwise skip.
 
 Through Kamailio the bench passes everything but `codec-g722` (the image has no G.722) and `admission-limit` (it
 needs the event socket of one particular node). On kind the runner also acts on the fleet (`SIPBENCH_FLEET`), so
@@ -773,6 +939,9 @@ make report-card       # rewrite the card from the saved reports (after editing 
 
 1. **Do peers allow-list media addresses?** If none do, FreeSWITCH nodes can keep advertising their node's own
    public address (v0), and the address pool can cover Kamailio first.
+2. **Does FreeSWITCH become the voice detector for barge-in?** If it does, see
+   [Voice detection for barge-in](#voice-detection-for-barge-in-proposed) for what it needs, starting with
+   detection on every call that should have barge-in and capacity sized for it.
 
 ## License
 

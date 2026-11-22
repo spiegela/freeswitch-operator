@@ -1,0 +1,109 @@
+name: barge-in-vad-mode
+area: media
+description: >
+  Which side detects the caller talking over the agent is switchable per call. With no X-Barge-In-VAD header the
+  fleet's mode applies (livekit by default: the edge leaves detection to the agent) and the backend is told so in
+  X-Barge-In-VAD. A caller's X-Barge-In-VAD: freeswitch turns on the edge's echo cancellation and voice detectors
+  for that call, and the backend is told freeswitch; audio still flows both ways with no gap, so the detectors and
+  the echo canceller sit in the path without disturbing it. A header with any other value is ignored.
+
+  With the edge detecting, each start and stop of speech reaches the agent as a SIP INFO
+  (application/x-barge-in+json) naming whose speech it was: a caller who talks over the agent's tone gives caller
+  detections and no agent ones, an agent who talks over the caller's tone gives agent detections and no caller ones
+  (each detector hears only its own side), and with the agent detecting the edge sends none.
+requires: [mock]
+backend:
+  routes:
+    talk:
+      steps:
+        - answer: {}
+        - tone: {hz: 1000, ms: 8000}
+    speak:
+      steps:
+        - answer: {}
+        - wait: {ms: 1000}
+        - speech: {ms: 2500}
+        - wait: {ms: 4000}
+calls:
+  - id: default
+    to: talk
+    steps:
+      - tone: {hz: 600, ms: 4000}
+      - hangup: {}
+    expect:
+      status: 200
+      tonesHeard: [1000]
+      maxAudioGapMs: 300
+      backend:
+        headers: {X-Barge-In-VAD: livekit}
+        tonesHeard: [600]
+        maxAudioGapMs: 300
+  - id: edge
+    to: talk
+    headers: {X-Barge-In-VAD: freeswitch}
+    steps:
+      - tone: {hz: 600, ms: 4000}
+      - hangup: {}
+    expect:
+      status: 200
+      tonesHeard: [1000]
+      maxAudioGapMs: 300
+      backend:
+        headers: {X-Barge-In-VAD: freeswitch}
+        tonesHeard: [600]
+        maxAudioGapMs: 300
+  - id: bogus
+    to: talk
+    headers: {X-Barge-In-VAD: sometimes}
+    steps:
+      - wait: {ms: 1000}
+      - hangup: {}
+    expect:
+      status: 200
+      backend:
+        headers: {X-Barge-In-VAD: livekit}
+  - id: edge-caller-talks
+    to: talk
+    headers: {X-Barge-In-VAD: freeswitch}
+    steps:
+      - wait: {ms: 1000}
+      - speech: {ms: 2500}
+      - wait: {ms: 1500}
+      - hangup: {}
+    expect:
+      status: 200
+      tonesHeard: [1000]
+      backend:
+        headers: {X-Barge-In-VAD: freeswitch}
+        infos:
+          - {contentType: application/x-barge-in+json, fields: {party: caller, event: speech-started}}
+          - {contentType: application/x-barge-in+json, fields: {party: caller, event: speech-stopped}}
+          - {contentType: application/x-barge-in+json, fields: {party: agent}, max: 0}
+  - id: edge-agent-talks
+    to: speak
+    headers: {X-Barge-In-VAD: freeswitch}
+    steps:
+      - tone: {hz: 600, ms: 6000}
+      - hangup: {}
+    expect:
+      status: 200
+      backend:
+        headers: {X-Barge-In-VAD: freeswitch}
+        tonesHeard: [600]
+        infos:
+          - {contentType: application/x-barge-in+json, fields: {party: agent, event: speech-started}}
+          - {contentType: application/x-barge-in+json, fields: {party: agent, event: speech-stopped}}
+          - {contentType: application/x-barge-in+json, fields: {party: caller}, max: 0}
+  - id: livekit-caller-talks
+    to: talk
+    steps:
+      - wait: {ms: 1000}
+      - speech: {ms: 2500}
+      - wait: {ms: 1500}
+      - hangup: {}
+    expect:
+      status: 200
+      backend:
+        headers: {X-Barge-In-VAD: livekit}
+        infos:
+          - {max: 0}

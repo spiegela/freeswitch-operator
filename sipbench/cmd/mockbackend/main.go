@@ -23,6 +23,7 @@ import (
 	"github.com/emiago/sipgo/sip"
 
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/mock"
+	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/uas"
 )
 
 func main() {
@@ -90,6 +91,7 @@ func run() error {
 			media.CodecAudioUlaw, media.CodecAudioAlaw, media.CodecTelephoneEvent8000,
 		}}),
 		diago.WithLogger(log),
+		diago.WithServerRequestMiddleware(uas.InfoMiddleware(srv.Store(), log)),
 	)
 	if err := dg.ServeBackground(ctx, srv.HandleCall); err != nil {
 		return fmt.Errorf("sip: %w", err)

@@ -215,6 +215,33 @@ cases:
     status: covered
     scenarios: [node-lost-mid-call]
 
+  - id: sb-barge-in-vad-mode
+    ref: barge-in-vad-mode
+    title: Barge-in detection is switchable per call between the edge and the agent
+    area: media
+    component: freeswitch
+    expect: >
+      Without an X-Barge-In-VAD header the fleet's mode applies and the backend is told it; a caller's
+      X-Barge-In-VAD: freeswitch turns on the edge's echo cancellation and voice detectors for that call and tells the
+      backend so, with audio unaffected both ways; any other value is ignored. With the edge detecting, each start
+      and stop of speech reaches the backend as a SIP INFO naming whose speech it was, the caller's or the agent's,
+      and each detector hears only its own side; with the agent detecting the edge sends none.
+    status: covered
+    scenarios: [barge-in-vad-mode]
+
+  - id: sb-barge-in-livekit
+    ref: barge-in-livekit
+    title: The edge's barge-in detections reach a LiveKit agent's room
+    area: media
+    component: freeswitch
+    expect: >
+      A call to an "lk" number reaches LiveKit SIP and joins the agent's room, its X-Barge-In-VAD mode visible to the
+      agent as a participant attribute. With the edge detecting, each start and stop of the caller's speech reaches
+      the room as a data packet on the topic barge-in (the edge's SIP INFO, forwarded by our patched LiveKit SIP),
+      and no agent detections come while the agent is silent; with the agent detecting, none come.
+    status: covered
+    scenarios: [barge-in-livekit]
+
   - id: sb-silent-node-stays-in-rotation
     ref: silent-node-stays-in-rotation
     title: A request every node discards doesn't take the nodes out of rotation

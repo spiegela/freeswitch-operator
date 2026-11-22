@@ -31,6 +31,7 @@ import (
 
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/esl"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/fleet"
+	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/lkagent"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/netem"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/script"
@@ -65,6 +66,9 @@ type Config struct {
 	// MockURL is the mock backend's control API, e.g. http://mockbackend:8080. Empty when the backend isn't
 	// the mock, in which case backend checks are skipped.
 	MockURL string
+	// LKAgentURL is the stand-in LiveKit agent's API (cmd/lkagent), e.g. http://lkagent.livekit:8080; with it, add
+	// scenario.LiveKitCapability to Caps. Empty: no scenario checks what LiveKit saw.
+	LKAgentURL string
 	// ESL is FreeSWITCH's event socket, host:port, and its password. Empty disables setup/teardown commands.
 	ESL         string
 	ESLPassword string
@@ -151,6 +155,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		diago.WithTransport(diago.Transport{Transport: transportUDP, BindHost: host, BindPort: port}),
 		diago.WithMediaConfig(diago.MediaConfig{Codecs: []media.Codec{media.CodecAudioUlaw, media.CodecAudioAlaw, media.CodecTelephoneEvent8000}}),
 		diago.WithLogger(r.log.With("end", "target")),
+		diago.WithServerRequestMiddleware(uas.InfoMiddleware(r.tstore, r.log.With("end", "target"))),
 	)
 	return dg.ServeBackground(ctx, func(d *diago.DialogServerSession) {
 		t := &DefaultTarget
@@ -211,6 +216,8 @@ type CallResult struct {
 	Error   string             `json:"error,omitempty"`
 	Backend []uas.Call         `json:"backend,omitempty"`
 	Target  []uas.Call         `json:"target,omitempty"`
+	// LiveKit is what the stand-in LiveKit agent saw of the call: the participants it brought into the room.
+	LiveKit []lkagent.Participant `json:"livekit,omitempty"`
 }
 
 // RTPStats is what the caller received of the edge's RTP.
@@ -389,6 +396,11 @@ func (r *Runner) checkCalls(ctx context.Context, s *scenario.Scenario, results [
 			cr.Backend = calls
 		}
 		cr.Target = r.tstore.Calls(cr.BenchCall)
+		if c.Expect.LiveKit != nil && r.cfg.LKAgentURL != "" {
+			if err := r.apiDo(ctx, r.cfg.LKAgentURL, http.MethodGet, "/calls?benchCall="+url.QueryEscape(cr.BenchCall), nil, &cr.LiveKit); err != nil {
+				failures = append(failures, fmt.Sprintf("call %s: reading the LiveKit agent's records: %v", c.ID, err))
+			}
+		}
 		fs := check(c, *cr, r.cfg.MockURL != "")
 		fs = append(fs, addrs.check(ctx, c.Expect.MediaAddress, *cr)...)
 		for _, f := range fs {
@@ -810,11 +822,16 @@ func (r *Runner) mockCalls(ctx context.Context, benchCall string) ([]uas.Call, e
 }
 
 func (r *Runner) mockDo(ctx context.Context, method, path string, body []byte, out any) error {
+	return r.apiDo(ctx, r.cfg.MockURL, method, path, body, out)
+}
+
+// apiDo calls one of the bench's HTTP APIs (the mock backend's, the LiveKit agent's) and decodes its JSON answer.
+func (r *Runner) apiDo(ctx context.Context, base, method, path string, body []byte, out any) error {
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(r.cfg.MockURL, "/")+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(base, "/")+path, rd)
 	if err != nil {
 		return err
 	}

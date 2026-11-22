@@ -3,7 +3,7 @@ package script
 import "testing"
 
 func TestValidate(t *testing.T) {
-	ok := []Step{{Answer: &Answer{}}, {Tone: &Tone{Hz: 1000, Ms: 100}}, {Digits: &Digits{Digits: "0123456789*#ABCD"}}, {Refer: &Refer{To: "x"}}, {Hangup: &Hangup{}}}
+	ok := []Step{{Answer: &Answer{}}, {Tone: &Tone{Hz: 1000, Ms: 100}}, {Speech: &Speech{Ms: 100}}, {Digits: &Digits{Digits: "0123456789*#ABCD"}}, {Refer: &Refer{To: "x"}}, {Hangup: &Hangup{}}}
 	if err := Validate(ok, true); err != nil {
 		t.Errorf("valid answering script: %v", err)
 	}
@@ -14,6 +14,7 @@ func TestValidate(t *testing.T) {
 		"reject not last":  {{Reject: &Reject{Code: 486}}, {Wait: &Wait{Ms: 1}}},
 		"tone too high":    {{Tone: &Tone{Hz: 5000, Ms: 10}}},
 		"tone no duration": {{Tone: &Tone{Hz: 500}}},
+		"speech no length": {{Speech: &Speech{Seed: 2}}},
 		"bad digit":        {{Digits: &Digits{Digits: "12x"}}},
 		"refer no target":  {{Refer: &Refer{}}},
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/emiago/diago/audio"
 	"github.com/emiago/diago/media"
 
+	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/speech"
 	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/tone"
 )
 
@@ -38,15 +39,19 @@ type Engine struct {
 	frames    atomic.Int64
 	done      chan struct{}
 
-	// The pacer sends a frame every 20 ms, as a phone does: the current tone if one is playing, else silence.
-	// A continuous stream keeps the RTP clock moving, which RFC 2833 receivers rely on to tell events apart.
+	// The pacer sends a frame every 20 ms, as a phone does: the current tone or speech if one is playing, else
+	// silence. A continuous stream keeps the RTP clock moving, which RFC 2833 receivers rely on to tell events
+	// apart.
 	toneMu   sync.Mutex
-	toneGen  *tone.Generator
+	toneGen  framer
 	toneEnd  time.Time
 	writeErr atomic.Pointer[error]
 	// played is when each tone first started playing, for echo timing.
 	played map[float64]time.Time
 }
+
+// framer is a source of audio frames: a tone or speech.
+type framer interface{ Frame(out []int16) }
 
 // Start begins listening on med. freqs are the tone frequencies to detect.
 func Start(med *diago.DialogMedia, freqs []float64) (*Engine, error) {
@@ -226,15 +231,30 @@ func (e *Engine) Done() <-chan struct{} { return e.done }
 
 // PlayTone plays hz for d, paced in real time. It returns early if ctx ends.
 func (e *Engine) PlayTone(ctx context.Context, hz float64, d time.Duration) error {
-	if err := e.writeErr.Load(); err != nil {
-		return fmt.Errorf("writing tone: %w", *err)
-	}
 	e.toneMu.Lock()
-	e.toneGen = tone.NewGenerator(hz, ToneAmplitude)
-	e.toneEnd = time.Now().Add(d)
 	if _, ok := e.played[hz]; !ok {
 		e.played[hz] = time.Now()
 	}
+	e.toneMu.Unlock()
+	return e.play(ctx, "tone", tone.NewGenerator(hz, ToneAmplitude), d)
+}
+
+// Speak talks for d (see package speech), paced in real time. It returns early if ctx ends.
+func (e *Engine) Speak(ctx context.Context, seed uint64, d time.Duration) error {
+	if seed == 0 {
+		seed = 1
+	}
+	return e.play(ctx, "speech", speech.NewGenerator(seed), d)
+}
+
+// play has the pacer send g's frames for d.
+func (e *Engine) play(ctx context.Context, what string, g framer, d time.Duration) error {
+	if err := e.writeErr.Load(); err != nil {
+		return fmt.Errorf("writing %s: %w", what, *err)
+	}
+	e.toneMu.Lock()
+	e.toneGen = g
+	e.toneEnd = time.Now().Add(d)
 	e.toneMu.Unlock()
 	select {
 	case <-ctx.Done():
@@ -244,7 +264,7 @@ func (e *Engine) PlayTone(ctx context.Context, hz float64, d time.Duration) erro
 	e.toneGen = nil
 	e.toneMu.Unlock()
 	if err := e.writeErr.Load(); err != nil && ctx.Err() == nil {
-		return fmt.Errorf("writing tone: %w", *err)
+		return fmt.Errorf("writing %s: %w", what, *err)
 	}
 	return nil
 }
@@ -286,6 +306,8 @@ func (e *Engine) RunMedia(ctx context.Context, s Step, hangup func() error) erro
 	switch {
 	case s.Tone != nil:
 		return e.PlayTone(ctx, s.Tone.Hz, ms(s.Tone.Ms))
+	case s.Speech != nil:
+		return e.Speak(ctx, s.Speech.Seed, ms(s.Speech.Ms))
 	case s.Digits != nil:
 		return e.SendDigits(ctx, s.Digits.Digits, ms(s.Digits.GapMs))
 	case s.Wait != nil:

@@ -50,6 +50,7 @@ spec:
             - {name: SIPBENCH_FLEET, value: "telephony/edge"}    # namespace/name; empty skips the fleet scenarios
             - {name: SIPBENCH_BLACKOUT_IMAGE, value: "sipbench:dev"}  # this image; empty skips node-blackout scenarios
             - {name: SIPBENCH_PROMETHEUS, value: "http://prometheus.monitoring.svc:9090"}  # metric checks; empty skips them
+            - {name: SIPBENCH_LKAGENT, value: ""}         # the stand-in LiveKit agent's API; hack/kind.sh bench sets it when deploy/kind/livekit is up
             - {name: SIPBENCH_RUN, value: ""}             # a regexp picking scenarios by name; hack/kind.sh bench sets it
             - {name: SIPBENCH_JSON, value: ""}            # "-" prints the JSON report after the summary; hack/kind.sh bench sets it
           securityContext:

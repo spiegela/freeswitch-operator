@@ -46,6 +46,73 @@
       </condition>
     </extension>
 
+    <!--
+      Barge-in voice detection (vars.xml, barge_in_vad): the fleet's mode, or the caller's X-Barge-In-VAD header
+      (livekit | freeswitch). The backend gets the mode in force in the same header, so the agent knows whether to
+      run its own detector or listen for the edge's.
+    -->
+    <extension name="barge-in-mode" continue="true">
+      <condition field="destination_number" expression="^.+$">
+        <action application="set" data="barge_in_vad=$${barge_in_vad}" inline="true"/>
+        <!-- As channel variables, so conditions can test them: a condition's field names a variable, and a value
+             pre-processed into it ($${...}) would be read as a variable's name. -->
+        <action application="set" data="barge_in_vad_engine=$${barge_in_vad_engine}" inline="true"/>
+        <action application="set" data="barge_in_echo_cancel=$${barge_in_echo_cancel}" inline="true"/>
+      </condition>
+    </extension>
+    <extension name="barge-in-mode-from-caller" continue="true">
+      <condition field="${sip_h_X-Barge-In-VAD}" expression="^(livekit|freeswitch)$">
+        <action application="set" data="barge_in_vad=$1" inline="true"/>
+      </condition>
+    </extension>
+    <extension name="barge-in-mode-to-backend" continue="true">
+      <condition field="destination_number" expression="^.+$">
+        <action application="set" data="sip_h_X-Barge-In-VAD=${barge_in_vad}" inline="true"/>
+      </condition>
+    </extension>
+
+    <!--
+      With "freeswitch", once the call is answered: echo cancellation on what the caller sends (unless
+      barge_in_echo_cancel is 0), then a detector on it (media bug "caller"), and a second detector on what the agent
+      sends, the backend leg's own audio (media bug "agent"), so a consumer can set a higher bar for caller speech
+      while we are talking. Each detector reads its leg's incoming audio only. Events, on each change: CUSTOM
+      vad_silero:detect (silero; detected-event start_talking or stop_talking, with a JSON body carrying the
+      window's "probability") or vad_detect:detection (webrtc; the same two), told apart by media-bugname.
+    -->
+    <extension name="barge-in-engine-silero" continue="true">
+      <condition field="${barge_in_vad}" expression="^freeswitch$"/>
+      <condition field="${barge_in_vad_engine}" expression="^silero$">
+        <!-- threshold 0.5; silence, padding and speech minimums at the module's defaults (100, 30, 250 ms) -->
+        <action application="set" data="barge_in_vad_api=uuid_vad_silero" inline="true"/>
+        <action application="set" data="barge_in_vad_args=continuous 0.5 0 0 0" inline="true"/>
+      </condition>
+    </extension>
+    <extension name="barge-in-engine-webrtc" continue="true">
+      <condition field="${barge_in_vad}" expression="^freeswitch$"/>
+      <condition field="${barge_in_vad_engine}" expression="^webrtc$">
+        <!-- mode 3 (the strictest about what counts as voice), 300 ms of silence to stop, 100 ms of voice to start -->
+        <action application="set" data="barge_in_vad_api=uuid_vad_detect" inline="true"/>
+        <action application="set" data="barge_in_vad_args=continuous 3 300 100" inline="true"/>
+      </condition>
+    </extension>
+    <extension name="barge-in-echo-cancel" continue="true">
+      <condition field="${barge_in_vad_api}" expression="^.+$"/>
+      <condition field="${barge_in_echo_cancel}" expression="^[1-9][0-9]*$">
+        <action application="set" data="api_on_answer_1=uuid_preprocess ${uuid} r.echo_cancel=${barge_in_echo_cancel}" inline="true"/>
+      </condition>
+    </extension>
+    <extension name="barge-in-detect" continue="true">
+      <condition field="${barge_in_vad_api}" expression="^.+$">
+        <action application="set" data="api_on_answer_2=${barge_in_vad_api} ${uuid} start ${barge_in_vad_args} caller" inline="true"/>
+        <!-- The backend leg's detector starts when that leg answers; its uuid is chosen here so the command can name it,
+             and so the exporter's relay can find the leg to send this call's detections on as SIP INFO. FreeSWITCH
+             sends an INFO only to a far end that says it takes them (X-FS-Support: send_info), which no agent does,
+             unless the leg sets fs_send_unsupported_info. -->
+        <action application="set" data="barge_in_agent_uuid=${create_uuid()}" inline="true"/>
+        <action application="set" data="barge_in_leg_vars=,origination_uuid=${barge_in_agent_uuid},fs_send_unsupported_info=true,api_on_answer=${barge_in_vad_api} ${barge_in_agent_uuid} start ${barge_in_vad_args} agent" inline="true"/>
+      </condition>
+    </extension>
+
     <extension name="to-backend">
       <condition field="destination_number" expression="^(.+)$">
         <!-- Exported, so the backend leg and any transfer leg time out too. -->
@@ -58,8 +125,10 @@
         <!-- A REFER from the backend transfers this caller through the transfers context. -->
         <action application="set" data="force_transfer_context=transfers"/>
         <action application="set" data="force_transfer_dialplan=XML"/>
-        <action application="bridge" data="{force_transfer_context=transfers,force_transfer_dialplan=XML}sofia/backend/${bench_target_user}@${bench_target_host}"/>
-        <!-- Reached only when the bridge failed: the fallback. -->
+        <action application="bridge" data="{force_transfer_context=transfers,force_transfer_dialplan=XML${barge_in_leg_vars}}sofia/backend/${bench_target_user}@${bench_target_host}"/>
+        <!-- Reached only when the bridge failed: the fallback, which needs no barge-in detection. -->
+        <action application="unset" data="api_on_answer_1"/>
+        <action application="unset" data="api_on_answer_2"/>
         <action application="set" data="sip_rh_X-Fallback-Reason=${originate_disposition}"/>
         <action application="answer"/>
         <action application="playback" data="tone_stream://%($${fallback_tone_ms},0,$${fallback_tone_hz})"/>

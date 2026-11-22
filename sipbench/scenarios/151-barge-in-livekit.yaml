@@ -1,0 +1,51 @@
+name: barge-in-livekit
+area: media
+description: >
+  The whole chain from a caller to a LiveKit agent: the edge sends an "lk" number to LiveKit SIP, which takes the
+  caller into the agent's room (the bench's stand-in agent, sipbench lkagent) with the call's X-Barge-In-VAD as the
+  participant's sipbench.bargeIn attribute, so the agent knows who detects the caller talking. With the edge
+  detecting, each start and stop of the caller's speech reaches the agent as a data packet on the topic barge-in:
+  the edge sends it to LiveKit SIP as a SIP INFO (application/x-barge-in+json) and our patched LiveKit SIP forwards
+  the body to the room. The agent publishes no audio, so the edge hears no agent speech and sends no agent
+  detections. With the agent detecting, the edge sends none.
+requires: [livekit]
+calls:
+  # Each call from its own number: LiveKit SIP names a caller's participant after it (sip_<number>), and a second
+  # participant of the same name in the room would fail to join. And one after the other: the agent's room is
+  # shared, and LiveKit SIP plays each caller the room's other audio, so calls in it together hear each other's
+  # callers (production gives each call a room of its own).
+  - id: edge-detects
+    to: lk1001
+    from: "2001"
+    headers: {X-Barge-In-VAD: freeswitch}
+    steps:
+      - wait: {ms: 1000}
+      - speech: {ms: 2500}
+      - wait: {ms: 1500}
+      - hangup: {}
+    expect:
+      status: 200
+      tonesNotHeard: [1400]  # the edge's fallback: LiveKit SIP itself answered
+      livekit:
+        attributes: {sipbench.bargeIn: freeswitch}
+        data:
+          - {topic: barge-in, fields: {party: caller, event: speech-started}}
+          - {topic: barge-in, fields: {party: caller, event: speech-stopped}}
+          - {topic: barge-in, fields: {party: agent}, max: 0}
+  - id: agent-detects
+    to: lk1002
+    from: "2002"
+    startMs: 6500  # after edge-detects has hung up
+    headers: {X-Barge-In-VAD: livekit}
+    steps:
+      - wait: {ms: 1000}
+      - speech: {ms: 2500}
+      - wait: {ms: 1500}
+      - hangup: {}
+    expect:
+      status: 200
+      tonesNotHeard: [1400]  # the edge's fallback: LiveKit SIP itself answered
+      livekit:
+        attributes: {sipbench.bargeIn: livekit}
+        data:
+          - {max: 0}

@@ -1,7 +1,7 @@
 // Package fsexporter serves FreeSWITCH metrics read over its event socket, in the Prometheus format.
 //
 // The event socket client here is a copy of sipbench's (sipbench/internal/esl, another Go module): enough to
-// authenticate and run API commands.
+// authenticate, run API commands and read events.
 package fsexporter
 
 import (
@@ -73,6 +73,28 @@ func (c *eslClient) API(cmd string, timeout time.Duration) (string, error) {
 				return out, fmt.Errorf("%s: %s", cmd, out)
 			}
 			return out, nil
+		}
+	}
+}
+
+// Command sends an event socket command (event, filter...) and returns its reply.
+func (c *eslClient) Command(cmd string, timeout time.Duration) (string, error) {
+	_ = c.conn.SetDeadline(time.Now().Add(timeout))
+	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
+	if _, err := fmt.Fprintf(c.conn, "%s\n\n", cmd); err != nil {
+		return "", err
+	}
+	for {
+		h, _, err := c.read()
+		if err != nil {
+			return "", err
+		}
+		if h.Get("Content-Type") == "command/reply" {
+			reply := h.Get("Reply-Text")
+			if !strings.HasPrefix(reply, "+OK") {
+				return reply, fmt.Errorf("%s: %s", cmd, reply)
+			}
+			return reply, nil
 		}
 	}
 }
