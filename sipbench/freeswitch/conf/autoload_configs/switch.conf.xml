@@ -10,5 +10,7 @@
     <param name="rtp-end-port" value="16584"/>
     <param name="rtp-enable-zrtp" value="false"/>
     <param name="dump-cores" value="no"/>
+    <!-- vars.xml. Empty leaves the core db in SQLite. With a DSN, FreeSWITCH won't start until the database answers. -->
+    <param name="core-db-dsn" value="$${core_db_dsn}"/>
   </settings>
 </configuration>

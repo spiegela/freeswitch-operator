@@ -60,14 +60,30 @@ pull_pinned() {
   wait
 }
 
+# Disk is tight on the laptops this runs on. kind load leaves each loaded image on every node a second time, as
+# an "import-<date>" reference, and those pile up across rebuilds (about 20 GB once). Drop them; the image stays
+# under its own tag, so nothing a pod needs goes. (Not crictl rmi --prune: it would also drop loaded images no pod
+# runs yet, like sipbench:dev before a bench, which no registry can give back.) Then drop dangling build leftovers
+# on the host.
+tidy_images() {
+  local node
+  for node in $("$KIND" get nodes --name "$CLUSTER"); do
+    docker exec "$node" sh -c 'ctr -n k8s.io images ls -q | grep "^import-" | xargs -r ctr -n k8s.io images rm' \
+      >/dev/null 2>&1 || true
+  done
+  docker image prune -f >/dev/null
+}
+
 deploy() {
   say "building images"
   make -C "$ROOT" kustomize >/dev/null
   docker build -q -t freeswitch-operator:dev "$ROOT"
   docker build -q --target exporter -t freeswitch-exporter:dev "$ROOT"
   docker build -q -t sipbench:dev "$ROOT/sipbench"
+  docker build -q -t freeswitch:dev "$ROOT/images/freeswitch"
   say "loading images into kind"
-  "$KIND" load docker-image --name "$CLUSTER" freeswitch-operator:dev freeswitch-exporter:dev sipbench:dev
+  "$KIND" load docker-image --name "$CLUSTER" freeswitch-operator:dev freeswitch-exporter:dev sipbench:dev freeswitch:dev
+  tidy_images
   say "pulling pinned images on the nodes"
   pull_pinned
 
@@ -92,6 +108,12 @@ deploy() {
   "${KUBECTL[@]}" -n monitoring rollout restart deployment/otel-collector
   "${KUBECTL[@]}" -n monitoring rollout status deployment/prometheus --timeout=180s
   "${KUBECTL[@]}" -n monitoring rollout status deployment/otel-collector --timeout=180s
+
+  # FreeSWITCH won't start until its core db answers, so the database goes first.
+  say "applying PostgreSQL (the edge's core db and call tracking)"
+  "${KUBECTL[@]}" apply --server-side -f "$ROOT/deploy/kind/namespace.yaml"
+  "$KUSTOMIZE" build "$ROOT/deploy/kind/postgres" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -
+  "${KUBECTL[@]}" -n "$NS" rollout status statefulset/postgres --timeout=180s
 
   say "applying the edge"
   "$KUSTOMIZE" build "$ROOT/deploy/kind" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -
@@ -283,6 +305,7 @@ livekit() {
     esac
     "$KIND" load docker-image --name "$CLUSTER" "$image" >/dev/null
   done
+  tidy_images
   say "applying LiveKit"
   "$KUSTOMIZE" build "$ROOT/deploy/kind/livekit" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -
   # Rebuilt images under the same tags need a restart to be picked up; the agent sets up the trunk again as it starts.

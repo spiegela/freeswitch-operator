@@ -6,6 +6,7 @@ kind: Kustomization
 namespace: telephony
 resources:
   - namespace.yaml
+  - postgres
   - ../../sipbench/k8s
   - kamailio-sip.yaml
   - freeswitchcluster.yaml

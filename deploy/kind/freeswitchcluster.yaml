@@ -5,7 +5,8 @@ metadata:
   name: edge
 spec:
   replicas: 3
-  image: drachtio/drachtio-freeswitch-mrf:0.9.6@sha256:cb81acc1112990ca33693374f1de7443d44cf9c95e6ae6c02ba1edcee4b68bba
+  # images/freeswitch (drachtio's image plus mod_pgsql), built and loaded into kind by hack/kind.sh.
+  image: freeswitch:dev
   imagePullPolicy: IfNotPresent
   # The image's entrypoint rewrites its own config; run the binary against the assembled one instead.
   command: ["/usr/local/freeswitch/bin/freeswitch"]
@@ -17,6 +18,12 @@ spec:
     - {name: LIVEKIT_HOST, value: "livekit-sip.livekit.svc.cluster.local:5060"}
     - {name: TRANSFER_HOST, value: "sipbench.telephony.svc.cluster.local:5090"}
     - {name: ESL_LISTEN_IP, value: "127.0.0.1"}
+    # The core db and call tracking in the shared PostgreSQL (deploy/kind/postgres), so another node can recover a
+    # lost node's calls. libpq reads the password from PGPASSWORD.
+    - {name: CORE_DB_DSN, value: "pgsql://host=postgres.telephony.svc.cluster.local dbname=freeswitch user=freeswitch connect_timeout=5"}
+    - name: PGPASSWORD
+      valueFrom: {secretKeyRef: {name: postgres, key: password}}
+    - {name: TRACK_CALLS, value: "true"}
   nodeSelector:
     node-role.example.com/sip-edge: "true"
   tolerations:

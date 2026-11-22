@@ -17,6 +17,7 @@ configMapGenerator:
       - conf/autoload_configs/event_socket.conf.xml
       - conf/autoload_configs/logfile.conf.xml
       - conf/autoload_configs/modules.conf.xml
+      - conf/autoload_configs/pre_load_modules.conf.xml
       - conf/autoload_configs/sofia.conf.xml
       - conf/autoload_configs/switch.conf.xml
   - name: freeswitch-dialplan      # path: dialplan

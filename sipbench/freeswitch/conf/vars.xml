@@ -44,6 +44,15 @@
        tail), 0 for none. -->
   <X-PRE-PROCESS cmd="exec-set" data="barge_in_echo_cancel=/bin/sh /usr/local/freeswitch/conf/bin/env.sh BARGE_IN_ECHO_CANCEL 1024"/>
 
+  <!-- The core db (channels, calls, registrations, and the recovery table track_calls fills): a shared PostgreSQL
+       on a cluster, as pgsql://host=... dbname=... user=... (mod_pgsql; pre_load_modules.conf.xml). The password
+       stays out of it: libpq reads PGPASSWORD from the environment, and FreeSWITCH logs the DSN. Empty (compose):
+       each node's own SQLite. -->
+  <X-PRE-PROCESS cmd="exec-set" data="core_db_dsn=/bin/sh /usr/local/freeswitch/conf/bin/env.sh CORE_DB_DSN"/>
+  <!-- Track each call's state in the core db's recovery table (sofia's track-calls), so another node sharing that db
+       can take the calls over with `sofia recover`. Useful only with core_db_dsn: SQLite dies with its node. -->
+  <X-PRE-PROCESS cmd="exec-set" data="track_calls=/bin/sh /usr/local/freeswitch/conf/bin/env.sh TRACK_CALLS false"/>
+
   <!-- Where the event socket listens. The bench's runner uses it for admission tests; on a cluster keep it on
        127.0.0.1, where fs_cli (and the operator's ready and drain scripts) reach it. -->
   <X-PRE-PROCESS cmd="exec-set" data="esl_listen_ip=/bin/sh /usr/local/freeswitch/conf/bin/env.sh ESL_LISTEN_IP 0.0.0.0"/>
