@@ -4,6 +4,7 @@
 //	sipbench run [flags] [scenario files or directories...]
 //	sipbench validate [scenario files or directories...]
 //	sipbench report-card [flags]
+//	sipbench blackout -address <node IP> -for <duration>
 package main
 
 import (
@@ -43,6 +44,8 @@ func main() {
 		err = validate(os.Args[2:])
 	case "report-card":
 		err = reportCard(os.Args[2:])
+	case "blackout":
+		err = blackout(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -61,6 +64,7 @@ func usage() {
   sipbench run [flags] [scenario files or dirs...]   run scenarios (default dir: scenarios)
   sipbench validate [scenario files or dirs...]      parse and check scenarios without running them
   sipbench report-card [flags]                       write the report card from run reports and the record
+  sipbench blackout -address IP -for DURATION        take this host dark (run on a node, by the runner)
 
 run -h lists the flags.`)
 }
@@ -126,6 +130,8 @@ func run(args []string) (int, error) {
 		"capabilities this run provides, comma separated")
 	fleetRef := fs.String("fleet", env("SIPBENCH_FLEET", ""),
 		"the FreeswitchCluster fleet scenarios act on, namespace/name; adds the fleet capability")
+	blackoutImage := fs.String("blackout-image", env("SIPBENCH_BLACKOUT_IMAGE", ""),
+		"the image (with sipbench in it) blackoutNodeOf runs on a fleet node; with -fleet, adds the node-blackout capability")
 	prom := fs.String("prometheus", env("SIPBENCH_PROMETHEUS", ""),
 		"Prometheus HTTP API the scenarios' metric checks query, e.g. http://prometheus:9090; empty skips them")
 	only := fs.String("run", env("SIPBENCH_RUN", ""), "only run scenarios whose name matches this regexp")
@@ -180,6 +186,10 @@ func run(args []string) (int, error) {
 			capSet["fleet"] = true
 			capList = append(capList, "fleet")
 		}
+		if *blackoutImage != "" && !capSet[scenario.BlackoutCapability] {
+			capSet[scenario.BlackoutCapability] = true
+			capList = append(capList, scenario.BlackoutCapability)
+		}
 	}
 	slices.Sort(capList)
 
@@ -188,7 +198,7 @@ func run(args []string) (int, error) {
 
 	r := runner.New(runner.Config{
 		Edge: *edge, MockURL: *mockURL, ESL: *eslAddr, ESLPassword: *eslPass,
-		TargetListen: *target, Caps: capSet, Fleet: fl, PrometheusURL: strings.TrimRight(*prom, "/"), Log: log,
+		TargetListen: *target, Caps: capSet, Fleet: fl, BlackoutImage: *blackoutImage, PrometheusURL: strings.TrimRight(*prom, "/"), Log: log,
 	})
 	if err := r.Start(ctx); err != nil {
 		return 2, err

@@ -202,8 +202,9 @@ type Expect struct {
 	ResponseHeaders map[string]string `yaml:"responseHeaders,omitempty"`
 	TonesHeard      []float64         `yaml:"tonesHeard,omitempty"`
 	TonesNotHeard   []float64         `yaml:"tonesNotHeard,omitempty"`
-	// MaxAudioGapMs bounds how long any tone in tonesHeard may go missing once it has started: with a far end
-	// playing it throughout, "two-way audio throughout" rather than "some audio at some point".
+	// MaxAudioGapMs bounds how long any tone in tonesHeard may go missing once it has started, up to the call's
+	// end (a tone that stops arriving for good is missing from then on): with a far end playing it throughout,
+	// "two-way audio throughout" rather than "some audio at some point".
 	MaxAudioGapMs int `yaml:"maxAudioGapMs,omitempty"`
 	// Digits received from the far side, in order.
 	Digits *string `yaml:"digits,omitempty"`
@@ -333,8 +334,35 @@ type Action struct {
 	// ExpectRollStuck waits for a roll to replace its first pod, then checks it goes no further: no second pod
 	// is replaced and the rest of the fleet keeps taking calls.
 	ExpectRollStuck *RollStuck `yaml:"expectRollStuck,omitempty"`
+	// BlackoutNodeOf takes the edge node that carries a call off the network, as if it had lost power: nothing
+	// in or out, ARP included, while its processes keep running. It needs the "node-blackout" capability. The
+	// action ends once the node is dark; the node comes back on its own after ForMs, and the scenario doesn't end
+	// before it has.
+	BlackoutNodeOf *Blackout `yaml:"blackoutNodeOf,omitempty"`
+	// WaitNode waits until the node that carries a call is Ready or NotReady, as Kubernetes reports it.
+	WaitNode *WaitNode `yaml:"waitNode,omitempty"`
 	// Hangup ends the named call from the runner's side.
 	Hangup string `yaml:"hangup,omitempty"`
+}
+
+// BlackoutCapability is what a run must provide for BlackoutNodeOf: it can start a privileged pod on an edge
+// node (see k8s/runner-rbac.yaml) from an image with sipbench in it.
+const BlackoutCapability = "node-blackout"
+
+// MaxBlackoutMs bounds a blackout: a node left dark can't be reached to bring it back.
+const MaxBlackoutMs = 10 * 60 * 1000
+
+// Blackout is BlackoutNodeOf's settings: the call whose node goes dark, and for how long.
+type Blackout struct {
+	Of    string `yaml:"of"`
+	ForMs int    `yaml:"forMs"`
+}
+
+// WaitNode waits for the node that carries call Of to be State: Ready or NotReady.
+type WaitNode struct {
+	Of        string `yaml:"of"`
+	State     string `yaml:"state"`
+	TimeoutMs int    `yaml:"timeoutMs,omitempty"`
 }
 
 // Empty is an action with no settings: write it as {}.
@@ -417,6 +445,8 @@ func (a *Action) Kind() string {
 	add(a.WaitMember != nil, "waitMember")
 	add(a.WaitFleetCurrent != nil, "waitFleetCurrent")
 	add(a.ExpectRollStuck != nil, "expectRollStuck")
+	add(a.BlackoutNodeOf != nil, "blackoutNodeOf")
+	add(a.WaitNode != nil, "waitNode")
 	add(a.Hangup != "", "hangup")
 	if len(kinds) != 1 {
 		return ""
@@ -743,7 +773,7 @@ func (s *Scenario) validateActions(calls map[string]bool) error {
 		kind := a.Kind()
 		if kind == "" {
 			return fmt.Errorf("%s: needs exactly one of drainNodeOf, uncordon, rollFleet, breakConfig, "+
-				"restoreConfig, waitMember, waitFleetCurrent, expectRollStuck, hangup", label)
+				"restoreConfig, waitMember, waitFleetCurrent, expectRollStuck, blackoutNodeOf, waitNode, hangup", label)
 		}
 		fleet = fleet || a.OnFleet()
 		for field, call := range map[string]string{
@@ -779,6 +809,24 @@ func (s *Scenario) validateActions(calls map[string]bool) error {
 		case a.ExpectRollStuck != nil:
 			if a.ExpectRollStuck.ForMs <= 0 {
 				return fmt.Errorf("%s: expectRollStuck.forMs is required", label)
+			}
+		case a.BlackoutNodeOf != nil:
+			b := a.BlackoutNodeOf
+			if !calls[b.Of] {
+				return fmt.Errorf("%s: blackoutNodeOf.of names no call %q", label, b.Of)
+			}
+			if b.ForMs <= 0 || b.ForMs > MaxBlackoutMs {
+				return fmt.Errorf("%s: blackoutNodeOf.forMs must be between 1 and %d", label, MaxBlackoutMs)
+			}
+			if !slices.Contains(s.Requires, BlackoutCapability) {
+				return fmt.Errorf("%s: blackoutNodeOf needs requires: [%s]", label, BlackoutCapability)
+			}
+		case a.WaitNode != nil:
+			if !calls[a.WaitNode.Of] {
+				return fmt.Errorf("%s: waitNode.of names no call %q", label, a.WaitNode.Of)
+			}
+			if a.WaitNode.State != "Ready" && a.WaitNode.State != "NotReady" {
+				return fmt.Errorf("%s: waitNode.state must be Ready or NotReady", label)
 			}
 		}
 	}

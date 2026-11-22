@@ -94,6 +94,20 @@ func TestDetectorMaxGaps(t *testing.T) {
 	if _, ok := d.MaxGaps()[600]; ok {
 		t.Fatal("a tone never heard has no gap")
 	}
+
+	// The tone stops for good: MaxGaps can't see it, MaxGapsUntil counts the silence up to the call's end.
+	lastFrame := clock.Add(-20 * time.Millisecond)
+	end := lastFrame.Add(90 * time.Second)
+	if gap := d.MaxGaps()[1000]; gap > 1600*time.Millisecond {
+		t.Fatalf("MaxGaps %v counts the tail", gap)
+	}
+	if gap := d.MaxGapsUntil(end)[1000]; gap != 90*time.Second {
+		t.Fatalf("MaxGapsUntil %v, want 90s of silence before the end", gap)
+	}
+	// Ending right after the last frame leaves the mid-call gap the longest.
+	if gap := d.MaxGapsUntil(lastFrame.Add(20 * time.Millisecond))[1000]; gap < 1500*time.Millisecond || gap > 1600*time.Millisecond {
+		t.Fatalf("MaxGapsUntil just after the last frame %v, want the 1.52s mid-call gap", gap)
+	}
 }
 
 func TestDetectorCoverage(t *testing.T) {

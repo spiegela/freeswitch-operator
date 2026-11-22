@@ -201,6 +201,20 @@ cases:
     status: covered
     scenarios: [pool-media-address]
 
+  - id: sb-node-lost-mid-call
+    ref: node-lost-mid-call
+    title: A node that goes dark mid-call doesn't take new calls down with it
+    area: resilience
+    component: operator
+    expect: >
+      With one node off the network (no packet in or out), the rest of the fleet keeps taking calls: a call placed
+      as the node goes dark is set up within Kamailio's 5 s failover, one placed after the dispatcher's probes
+      have taken the node out has no failover delay, neither lands on the dark node, and once it is back the fleet
+      is whole. What happens to the dark node's own call is imp-node-lost-mid-call-recovery (M4); this scenario
+      records it without checking it.
+    status: covered
+    scenarios: [node-lost-mid-call]
+
   - id: sb-silent-node-stays-in-rotation
     ref: silent-node-stays-in-rotation
     title: A request every node discards doesn't take the nodes out of rotation

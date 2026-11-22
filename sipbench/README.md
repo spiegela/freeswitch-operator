@@ -104,8 +104,9 @@ Each end plays a frequency only it uses, so hearing it proves the path from that
 | 1800 Hz | transfer target (runner) |
 
 Tones are detected with a Goertzel filter on 20 ms frames; a tone counts as heard after 200 ms. Each end also
-records, per tone, the longest it went missing once it had started (`audioGapsMs`), so a far end that plays a tone
-throughout can be checked for "audio both ways the whole time" with `maxAudioGapMs`.
+records, per tone, the longest it went missing once it had started (`audioGapsMs`), timed by arrival and up to the
+call's end, so a tone that stops arriving for good counts as missing from its last frame to the hangup. A far end
+that plays a tone throughout can then be checked for "audio both ways the whole time" with `maxAudioGapMs`.
 
 Every call carries `X-Sipbench-Call: <run>-<scenario>-<call>-<n>`. The edge passes X- headers through (which is
 itself under test), so the mock and the transfer target can file what they saw under the call that caused it.
@@ -172,7 +173,9 @@ edge and runner both support, `proxy` when the edge address is Kamailio rather t
 can act on the FreeswitchCluster under test, `netem` when the runner may impair its own traffic with tc (it
 needs `NET_ADMIN`; compose and the kind Job provide both), `sip-trace` when the edge address is a SIP node's
 own address, not a Service VIP, so a call can keep all its SIP on one socket (see Impairments below), and
-`address-pool` when the FreeswitchCluster under test draws its external address from a SIPAddressPool.
+`address-pool` when the FreeswitchCluster under test draws its external address from a SIPAddressPool, and
+`node-blackout`, added by `-blackout-image` (`SIPBENCH_BLACKOUT_IMAGE`) with `-fleet`, when the runner may take an
+edge node off the network (see `blackoutNodeOf` below).
 
 ### Raw messages: what sipgo won't send
 
@@ -227,13 +230,26 @@ the RFC 4475 or ETSI texts.
 | `waitMember: {of: <call>, state, timeoutMs}` | wait until the call's pod is `Active`, `Draining`, `Starting` or `Gone` |
 | `waitFleetCurrent: {timeoutMs}` | wait until every pod runs the latest template and takes calls |
 | `expectRollStuck: {forMs, timeoutMs}` | wait for a roll's first replacement, then fail if the roll goes further within `forMs`, more than one pod stops taking calls, or the replacement takes calls |
+| `blackoutNodeOf: {of, forMs}` | take the call's edge node off the network for `forMs` (at most 10 minutes), as if it had lost power; done once the node is dark |
+| `waitNode: {of, state, timeoutMs}` | wait until the call's node is `Ready` or `NotReady`, as Kubernetes reports it |
 | `hangup: <call>` | the runner hangs the call up |
 
 A call's pod is found from where the mock received the INVITE: the fleet runs on the host network, so that is a
 member's address. Whatever happens, a scenario ends with its cordoned nodes uncordoned and its edited ConfigMaps
 put back. Every action but `hangup` needs the `fleet` capability, and a scenario using them must say
-`requires: [fleet]`. The runner's access is in `k8s/runner-rbac.yaml`. Results carry a `timeline` of what each
-action did and when.
+`requires: [fleet]`; `blackoutNodeOf` also needs `node-blackout`. The runner's access is in `k8s/runner-rbac.yaml`.
+Results carry a `timeline` of what each action did and when.
+
+`blackoutNodeOf` can't reach a node from the runner's pod, so it runs `sipbench blackout` on the node: a pod placed
+there by `nodeName`, tolerating every taint, on the host network and as root with `NET_ADMIN`, from the image
+`-blackout-image` names (the runner's own; the namespace must admit privileged pods). Three seconds after it starts,
+so the kubelet can still report it running, it hangs tc `matchall` drop filters off a `clsact` qdisc on the
+interface holding the node's address, both ways: nothing gets in or out, ARP included, while the node's processes
+keep running. After `forMs` it removes them, or sooner if the pod is deleted (once the node hears of it). Its log
+says when the node went dark and came back, and goes into the timeline. A scenario doesn't end until the pod is
+seen to finish, so the next one finds the node back. The pod must be allowed to finish: a blackout killed outright
+(SIGKILL, the node's container runtime restarted) leaves its node dark until someone removes the filters on the
+node itself (`tc qdisc del dev eth0 clsact`; on kind, through `docker exec`).
 
 `expect.mediaAddress: fleet` also needs it: the address the edge's answer gives for media must be one of the
 fleet's pods' external addresses, as the operator records them in each pod's `sip.instruments.com/external-address`
