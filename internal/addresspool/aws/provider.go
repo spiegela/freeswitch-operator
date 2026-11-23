@@ -22,8 +22,8 @@ import (
 	"github.com/aws/smithy-go"
 	corev1 "k8s.io/api/core/v1"
 
-	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
-	"git.instruments.com/ci/freeswitch-operator/internal/addresspool"
+	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
+	"github.com/spiegela/freeswitch-operator/internal/addresspool"
 )
 
 // EC2 is the part of the EC2 API the provider uses.

@@ -11,7 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 
-	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
+	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
 )
 
 const (

@@ -14,8 +14,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/netem"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/script"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/netem"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/script"
 )
 
 // Scenario is one YAML file under scenarios/.

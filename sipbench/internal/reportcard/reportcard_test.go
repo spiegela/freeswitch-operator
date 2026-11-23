@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/runner"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/runner"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 func report(results ...runner.Result) *runner.Report {

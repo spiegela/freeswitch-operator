@@ -7,7 +7,7 @@ domain: instruments.com
 layout:
 - go.kubebuilder.io/v4
 projectName: freeswitch-operator
-repo: git.instruments.com/ci/freeswitch-operator
+repo: github.com/spiegela/freeswitch-operator
 resources:
 - api:
     crdVersion: v1
@@ -16,7 +16,7 @@ resources:
   domain: instruments.com
   group: sip
   kind: FreeswitchCluster
-  path: git.instruments.com/ci/freeswitch-operator/api/v1alpha1
+  path: github.com/spiegela/freeswitch-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -25,7 +25,7 @@ resources:
   domain: instruments.com
   group: sip
   kind: KamailioCluster
-  path: git.instruments.com/ci/freeswitch-operator/api/v1alpha1
+  path: github.com/spiegela/freeswitch-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -33,6 +33,6 @@ resources:
   domain: instruments.com
   group: sip
   kind: SIPAddressPool
-  path: git.instruments.com/ci/freeswitch-operator/api/v1alpha1
+  path: github.com/spiegela/freeswitch-operator/api/v1alpha1
   version: v1alpha1
 version: "3"

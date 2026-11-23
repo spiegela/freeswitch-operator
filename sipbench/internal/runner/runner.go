@@ -29,13 +29,13 @@ import (
 	"github.com/emiago/sipgo/sip"
 	"gopkg.in/yaml.v3"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/esl"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/fleet"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/lkagent"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/netem"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/script"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/uas"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/esl"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/fleet"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/lkagent"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/netem"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/script"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/uas"
 )
 
 // Result statuses, as they appear in reports.

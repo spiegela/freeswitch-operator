@@ -19,8 +19,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
-	"git.instruments.com/ci/freeswitch-operator/internal/addresspool"
+	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
+	"github.com/spiegela/freeswitch-operator/internal/addresspool"
 )
 
 // labelSuffix marks the addresses the agent adds (the IPv4 address label <interface>:sip), so it only ever removes

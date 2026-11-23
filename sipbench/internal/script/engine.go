@@ -15,8 +15,8 @@ import (
 	"github.com/emiago/diago/audio"
 	"github.com/emiago/diago/media"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/speech"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/tone"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/speech"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/tone"
 )
 
 // ToneAmplitude is the peak level of generated tones, about -12 dBFS.

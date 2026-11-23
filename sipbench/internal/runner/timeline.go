@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/fleet"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/fleet"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 // Fleet waits poll this often, and give up after these defaults.

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/fleet"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/uas"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/fleet"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/uas"
 )
 
 // fakeFleet is a fleet whose status the test scripts. Evicting a pod marks it Draining.

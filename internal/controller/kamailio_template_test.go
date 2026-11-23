@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
+	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
 )
 
 // kamailioConfigCases are rendered by TestKamailioConfigRenders and, with KAMAILIO_CFG_OUT set, written out (with

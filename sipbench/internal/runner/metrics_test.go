@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 func fastMetrics(t *testing.T) {

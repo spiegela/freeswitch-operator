@@ -30,7 +30,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"git.instruments.com/ci/freeswitch-operator/test/utils"
+	"github.com/spiegela/freeswitch-operator/test/utils"
 )
 
 // namespace where the project is deployed in

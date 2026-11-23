@@ -13,8 +13,8 @@ import (
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/netem"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/netem"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 const impairRoutes = `

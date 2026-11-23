@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/netem"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/netem"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 // impairments are a scenario's tc impairments in place on the runner's interface. The SIP layer's (drop, match)

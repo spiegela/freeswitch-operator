@@ -22,7 +22,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"git.instruments.com/ci/freeswitch-operator/internal/fsexporter"
+	"github.com/spiegela/freeswitch-operator/internal/fsexporter"
 )
 
 func main() {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 // TestScenarios runs every scenario in scenarios/ against a live edge, one subtest each. It must run where the

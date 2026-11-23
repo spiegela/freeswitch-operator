@@ -18,8 +18,8 @@ import (
 	"github.com/emiago/diago"
 	"gopkg.in/yaml.v3"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/script"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/uas"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/script"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/uas"
 )
 
 // Config is the mock backend's behaviour.

@@ -7,8 +7,8 @@ import (
 	"slices"
 	"strings"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/fleet"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/fleet"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 // sdpConnectionAddress returns the address an SDP body says to send audio to: the c= line of its first audio
