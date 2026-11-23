@@ -45,6 +45,11 @@ jobs:
           go install "sigs.k8s.io/kind@${KIND_VERSION}"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      # Six nodes outrun the runner's default inotify limits, and kube-proxy on the workers then can't start, so pods
+      # there can't reach Service IPs (the API server's included). Kind's known issues give these values.
+      - name: Raise inotify limits for a six-node cluster
+        run: sudo sysctl -w fs.inotify.max_user_instances=512 fs.inotify.max_user_watches=524288
+
       - name: Create the cluster
         run: make kind-up
 
