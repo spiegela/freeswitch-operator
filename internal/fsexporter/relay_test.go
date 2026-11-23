@@ -2,7 +2,6 @@ package fsexporter
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"net"
 	"net/textproto"
@@ -139,9 +138,7 @@ func (f *fakeFS) serve(c net.Conn, events bool) {
 func TestRelaySendsInfo(t *testing.T) {
 	fs := newFakeFS(t)
 	r := NewRelay(fs.ln.Addr().String(), "ClueCon", time.Second, nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go r.Run(ctx)
+	go r.Run(t.Context())
 
 	fs.events <- sileroEvent("caller", "start_talking", "in-1", "out-1")
 	select {

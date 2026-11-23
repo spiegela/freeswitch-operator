@@ -300,7 +300,7 @@ func (x InfoExpect) String() string {
 		ct = "any type"
 	}
 	keys := slices.Sorted(maps.Keys(x.Fields))
-	var fields []string
+	fields := make([]string, 0, len(keys))
 	for _, k := range keys {
 		fields = append(fields, k+"="+x.Fields[k])
 	}
@@ -437,7 +437,7 @@ func (x DataExpect) String() string {
 	if topic == "" {
 		topic = "any topic"
 	}
-	var fields []string
+	fields := make([]string, 0, len(x.Fields))
 	for _, k := range slices.Sorted(maps.Keys(x.Fields)) {
 		fields = append(fields, k+"="+x.Fields[k])
 	}
@@ -882,7 +882,7 @@ func (s *Scenario) validateRaw() error {
 	return nil
 }
 
-func (s *Scenario) validateActions(calls map[string]bool) error {
+func (s *Scenario) validateActions(calls map[string]bool) error { //nolint:gocyclo // one case per action kind
 	names := map[string]bool{}
 	fleet := false
 	for i, a := range s.Actions {

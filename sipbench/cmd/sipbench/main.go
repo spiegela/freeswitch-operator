@@ -204,7 +204,8 @@ func run(args []string) (int, error) {
 
 	r := runner.New(runner.Config{
 		Edge: *edge, MockURL: *mockURL, LKAgentURL: *lkAgent, ESL: *eslAddr, ESLPassword: *eslPass,
-		TargetListen: *target, Caps: capSet, Fleet: fl, BlackoutImage: *blackoutImage, PrometheusURL: strings.TrimRight(*prom, "/"), Log: log,
+		TargetListen: *target, Caps: capSet, Fleet: fl, BlackoutImage: *blackoutImage,
+		PrometheusURL: strings.TrimRight(*prom, "/"), Log: log,
 	})
 	if err := r.Start(ctx); err != nil {
 		return 2, err

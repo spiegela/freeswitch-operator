@@ -43,8 +43,10 @@ func main() {
 func run() error {
 	lkURL := flag.String("url", envOr("LIVEKIT_URL", "ws://livekit-server:7880"), "LiveKit server URL")
 	room := flag.String("room", envOr("LKAGENT_ROOM", "sipbench"), "room to take the calls into and sit in")
-	name := flag.String("name", envOr("LKAGENT_NAME", "sipbench"), "name of the inbound trunk and dispatch rule it sets up")
-	allowed := flag.String("allowed-addresses", envOr("LKAGENT_ALLOWED_ADDRESSES", "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"),
+	name := flag.String("name", envOr("LKAGENT_NAME", "sipbench"),
+		"name of the inbound trunk and dispatch rule it sets up")
+	allowed := flag.String("allowed-addresses",
+		envOr("LKAGENT_ALLOWED_ADDRESSES", "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"),
 		"comma-separated addresses or CIDRs the trunk takes calls from")
 	httpAddr := flag.String("http", envOr("LKAGENT_HTTP", "0.0.0.0:8080"), "API listen address")
 	level := flag.String("log-level", envOr("LKAGENT_LOG_LEVEL", "info"), "debug, info, warn or error")
@@ -155,7 +157,9 @@ var opusSilence = []byte{0xf8, 0xff, 0xfe}
 
 // publishSilence publishes the agent's voice track and keeps writing silence to it until the returned stop is called.
 func publishSilence(r *lksdk.Room) (stop func(), err error) {
-	track, err := lksdk.NewLocalTrack(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2})
+	track, err := lksdk.NewLocalTrack(webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +202,8 @@ func setUp(ctx context.Context, c *lksdk.SIPClient, name, room string, allowed [
 	}
 	for _, r := range rules.Items {
 		if r.Name == name {
-			if _, err := c.DeleteSIPDispatchRule(ctx, &livekit.DeleteSIPDispatchRuleRequest{SipDispatchRuleId: r.SipDispatchRuleId}); err != nil {
+			req := &livekit.DeleteSIPDispatchRuleRequest{SipDispatchRuleId: r.SipDispatchRuleId}
+			if _, err := c.DeleteSIPDispatchRule(ctx, req); err != nil {
 				return fmt.Errorf("deleting dispatch rule %s: %w", r.SipDispatchRuleId, err)
 			}
 		}

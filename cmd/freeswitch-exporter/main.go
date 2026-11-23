@@ -32,7 +32,8 @@ func main() {
 		"FreeSWITCH event socket host:port (default: 127.0.0.1:$ESL_PORT, or 127.0.0.1:8021)")
 	timeout := flag.Duration("timeout", 3*time.Second, "time allowed for connecting and for each command")
 	relay := flag.Bool("barge-in-relay", os.Getenv("BARGE_IN_RELAY") != "false",
-		"send FreeSWITCH's barge-in voice detections to the agent as SIP INFO (default: true unless $BARGE_IN_RELAY is false)")
+		"send FreeSWITCH's barge-in voice detections to the agent as SIP INFO "+
+			"(default: true unless $BARGE_IN_RELAY is false)")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	// The password comes from the environment only, never a flag, so it stays out of the pod's command line.

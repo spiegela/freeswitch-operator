@@ -28,6 +28,9 @@ import (
 // RollEnv is the environment variable Roll sets on the fleet's pods.
 const RollEnv = "SIPBENCH_ROLL"
 
+// fieldManager is who sipbench's server-side writes are recorded as.
+const fieldManager = "sipbench"
+
 // ClusterLabel names the FreeswitchCluster a pod belongs to. The operator's own label; the bench doesn't import it.
 const ClusterLabel = "sip.instruments.com/cluster"
 
@@ -269,7 +272,7 @@ func (k *kube) Roll(ctx context.Context, value string) error {
 			env = append(env, map[string]any{"name": RollEnv, "value": value})
 		}
 		spec["env"] = env
-		_, err = res.Update(ctx, u, metav1.UpdateOptions{FieldManager: "sipbench"})
+		_, err = res.Update(ctx, u, metav1.UpdateOptions{FieldManager: fieldManager})
 		return err
 	})
 }
@@ -319,7 +322,7 @@ func (k *kube) SetConfigMapKey(ctx context.Context, name, key, value string) err
 			cm.Data = map[string]string{}
 		}
 		cm.Data[key] = value
-		_, err = cms.Update(ctx, cm, metav1.UpdateOptions{FieldManager: "sipbench"})
+		_, err = cms.Update(ctx, cm, metav1.UpdateOptions{FieldManager: fieldManager})
 		return err
 	})
 }
@@ -374,7 +377,7 @@ func (k *kube) StartBlackout(ctx context.Context, node string, d time.Duration, 
 			}},
 		},
 	}
-	created, err := k.core.CoreV1().Pods(k.ns).Create(ctx, pod, metav1.CreateOptions{FieldManager: "sipbench"})
+	created, err := k.core.CoreV1().Pods(k.ns).Create(ctx, pod, metav1.CreateOptions{FieldManager: fieldManager})
 	if err != nil {
 		return "", err
 	}

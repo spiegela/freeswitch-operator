@@ -99,8 +99,8 @@ func (s *Store) Calls(benchCall string) []Participant {
 
 // find returns the latest participant with this identity still in the room. Callers hold mu.
 func (s *Store) find(identity string) *Participant {
-	for i := len(s.seen) - 1; i >= 0; i-- {
-		if p := s.seen[i]; p.Identity == identity && p.LeftAt == nil {
+	for _, p := range slices.Backward(s.seen) {
+		if p.Identity == identity && p.LeftAt == nil {
 			return p
 		}
 	}

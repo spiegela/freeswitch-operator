@@ -41,7 +41,7 @@ func InfoMiddleware(store *Store, log *slog.Logger) func(next sipgo.RequestHandl
 			if err == nil && store.addInfo(id, Info{At: time.Now(), ContentType: ct, Body: string(req.Body())}) {
 				code, reason = sip.StatusOK, "OK"
 			}
-			log.Info("INFO received", "call", id, "contentType", ct, "body", string(req.Body()), "answer", int(code))
+			log.Info("INFO received", "call", id, "contentType", ct, "body", string(req.Body()), "answer", code)
 			_ = tx.Respond(sip.NewResponseFromRequest(req, code, reason, nil))
 		}
 	}
