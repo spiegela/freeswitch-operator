@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/lkagent"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/uas"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/lkagent"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/uas"
 )
 
 func ptr[T any](v T) *T { return &v }

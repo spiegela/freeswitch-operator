@@ -1,4 +1,4 @@
-module git.instruments.com/ci/freeswitch-operator/sipbench
+module github.com/spiegela/freeswitch-operator/sipbench
 
 go 1.26.8
 

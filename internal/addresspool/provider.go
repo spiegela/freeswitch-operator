@@ -10,7 +10,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
+	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
 )
 
 // Capabilities are fixed for a provider: how its addresses reach a node, and what unbinding guarantees.

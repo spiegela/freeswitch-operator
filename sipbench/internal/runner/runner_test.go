@@ -15,8 +15,8 @@ import (
 	"github.com/emiago/diago/media"
 	"github.com/emiago/sipgo"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/mock"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/mock"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 // These tests point the runner straight at an in-process mock backend, with no edge in between: they check the

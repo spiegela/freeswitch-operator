@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/tone"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/tone"
 )
 
 func TestSpeechLevel(t *testing.T) {

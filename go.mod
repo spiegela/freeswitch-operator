@@ -1,4 +1,4 @@
-module git.instruments.com/ci/freeswitch-operator
+module github.com/spiegela/freeswitch-operator
 
 go 1.26.0
 

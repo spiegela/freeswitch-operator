@@ -29,8 +29,8 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
-	"git.instruments.com/ci/freeswitch-operator/internal/addresspool"
+	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
+	"github.com/spiegela/freeswitch-operator/internal/addresspool"
 )
 
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete

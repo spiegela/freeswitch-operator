@@ -7,7 +7,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 
-	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
+	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
 )
 
 // Node is a cluster node as the planner sees it.

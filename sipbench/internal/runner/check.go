@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/lkagent"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/netem"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/uas"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/lkagent"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/netem"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/uas"
 )
 
 // check compares what a call saw against its expectations and returns each mismatch.

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/rawsip"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/rawsip"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 func msg(t *testing.T, s string) rawsip.Message {

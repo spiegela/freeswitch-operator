@@ -15,8 +15,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/runner"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/runner"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 // Case is one entry of the conformance record, with the source it came from.

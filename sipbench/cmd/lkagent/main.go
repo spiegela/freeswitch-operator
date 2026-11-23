@@ -29,8 +29,8 @@ import (
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/lkagent"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/uas"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/lkagent"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/uas"
 )
 
 func main() {

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 // MetricResult is what one metric check saw.

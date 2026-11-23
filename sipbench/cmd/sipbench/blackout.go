@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/netem"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/netem"
 )
 
 // maxBlackout bounds a blackout: a node left dark is lost until someone reaches it some other way, so the command

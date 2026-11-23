@@ -23,9 +23,9 @@ import (
 	"syscall"
 	"time"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/fleet"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/runner"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/fleet"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/runner"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 
 	"github.com/emiago/sipgo/sip"
 )

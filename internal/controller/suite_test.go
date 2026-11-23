@@ -32,7 +32,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
+	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 

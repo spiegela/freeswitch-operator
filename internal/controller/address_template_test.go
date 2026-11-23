@@ -5,7 +5,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
+	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
 )
 
 // Only a fleet that draws from a pool gets the bind-address file and its variable: other fleets' templates, and so

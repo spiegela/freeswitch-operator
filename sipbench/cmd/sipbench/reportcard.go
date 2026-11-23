@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/reportcard"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/reportcard"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 // reportCard writes the report card (README.md, scenarios.csv, conformance.csv) from the JSON reports of a run

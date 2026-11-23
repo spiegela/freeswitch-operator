@@ -22,8 +22,8 @@ import (
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/mock"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/uas"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/mock"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/uas"
 )
 
 func main() {

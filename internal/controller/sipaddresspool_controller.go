@@ -39,8 +39,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
-	"git.instruments.com/ci/freeswitch-operator/internal/addresspool"
+	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
+	"github.com/spiegela/freeswitch-operator/internal/addresspool"
 )
 
 const (

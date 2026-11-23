@@ -40,11 +40,11 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	sipv1alpha1 "git.instruments.com/ci/freeswitch-operator/api/v1alpha1"
-	"git.instruments.com/ci/freeswitch-operator/internal/addresspool"
-	awsaddresses "git.instruments.com/ci/freeswitch-operator/internal/addresspool/aws"
-	metallbaddresses "git.instruments.com/ci/freeswitch-operator/internal/addresspool/metallb"
-	"git.instruments.com/ci/freeswitch-operator/internal/controller"
+	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
+	"github.com/spiegela/freeswitch-operator/internal/addresspool"
+	awsaddresses "github.com/spiegela/freeswitch-operator/internal/addresspool/aws"
+	metallbaddresses "github.com/spiegela/freeswitch-operator/internal/addresspool/metallb"
+	"github.com/spiegela/freeswitch-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 

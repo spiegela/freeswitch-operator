@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/fleet"
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/scenario"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/fleet"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/scenario"
 )
 
 func TestSDPConnectionAddress(t *testing.T) {

@@ -15,7 +15,7 @@ import (
 	"github.com/emiago/diago"
 	"github.com/emiago/sipgo/sip"
 
-	"git.instruments.com/ci/freeswitch-operator/sipbench/internal/script"
+	"github.com/spiegela/freeswitch-operator/sipbench/internal/script"
 )
 
 // BenchCallHeader carries the runner's id for a call through the edge, so each end's records can be matched
