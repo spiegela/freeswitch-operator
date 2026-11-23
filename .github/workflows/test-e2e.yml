@@ -63,6 +63,11 @@ jobs:
           go install "sigs.k8s.io/kind@${KIND_VERSION}"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      # Six nodes outrun the runner's default inotify limits, and kube-proxy on the workers then can't start, so pods
+      # there can't reach Service IPs (the API server's included). Kind's known issues give these values.
+      - name: Raise inotify limits for a six-node cluster
+        run: sudo sysctl -w fs.inotify.max_user_instances=512 fs.inotify.max_user_watches=524288
+
       - name: Create the cluster
         run: make kind-up
 
@@ -79,6 +84,9 @@ jobs:
           hack/kind.sh status || true
           k get pods -A -o wide || true
           k get events -A --sort-by=.lastTimestamp | tail -n 100 || true
+          echo "== kube-proxy (previous run of each, if it restarted)"
+          k -n kube-system logs -l k8s-app=kube-proxy --prefix --previous --tail=30 || true
+          k -n kube-system logs -l k8s-app=kube-proxy --prefix --tail=30 || true
           k -n freeswitch-operator-system logs deployment/freeswitch-operator-controller-manager --tail=200 || true
           for p in $(k -n telephony get pods -o name); do
             echo "== $p"
