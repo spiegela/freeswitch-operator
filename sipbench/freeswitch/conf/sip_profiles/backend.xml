@@ -24,5 +24,7 @@
     <param name="inbound-late-negotiation" value="false"/>
     <param name="enable-timer" value="false"/>
     <param name="user-agent-string" value="sipbench-edge"/>
+    <!-- vars.xml; see trunks.xml. -->
+    <param name="track-calls" value="$${track_calls}"/>
   </settings>
 </profile>

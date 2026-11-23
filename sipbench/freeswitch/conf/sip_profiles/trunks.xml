@@ -43,5 +43,7 @@
     <!-- Answer OPTIONS with 503 when this node is paused or full, so Kamailio's dispatcher probe sees it. -->
     <param name="sip-options-respond-503-on-busy" value="true"/>
     <param name="user-agent-string" value="sipbench-edge"/>
+    <!-- vars.xml. Both profiles track: a recovered call needs both of its legs. -->
+    <param name="track-calls" value="$${track_calls}"/>
   </settings>
 </profile>

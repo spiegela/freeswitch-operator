@@ -840,7 +840,7 @@ which version runs where.
 | M2b | Bench tooling for the remaining conformance cases: a raw-message sender (RFC 4475 torture tests; first sets in: proxy validation, stray requests and responses, lexical variants, the request-side torture and size cases; responses from a node still need a stand-in node), netem impairment (first set in: loss, burst loss, delay, jitter, reordering and duplication on the carrier-edge link through tc, and named SIP messages dropped or held, over signalling, media, DTMF, one-way audio and a short blackhole; MOS, RFC 3550 jitter and the proxy-node and edge-backend links still to come), and runner features (re-INVITE, hand-set headers, DTMF before answer, full INVITE records) | in progress |
 | M2c | [Metrics and alerts](#metrics-and-alerts): every component exposes metrics an OpenTelemetry Collector scrapes (its prometheus receiver) and sends on over OTLP: Kamailio's `/metrics` (its statistics, refusals, silent drops), FreeSWITCH through an exporter beside each node (sessions, calls, paused, SIP profile state and counters), and the operator's own (controller-runtime's, plus fleet, drain and dispatcher-reload metrics); alert rules with promtool tests; on kind a Collector sending to a Prometheus that evaluates the rules, and scenarios that check counters through it | in progress |
 | M3 | [`SIPAddressPool`](#4-external-addresses-v0-node-addresses-pool-in-m3), shared by both fleets, with providers behind one interface. In: the provider-neutral pool controller (tested against a fake provider); AWS Elastic IPs on the node's own address or a secondary private address (unit-tested against a fake EC2 client); the `bind-address` split in both fleets' config and the address agent that puts bind addresses on nodes; pool metrics and alerts; kustomize components and the IAM policy; sipbench's `mediaAddress` check (`pool-media-address`); MetalLB (a Service per binding), with the kind edge's FreeSWITCH fleet on a MetalLB pool and the bench checking media to the pooled address. Still to come: a run on AWS (the sandbox, then the EKS edge node group); a bench scenario for a replaced node's address | in progress |
-| M4 | v1 failover with fencing and call recovery. In: sipbench's `node-lost-mid-call`, a node taken dark mid-call (the `blackoutNodeOf` action), checking the rest of the fleet and recording the lost call as the baseline; audio gaps counted up to the call's end, so a call whose audio stops for good fails `maxAudioGapMs`. Still to come: how in-dialog SIP reaches the node that takes a call over, call tracking (PostgreSQL), dead-node detection and fencing, moving the address to a spare and `sofia recover`, a spare edge node on kind | in progress |
+| M4 | v1 failover with fencing and call recovery. In: call tracking in PostgreSQL on kind (the image has `mod_pgsql`: [`images/freeswitch`](images/freeswitch/Dockerfile); [call tracking](#the-edge-on-kind)), sipbench's `node-lost-mid-call`, a node taken dark mid-call (the `blackoutNodeOf` action), checking the rest of the fleet and recording the lost call as the baseline; audio gaps counted up to the call's end, so a call whose audio stops for good fails `maxAudioGapMs`. Still to come: how in-dialog SIP reaches the node that takes a call over, narrowing `sofia recover` to the lost node's calls (as is, it takes every other node's), dead-node detection and fencing, moving the address to a spare and `sofia recover`, a spare edge node on kind | in progress |
 | M5 | Typed peer and ACL resources (loop 9), outbound registrations when a peer needs them (loop 8), sipbench peer mocks; reload without restart | planned |
 | M6 | Peers on the inside network (loop 10): FreeSWITCH inside profile and dispatcher set, Kamailio inside listener, sipbench VPN peer mock | planned |
 
@@ -864,7 +864,8 @@ sipbench has its own instructions in [`sipbench/README.md`](sipbench/README.md).
 edge nodes ([`deploy/kind`](deploy/kind/)), the operator built from this tree, a two-node `KamailioCluster` on the
 proxy nodes, a three-node `FreeswitchCluster` running sipbench's FreeSWITCH configuration with the exporter beside
 it and its media addresses from a MetalLB `SIPAddressPool` (`edge-media`: MetalLB in L2 mode and the address agent,
-four addresses at the top of kind's Docker network), sipbench's mock backend behind it, and in the `monitoring`
+four addresses at the top of kind's Docker network), sipbench's mock backend behind it, a PostgreSQL holding the edge's core db and call tracking
+([`deploy/kind/postgres`](deploy/kind/postgres/postgres.yaml); see below), and in the `monitoring`
 namespace an OpenTelemetry Collector sending
 everything over OTLP to a Prometheus that evaluates the alert rules. Scenarios can name counters the edge should
 move (`metrics:` in a scenario); on kind the runner checks them through that Prometheus
@@ -878,6 +879,16 @@ hack/kind.sh livekit # optional: LiveKit behind the edge's lk numbers, for the l
 hack/kind.sh status  # both fleets' members, the combined dispatcher list, and what each Kamailio has loaded
 make kind-down
 ```
+
+**Call tracking.** On kind the edge keeps FreeSWITCH's core db in that PostgreSQL instead of each node's SQLite, and
+tracks every call there (`track-calls` on both SIP profiles), the groundwork for M4's `sofia recover`: while a call
+is up, its two legs are rows in the `recovery` table under the node's name, and they go when it ends. Both come from
+the environment (sipbench's [`vars.xml`](sipbench/freeswitch/conf/vars.xml)): `CORE_DB_DSN` names the database as
+`pgsql://host=... dbname=... user=...`, with the password in `PGPASSWORD` (libpq reads it, so it never reaches
+FreeSWITCH's logs), and `TRACK_CALLS=true`. Unset, as in compose, the core db stays in SQLite. With a DSN, FreeSWITCH
+won't start until the database answers, so `hack/kind.sh` brings PostgreSQL up first. `sofia recover` itself isn't
+used yet, and as FreeSWITCH 1.10.10 has it, it can't be used as it is: it takes over every call another FreeSWITCH
+tracked, live nodes' included, and deletes their rows, so recovery must be narrowed to the lost node first.
 
 `hack/kind.sh livekit` adds, in the `livekit` namespace ([`deploy/kind/livekit`](deploy/kind/livekit/)):
 
@@ -933,7 +944,9 @@ make report-card       # rewrite the card from the saved reports (after editing 
 4. **Start with an off-the-shelf public FreeSWITCH image**: `drachtio/drachtio-freeswitch-mrf:0.9.6` (FreeSWITCH
    1.10.10, amd64 and arm64), pinned by digest in [`sipbench`](sipbench/compose.yaml) and the sample. It passes the
    bench and the operator's ready and drain scripts. It has no G.722, so that scenario is skipped. We maintain our own
-   only when we need something it lacks.
+   only when we need something it lacks. M4's call tracking was the first such need: [`images/freeswitch`](images/freeswitch/Dockerfile)
+   adds `mod_pgsql` to it, compiled against the image's own installed headers and `libfreeswitch`, so the recovery
+   table and core db can live in a shared PostgreSQL. kind's edge runs that image.
 
 ## Open questions
 

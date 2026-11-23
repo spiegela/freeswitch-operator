@@ -1,0 +1,7 @@
+# The edge's PostgreSQL (postgres.yaml). Part of deploy/kind; hack/kind.sh also applies it on its own, before the
+# edge, because FreeSWITCH won't start without its core db.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: telephony
+resources:
+  - postgres.yaml
