@@ -381,7 +381,8 @@ type Action struct {
 	RestoreConfig *Empty `yaml:"restoreConfig,omitempty"`
 	// WaitMember waits until the pod that carries a call is in a given state.
 	WaitMember *WaitMember `yaml:"waitMember,omitempty"`
-	// WaitFleetCurrent waits until every pod runs the latest template and takes calls.
+	// WaitFleetCurrent waits until every pod runs the latest template and takes calls, and every KamailioCluster
+	// dispatching to the fleet holds a list of all of them.
 	WaitFleetCurrent *Wait `yaml:"waitFleetCurrent,omitempty"`
 	// ExpectRollStuck waits for a roll to replace its first pod, then checks it goes no further: no second pod
 	// is replaced and the rest of the fleet keeps taking calls.

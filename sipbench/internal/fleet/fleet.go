@@ -58,15 +58,33 @@ type Status struct {
 	CurrentRevision string
 	UpdateRevision  string
 	Members         []Member
+	// Proxies are the KamailioClusters that dispatch to the fleet.
+	Proxies []Proxy
 }
 
-// Current reports whether every pod runs the latest template and takes calls.
+// Proxy is a KamailioCluster that dispatches to the fleet, as its status shows it.
+type Proxy struct {
+	Name string
+	// Destinations is the number of the fleet's nodes in the dispatcher list it last wrote.
+	Destinations int32
+	// Loaded reports whether every ready Kamailio pod holds that list.
+	Loaded bool
+}
+
+// Current reports whether every pod runs the latest template and takes calls, and every Kamailio that dispatches
+// to the fleet holds a list of all of them. Until it does, the operator keeps asking Kamailio to reload, and a
+// reload starts Kamailio's probing of each destination over: a node lost meanwhile stays in rotation longer.
 func (s Status) Current() bool {
 	if s.ObservedGeneration != s.Generation || int32(len(s.Members)) != s.Want {
 		return false
 	}
 	for _, m := range s.Members {
 		if m.State != "Active" || m.Revision != s.UpdateRevision {
+			return false
+		}
+	}
+	for _, p := range s.Proxies {
+		if !p.Loaded || p.Destinations != s.Want {
 			return false
 		}
 	}
@@ -143,7 +161,10 @@ func (b BlackoutState) Finished() bool {
 	return b.Phase == string(corev1.PodSucceeded) || b.Phase == string(corev1.PodFailed)
 }
 
-var fscResource = schema.GroupVersionResource{Group: "sip.instruments.com", Version: "v1alpha1", Resource: "freeswitchclusters"}
+var (
+	fscResource = schema.GroupVersionResource{Group: "sip.instruments.com", Version: "v1alpha1", Resource: "freeswitchclusters"}
+	kcResource  = schema.GroupVersionResource{Group: "sip.instruments.com", Version: "v1alpha1", Resource: "kamailioclusters"}
+)
 
 type kube struct {
 	ns, name string
@@ -220,7 +241,65 @@ func (k *kube) Status(ctx context.Context) (Status, error) {
 	if obj.Spec.Replicas != nil {
 		s.Want = *obj.Spec.Replicas
 	}
+	if s.Proxies, err = k.proxies(ctx); err != nil {
+		return Status{}, err
+	}
 	return s, nil
+}
+
+// proxies returns the KamailioClusters in the fleet's namespace that dispatch to it. A cluster without the
+// KamailioCluster resource has none.
+func (k *kube) proxies(ctx context.Context) ([]Proxy, error) {
+	l, err := k.dyn.Resource(kcResource).Namespace(k.ns).List(ctx, metav1.ListOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading the KamailioClusters that dispatch to %s: %w", k.Name(), err)
+	}
+	var out []Proxy
+	for _, u := range l.Items {
+		b, err := json.Marshal(u.Object)
+		if err != nil {
+			return nil, err
+		}
+		var obj struct {
+			Spec struct {
+				Dispatch []struct {
+					FreeswitchCluster string `json:"freeswitchCluster"`
+				} `json:"dispatch"`
+			} `json:"spec"`
+			Status struct {
+				Sets []struct {
+					FreeswitchCluster string `json:"freeswitchCluster"`
+					Destinations      int32  `json:"destinations"`
+				} `json:"sets"`
+				DispatcherHash         string `json:"dispatcherHash"`
+				DispatcherReloadedHash string `json:"dispatcherReloadedHash"`
+			} `json:"status"`
+		}
+		if err := json.Unmarshal(b, &obj); err != nil {
+			return nil, err
+		}
+		dispatches := false
+		for _, d := range obj.Spec.Dispatch {
+			dispatches = dispatches || d.FreeswitchCluster == k.name
+		}
+		if !dispatches {
+			continue
+		}
+		p := Proxy{
+			Name:   u.GetName(),
+			Loaded: obj.Status.DispatcherHash != "" && obj.Status.DispatcherReloadedHash == obj.Status.DispatcherHash,
+		}
+		for _, set := range obj.Status.Sets {
+			if set.FreeswitchCluster == k.name {
+				p.Destinations = set.Destinations
+			}
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 func (k *kube) Cordon(ctx context.Context, node string, unschedulable bool) error {
