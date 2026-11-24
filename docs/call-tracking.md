@@ -21,7 +21,32 @@ page covers setting tracking up and what failover still needs.
     is a starting point. On a real cluster, set a storage class and size, and take the Secret from your secret store
     instead of the committed kind value.
   - **A managed service,** such as Aurora PostgreSQL, through its writer (cluster) endpoint.
+- **[`deploy/postgres/freeswitch-core-db.sql`](../deploy/postgres/freeswitch-core-db.sql) run once in that
+  database,** below.
 - **Four settings in the FreeSWITCH configuration**, below.
+
+## Prepare the database
+
+**Run [`freeswitch-core-db.sql`](../deploy/postgres/freeswitch-core-db.sql) once, before or after FreeSWITCH first
+starts**, as a user allowed to create event triggers (a superuser; on Aurora or RDS, the master user):
+
+```sh
+psql "host=<writer endpoint> dbname=freeswitch user=<master user> sslmode=require" -v ON_ERROR_STOP=1 \
+  -f deploy/postgres/freeswitch-core-db.sql
+```
+
+FreeSWITCH creates its tables with length limits (`varchar(1024)` for a caller's name) that SQLite never enforces
+and PostgreSQL does. One call over a limit loses other calls' writes: FreeSWITCH writes the core db in batches of
+one transaction each, a refused statement ends its batch, and the batch's COMMIT rolls back everything before it,
+never retried. That takes the call tracking failover needs, and the deletes of ended calls, leaving `channels` rows
+for calls long gone. The script turns every length-limited column into `text`, now and, through an event trigger,
+whenever FreeSWITCH creates or alters a table later (a first start, an upgrade). FreeSWITCH keeps the tables it
+finds, so the change lasts. Use a database FreeSWITCH alone uses: the script changes every table in it.
+
+Without the right to create event triggers, leave the trigger out and run `SELECT freeswitch_unbound_columns()`
+after FreeSWITCH first starts and after each upgrade. `hack/kind.sh deploy` runs the script on kind, and
+`hack/kind.sh bench` fails if PostgreSQL refused any statement during the run (sipbench's `raw-large-messages`
+sends a caller name over the limit).
 
 ## Configure FreeSWITCH
 
@@ -110,6 +135,15 @@ kubectl -n telephony exec postgres-0 -- psql -U freeswitch -d freeswitch \
 ```
 
 The core db's tables (`channels`, `calls`, `registrations`, `recovery`, ...) are listed by `\dt` in the same database.
+None should have a length limit left:
+
+```sh
+kubectl -n telephony exec postgres-0 -- psql -U freeswitch -d freeswitch -c "select table_name, column_name \
+  from information_schema.columns where table_schema = current_schema() and character_maximum_length is not null"
+```
+
+PostgreSQL's log should show no refused statements beyond the `create index` ones FreeSWITCH repeats at every start
+(`relation ... already exists`, harmless: they run on their own, not in a batch).
 
 ## Failover: what tracking is for, and what's left
 

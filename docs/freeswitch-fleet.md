@@ -116,7 +116,8 @@ while paused, so the dispatcher fails over on a `503` in the gap between "not re
 - `preStop` marks the pod as draining (readiness fails at once, so it leaves dispatch), runs `fsctl pause inbound`,
   and waits until FreeSWITCH holds no sessions (its own count, from `status`) or `maxDrainSeconds` passes. Not
   `show calls count`: that reads the core db, where a database core db can keep rows for calls long gone (a
-  statement PostgreSQL refuses rolls back the others batched with it). If FreeSWITCH is still starting, it
+  statement PostgreSQL refuses rolls back the others batched with it; [call tracking](call-tracking.md#prepare-the-database)
+  prepares the database so it refuses none). If FreeSWITCH is still starting, it
   first waits (up to 60 s) for it to be ready: FreeSWITCH loses a SIGTERM that arrives while it starts, and the pod
   would then sit `Terminating` for its whole grace period.
 - **Rolling update:** when the pod template changes, the operator replaces one pod at a time, and only while every
