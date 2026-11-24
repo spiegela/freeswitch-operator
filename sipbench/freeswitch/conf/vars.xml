@@ -37,8 +37,9 @@
        (so a consumer knows when we are talking), firing events on the event socket. A call's X-Barge-In-VAD header
        overrides it. See dialplan/trunks.xml and docs/barge-in.md at the repository root. -->
   <X-PRE-PROCESS cmd="exec-set" data="barge_in_vad=/bin/sh /usr/local/freeswitch/conf/bin/env.sh BARGE_IN_VAD livekit"/>
-  <!-- The detector with "freeswitch": silero (mod_vad_silero, a neural model; events carry a probability) or webrtc
-       (mod_vad_detect, FreeSWITCH's libfvad VAD; start and stop events only). -->
+  <!-- The detector with "freeswitch", both mod_speech_detect's: silero (Silero VAD, a small neural network; events
+       carry a probability) or webrtc (FreeSWITCH's own libfvad detector). A call's X-Barge-In-VAD-Engine header
+       overrides it. -->
   <X-PRE-PROCESS cmd="exec-set" data="barge_in_vad_engine=/bin/sh /usr/local/freeswitch/conf/bin/env.sh BARGE_IN_VAD_ENGINE silero"/>
   <!-- Echo cancellation on what the caller sends, with "freeswitch": preprocess's r.echo_cancel value (speexdsp's
        tail), 0 for none. -->

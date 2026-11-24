@@ -18,14 +18,11 @@ import (
 // BargeInContentType is the body type of the SIP INFO requests the relay sends to the agent.
 const BargeInContentType = "application/x-barge-in+json"
 
-// The voice detectors' events: mod_vad_silero's and mod_vad_detect's (WebRTC's detector).
-const (
-	subclassSilero = "vad_silero:detect"
-	subclassWebRTC = "vad_detect:detection"
-)
+// The voice detectors' event (images/freeswitch/mod_speech_detect), whichever engine.
+const subclassSpeech = "speech_detect::change"
 
-// The media bugs the edge's dialplan names its detectors (sipbench/freeswitch/conf/dialplan/trunks.xml): one on
-// what the caller sends, on the caller's leg, and one on what the agent sends, on the agent's leg.
+// The names the edge's dialplan gives its detectors (sipbench/freeswitch/conf/dialplan/trunks.xml): one on what the
+// caller sends, on the caller's leg, and one on what the agent sends, on the agent's leg.
 const (
 	partyCaller = "caller"
 	partyAgent  = "agent"
@@ -44,9 +41,9 @@ type Detection struct {
 	Engine string `json:"engine"`
 	// Probability is Silero's speech probability for the window that decided; WebRTC's detector gives none.
 	Probability *float64 `json:"probability,omitempty"`
-	// At is when the speech started or stopped, in Unix milliseconds, as the detector dates it. Silero dates it
-	// back to the speech itself, so At is earlier than the detection by its minimum speech (a start, 250 ms by
-	// default) or silence (a stop, 100 ms); WebRTC's detector gives no date, so it is when its event fired.
+	// At is when the speech started or stopped, in Unix milliseconds, as the detector dates it: back from the
+	// detection by the speech or silence it took to decide (silero's minimum speech for a start, 250 ms by default,
+	// or minimum silence for a stop, 100 ms; webrtc's voice_ms or silence_ms).
 	At int64 `json:"at"`
 }
 
@@ -129,7 +126,7 @@ func (r *Relay) session(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = cmds.Close() }()
-	if _, err := events.Command("event plain CUSTOM "+subclassSilero+" "+subclassWebRTC, r.Timeout); err != nil {
+	if _, err := events.Command("event plain CUSTOM "+subclassSpeech, r.Timeout); err != nil {
 		return err
 	}
 	r.connected.Set(1)
@@ -155,8 +152,8 @@ func (r *Relay) session(ctx context.Context) error {
 
 // relay sends one event's detection, if it is one. It returns an error only when the command connection broke.
 func (r *Relay) relay(cmds *eslClient, event []byte) error {
-	h, body := parseEvent(event)
-	d, target, ok := detectionOf(h, body)
+	h := parseEvent(event)
+	d, target, ok := detectionOf(h)
 	if !ok {
 		return nil
 	}
@@ -183,26 +180,21 @@ func (r *Relay) relay(cmds *eslClient, event []byte) error {
 
 // detectionOf reads a detector event: the detection, the agent leg's uuid to send it on ("" when the caller's leg
 // names none), and false for anything that isn't one of the edge's barge-in detections.
-func detectionOf(h textproto.MIMEHeader, body []byte) (Detection, string, bool) {
+func detectionOf(h textproto.MIMEHeader) (Detection, string, bool) {
 	var d Detection
-	switch h.Get("Event-Subclass") {
-	case subclassSilero:
-		d.Engine = "silero"
-	case subclassWebRTC:
-		d.Engine = "webrtc"
-	default:
+	if h.Get("Event-Subclass") != subclassSpeech {
 		return d, "", false
 	}
-	switch h.Get("detected-event") {
-	case "start_talking":
+	switch h.Get("Speech-Event") {
+	case "started":
 		d.Event = "speech-started"
-	case "stop_talking":
+	case "stopped":
 		d.Event = "speech-stopped"
 	default:
 		return d, "", false
 	}
 	var target string
-	switch d.Party = h.Get("media-bugname"); d.Party {
+	switch d.Party = h.Get("Speech-Detector"); d.Party {
 	case partyCaller:
 		target = h.Get(agentLegVar)
 	case partyAgent:
@@ -210,26 +202,21 @@ func detectionOf(h textproto.MIMEHeader, body []byte) (Detection, string, bool) 
 	default:
 		return d, "", false // someone else's detector
 	}
-	if us, err := strconv.ParseInt(h.Get("Event-Date-Timestamp"), 10, 64); err == nil {
+	d.Engine = h.Get("Speech-Engine")
+	if ms, err := strconv.ParseInt(h.Get("Speech-At"), 10, 64); err == nil {
+		d.At = ms
+	} else if us, err := strconv.ParseInt(h.Get("Event-Date-Timestamp"), 10, 64); err == nil {
 		d.At = us / 1000
 	}
-	// Silero says more in a JSON body: the deciding window's probability, and its own timestamp.
-	var silero struct {
-		Probability *float64 `json:"probability"`
-		Timestamp   int64    `json:"timestamp"`
-	}
-	if len(body) > 0 && json.Unmarshal(body, &silero) == nil {
-		d.Probability = silero.Probability
-		if silero.Timestamp > 0 {
-			d.At = silero.Timestamp
-		}
+	if p, err := strconv.ParseFloat(h.Get("Speech-Probability"), 64); err == nil {
+		d.Probability = &p
 	}
 	return d, target, true
 }
 
-// parseEvent splits a text/event-plain event into its headers (URL-decoded) and its body.
-func parseEvent(event []byte) (textproto.MIMEHeader, []byte) {
-	head, body, _ := bytes.Cut(event, []byte("\n\n"))
+// parseEvent reads a text/event-plain event's headers, URL-decoded.
+func parseEvent(event []byte) textproto.MIMEHeader {
+	head, _, _ := bytes.Cut(event, []byte("\n\n"))
 	h := textproto.MIMEHeader{}
 	for line := range strings.SplitSeq(string(head), "\n") {
 		k, v, ok := strings.Cut(line, ": ")
@@ -241,10 +228,7 @@ func parseEvent(event []byte) (textproto.MIMEHeader, []byte) {
 		}
 		h.Add(k, v)
 	}
-	if n, err := strconv.Atoi(h.Get("Content-Length")); err == nil && n >= 0 && n <= len(body) {
-		body = body[:n]
-	}
-	return h, body
+	return h
 }
 
 func (r *Relay) logger() *slog.Logger {

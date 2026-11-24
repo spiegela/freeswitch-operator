@@ -12,9 +12,8 @@
     <load module="mod_tone_stream"/>
     <load module="mod_sndfile"/>
     <load module="mod_native_file"/>
-    <!-- Voice detectors for barge-in (BARGE_IN_VAD=freeswitch; vars.xml). Not stock FreeSWITCH: drachtio's image
-         builds them in, Silero's model included (/usr/local/share/silero_vad/silero_vad.onnx). -->
-    <load module="mod_vad_silero"/>
-    <load module="mod_vad_detect"/>
+    <!-- Voice detectors for barge-in (BARGE_IN_VAD=freeswitch; vars.xml): the project's own (images/freeswitch), with
+         Silero's model at /usr/local/share/speech_detect/silero_vad.onnx. -->
+    <load module="mod_speech_detect"/>
   </modules>
 </configuration>
