@@ -563,15 +563,16 @@ func describe(s fleet.Status) string {
 		}
 		ms = append(ms, fmt.Sprintf("%s %s %s", m.Pod, m.State, rev))
 	}
-	out := fmt.Sprintf("%d wanted, %d ready, %d updated; %s", s.Want, s.Ready, s.Updated, strings.Join(ms, ", "))
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d wanted, %d ready, %d updated; %s", s.Want, s.Ready, s.Updated, strings.Join(ms, ", "))
 	for _, p := range s.Proxies {
 		loaded := "loaded"
 		if !p.Loaded {
 			loaded = "not loaded yet"
 		}
-		out += fmt.Sprintf("; Kamailio %s: %d in its dispatcher list, %s", p.Name, p.Destinations, loaded)
+		fmt.Fprintf(&b, "; Kamailio %s: %d in its dispatcher list, %s", p.Name, p.Destinations, loaded)
 	}
-	return out
+	return b.String()
 }
 
 func msOr(ms int, def time.Duration) time.Duration {
