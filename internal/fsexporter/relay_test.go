@@ -12,21 +12,20 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// sileroEvent is a detector event as FreeSWITCH sends it in event plain, trimmed.
-func sileroEvent(bug, detected, uuid, agentLeg string) string {
-	body := `{"event":"speech-started","timestamp":1795229956441,"probability":0.986,"vendor":"silero"}`
-	h := "Event-Subclass: vad_silero%3Adetect\nEvent-Name: CUSTOM\nEvent-Date-Timestamp: 1795229956696728\n" +
+// speechEvent is a detector event as FreeSWITCH sends it in event plain, trimmed: mod_speech_detect's, from silero.
+func speechEvent(detector, event, uuid, agentLeg string) string {
+	h := "Event-Subclass: speech_detect%3A%3Achange\nEvent-Name: CUSTOM\nEvent-Date-Timestamp: 1795229956696728\n" +
 		"Unique-ID: " + uuid + "\n"
 	if agentLeg != "" {
 		h += "variable_barge_in_agent_uuid: " + agentLeg + "\n"
 	}
-	h += "detected-event: " + detected + "\nmedia-bugname: " + bug + "\n"
-	return h + fmt.Sprintf("Content-Length: %d\n\n", len(body)) + body
+	return h + "Speech-Event: " + event + "\nSpeech-Detector: " + detector + "\nSpeech-Engine: silero\n" +
+		"Speech-At: 1795229956441\nSpeech-Probability: 0.986\n\n"
 }
 
 func TestDetectionOf(t *testing.T) {
-	h, body := parseEvent([]byte(sileroEvent("caller", "start_talking", "in-1", "out-1")))
-	d, target, ok := detectionOf(h, body)
+	h := parseEvent([]byte(speechEvent("caller", "started", "in-1", "out-1")))
+	d, target, ok := detectionOf(h)
 	if !ok || target != "out-1" {
 		t.Fatalf("caller detection: ok=%v target=%q, want the agent leg out-1", ok, target)
 	}
@@ -39,28 +38,29 @@ func TestDetectionOf(t *testing.T) {
 		t.Errorf("got %+v, want %+v", d, want)
 	}
 
-	h, body = parseEvent([]byte(sileroEvent("agent", "stop_talking", "out-1", "")))
-	if d, target, ok = detectionOf(h, body); !ok || target != "out-1" || d.Party != "agent" || d.Event != "speech-stopped" {
+	h = parseEvent([]byte(speechEvent("agent", "stopped", "out-1", "")))
+	if d, target, ok = detectionOf(h); !ok || target != "out-1" || d.Party != "agent" || d.Event != "speech-stopped" {
 		t.Errorf("agent detection: %+v target=%q ok=%v, want speech-stopped on its own leg", d, target, ok)
 	}
 
-	// WebRTC's detector: no body, so the event's own time, and no probability.
-	h, body = parseEvent([]byte("Event-Subclass: vad_detect%3Adetection\nEvent-Date-Timestamp: 1795229956696728\n" +
-		"Unique-ID: in-2\nvariable_barge_in_agent_uuid: out-2\ndetected-event: start_talking\nmedia-bugname: caller\n\n"))
-	if d, target, ok = detectionOf(h, body); !ok || target != "out-2" || d.Engine != "webrtc" || d.At != 1795229956696 || d.Probability != nil {
+	// webrtc: no probability. Without Speech-At, the event's own time.
+	h = parseEvent([]byte("Event-Subclass: speech_detect%3A%3Achange\nEvent-Date-Timestamp: 1795229956696728\n" +
+		"Unique-ID: in-2\nvariable_barge_in_agent_uuid: out-2\nSpeech-Event: started\nSpeech-Detector: caller\n" +
+		"Speech-Engine: webrtc\n\n"))
+	if d, target, ok = detectionOf(h); !ok || target != "out-2" || d.Engine != "webrtc" || d.At != 1795229956696 || d.Probability != nil {
 		t.Errorf("webrtc detection: %+v target=%q ok=%v", d, target, ok)
 	}
 
 	// A caller leg that names no agent leg: a detection with nowhere to go.
-	h, body = parseEvent([]byte(sileroEvent("caller", "start_talking", "in-3", "")))
-	if _, target, ok = detectionOf(h, body); !ok || target != "" {
+	h = parseEvent([]byte(speechEvent("caller", "started", "in-3", "")))
+	if _, target, ok = detectionOf(h); !ok || target != "" {
 		t.Errorf("no agent leg: target=%q ok=%v, want an empty target", target, ok)
 	}
 	// Someone else's detector, or another event, is not ours.
-	for _, ev := range []string{sileroEvent("mine", "start_talking", "x", "y"), sileroEvent("caller", "speaking", "x", "y"),
+	for _, ev := range []string{speechEvent("mine", "started", "x", "y"), speechEvent("caller", "speaking", "x", "y"),
 		"Event-Subclass: sofia%3A%3Aregister\nUnique-ID: x\n\n"} {
-		h, body = parseEvent([]byte(ev))
-		if _, _, ok := detectionOf(h, body); ok {
+		h = parseEvent([]byte(ev))
+		if _, _, ok := detectionOf(h); ok {
 			t.Errorf("took %q for a detection", ev[:40])
 		}
 	}
@@ -140,7 +140,7 @@ func TestRelaySendsInfo(t *testing.T) {
 	r := NewRelay(fs.ln.Addr().String(), "ClueCon", time.Second, nil)
 	go r.Run(t.Context())
 
-	fs.events <- sileroEvent("caller", "start_talking", "in-1", "out-1")
+	fs.events <- speechEvent("caller", "started", "in-1", "out-1")
 	select {
 	case cmd := <-fs.commands:
 		want := `api uuid_send_info out-1 application x-barge-in+json ` +
@@ -151,8 +151,8 @@ func TestRelaySendsInfo(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no INFO sent")
 	}
-	fs.events <- sileroEvent("caller", "stop_talking", "in-1", "") // nowhere to go
-	fs.events <- sileroEvent("agent", "start_talking", "gone", "") // its leg has ended
+	fs.events <- speechEvent("caller", "stopped", "in-1", "") // nowhere to go
+	fs.events <- speechEvent("agent", "started", "gone", "")  // its leg has ended
 	select {
 	case <-fs.commands:
 	case <-time.After(5 * time.Second):

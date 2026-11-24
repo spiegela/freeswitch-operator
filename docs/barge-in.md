@@ -13,11 +13,11 @@ The configuration ([`vars.xml`](../sipbench/freeswitch/conf/vars.xml),
 | Variable | Default | |
 | --- | --- | --- |
 | `BARGE_IN_VAD` | `livekit` | `livekit`: the edge detects nothing, and the agent behind LiveKit SIP runs its own. `freeswitch`: the edge cancels echo and detects, as below |
-| `BARGE_IN_VAD_ENGINE` | `silero` | with `freeswitch`: `silero` (`mod_vad_silero`) or `webrtc` (`mod_vad_detect`) |
+| `BARGE_IN_VAD_ENGINE` | `silero` | with `freeswitch`: `silero` (Silero VAD) or `webrtc` (FreeSWITCH's libfvad detector), both [`mod_speech_detect`](#the-detectors-mod_speech_detect)'s |
 | `BARGE_IN_ECHO_CANCEL` | `1024` | with `freeswitch`: `preprocess`'s `r.echo_cancel` on what the caller sends; `0` for none |
 
-- **Per call:** a caller's `X-Barge-In-VAD: livekit|freeswitch` header overrides the fleet's mode (any other value
-  is ignored). Changing the fleet's default changes `spec.env`, which rolls the fleet one drained node at a time.
+- **Per call:** a caller's `X-Barge-In-VAD: livekit|freeswitch` header overrides the fleet's mode, and
+  `X-Barge-In-VAD-Engine: silero|webrtc` its detector (any other value is ignored). Changing the fleet's default changes `spec.env`, which rolls the fleet one drained node at a time.
 - **The backend is always told:** the backend leg carries `X-Barge-In-VAD` with the mode in force, so the agent
   knows whether to run its own detector or listen for the edge's. LiveKit SIP can map the header to a participant
   attribute.
@@ -50,6 +50,35 @@ advance.) So detections are relayed only in a fleet that sets `spec.metrics`. No
   sets `fs_send_unsupported_info`.
 - `uuid_send_info` returns as soon as the INFO is queued, so the relay can't see a `405` from the far end: `relayed`
   counts INFOs sent, not INFOs received.
+
+## The detectors: `mod_speech_detect`
+
+The project's own FreeSWITCH module ([`images/freeswitch/mod_speech_detect`](../images/freeswitch/mod_speech_detect),
+Apache-2.0), built into `ghcr.io/spiegela/freeswitch`. It replaced jambonz's `mod_vad_silero` and `mod_vad_detect`:
+the first has no public source, and the second is licensed AGPL-3.0 outside jambonz.
+
+```
+uuid_speech_detect <uuid> start <name> silero [threshold=0.5] [min_speech_ms=250] [min_silence_ms=100]
+uuid_speech_detect <uuid> start <name> webrtc [mode=3] [voice_ms=100] [silence_ms=300]
+uuid_speech_detect <uuid> stop <name>
+```
+
+- **A detector** reads what the channel receives, never changing it, until it is stopped or the channel hangs up.
+  Its name tells several on one channel apart; the dialplan uses `caller` and `agent`.
+- **Each change** fires `CUSTOM speech_detect::change` with the channel's data and `Speech-Event` (`started` or
+  `stopped`), `Speech-Detector` (the name), `Speech-Engine`, `Speech-At` (Unix ms, dated back by the speech or silence
+  it took to decide) and, from Silero, `Speech-Probability`.
+- **`silero`** is [Silero VAD](https://github.com/snakers4/silero-vad) (MIT, v6.3) on ONNX Runtime (MIT, 1.32, from
+  Microsoft's NuGet package), scoring 32 ms windows of 8 or 16 kHz audio (other rates are resampled to 16 kHz). A
+  start takes `min_speech_ms` of windows at or above `threshold`; a stop, `min_silence_ms` of windows below
+  `threshold` - 0.15. One model, loaded with the module, serves every call; each detector keeps only its own state,
+  and its inference runs on the call's media thread.
+- **`webrtc`** is FreeSWITCH's own detector, WebRTC's when FreeSWITCH is built with libfvad (drachtio's is).
+- **No telemetry.** ONNX Runtime's Linux build carries Microsoft's telemetry client, which would upload to
+  `mobile.events.data.microsoft.com`. The image sets `ORT_DISABLE_TELEMETRY=1`, which keeps it from starting, and the
+  module sets it too and turns telemetry events off.
+- **Settings:** `speech_detect.conf`'s `silero-model` names the model (default
+  `/usr/local/share/speech_detect/silero_vad.onnx`). Without it, `silero` is refused and `webrtc` still works.
 
 ## LiveKit SIP needs a patch
 
@@ -90,7 +119,8 @@ stand-in agent publishes silence.
 
 ## Measurements so far
 
-From kind, on 8 kHz PCMU calls with synthetic speech:
+From kind, on 8 kHz PCMU calls with synthetic speech. The echo figures were taken with jambonz's Silero detector,
+before `mod_speech_detect` replaced it, and are worth redoing; the latency is `mod_speech_detect`'s.
 
 - **Each detector hears only its own leg's incoming audio.** With our speech going out and only a tone coming back,
   Silero stayed under 0.03.
@@ -99,10 +129,12 @@ From kind, on 8 kHz PCMU calls with synthetic speech:
 - **FreeSWITCH's echo canceller helps, but not alone.** With `r.echo_cancel=1024` that fell to 51% over 8 s: 80 to
   95% in the first three seconds while speexdsp converges, then 0 to 40%. So the higher bar while we're talking (the
   `agent` detector) is needed, not optional. The mock's echo is a clean digital copy; a real speakerphone's is harder.
-- **Latency:** the agent hears of a barge-in about 260 ms after the caller starts talking (270 ms through LiveKit),
-  and of the stop about 120 ms after they stop. The relay adds about 10 ms. The rest is the detector's own minimums:
-  250 ms of speech before it calls a start, 100 ms of silence before it calls a stop. Both can be tuned
-  (`barge_in_vad_args`).
+- **Latency** (one run, from the detection's `at` to the INFO reaching the agent): with `silero`, about 290 ms for a
+  start and 150 ms for a stop; with `webrtc`, about 130 ms and 330 ms. Most of it is the detector's own minimums
+  (silero: 250 ms of speech to call a start, 100 ms of silence to call a stop; webrtc: 100 and 300 ms), all tunable
+  in the dialplan (`barge_in_detector`); the relay adds about 10 ms.
+- **WebRTC's detector takes a steady tone for voice.** Against the mock's 1 kHz tone its `agent` detector fired;
+  Silero's did not. So `webrtc` suits only audio without tones (no ringback, hold music or DTMF on that leg).
 
 ## Requirements behind the design
 
@@ -112,18 +144,16 @@ From kind, on 8 kHz PCMU calls with synthetic speech:
 - **Listen only to what the caller sends.** On the caller's leg FreeSWITCH keeps the two directions apart, so the
   detector runs on the read stream only. On a mixed stream there's no telling who is talking.
 - **Cancel our own echo**, or the detector hears our agent and we barge ourselves.
-- **Rely on drachtio's modules.** `mod_vad_silero` (a Silero neural VAD on ONNX Runtime), `mod_vad_detect` (WebRTC's
-  VAD) and `preprocess` (speexdsp echo cancellation) are in drachtio's image, not stock FreeSWITCH. Using them ties
-  us to that image or to building them ourselves (see the README's [decisions](../README.md#decisions)).
+- **Own the detectors.** They are the project's own module, on MIT-licensed Silero and ONNX Runtime, so the edge
+  depends on no one's closed or copyleft code for them. Echo cancellation (`preprocess`, speexdsp) is stock
+  FreeSWITCH.
 
 ## Open questions
 
 - Where the patched LiveKit SIP image is published, and whether to offer the change upstream.
 - What the agent does in each mode: with `livekit`, its own VAD drives interruptions as today; with `freeswitch`, it
   should turn that off and act on the edge's signal.
-- The cost per call (decode, echo cancellation, Silero on two legs) and what it does to sessions per node. Each
-  Silero detector creates its own ONNX session at answer (40 to 60 ms on kind) and holds it for the call.
+- The cost per call (decode, echo cancellation, Silero on two legs) and what it does to sessions per node.
 - How the echo canceller does on a real speakerphone's echo, and why its tail setting changed nothing.
-- Why a hand-loaded `mod_vad_silero` reported every 60 ms window, while one loaded at startup reports changes only.
 - An echo scenario on the bench: the agent talks, the caller echoes it back, and there should be no `caller` INFOs.
   The measurements above suggest it would fail today.

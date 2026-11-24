@@ -10,7 +10,9 @@ description: >
   With the edge detecting, each start and stop of speech reaches the agent as a SIP INFO
   (application/x-barge-in+json) naming whose speech it was: a caller who talks over the agent's tone gives caller
   detections and no agent ones, an agent who talks over the caller's tone gives agent detections and no caller ones
-  (each detector hears only its own side), and with the agent detecting the edge sends none.
+  (each detector hears only its own side), and with the agent detecting the edge sends none. Either detector does:
+  Silero (the fleet's default here) or WebRTC's, which a caller's X-Barge-In-VAD-Engine picks. WebRTC's call has a
+  silent agent: that detector takes a steady tone for voice, so against the tone the agent detector would fire.
 requires: [mock]
 backend:
   routes:
@@ -18,6 +20,10 @@ backend:
       steps:
         - answer: {}
         - tone: {hz: 1000, ms: 8000}
+    listen:
+      steps:
+        - answer: {}
+        - wait: {ms: 8000}
     speak:
       steps:
         - answer: {}
@@ -76,8 +82,24 @@ calls:
       backend:
         headers: {X-Barge-In-VAD: freeswitch}
         infos:
-          - {contentType: application/x-barge-in+json, fields: {party: caller, event: speech-started}}
-          - {contentType: application/x-barge-in+json, fields: {party: caller, event: speech-stopped}}
+          - {contentType: application/x-barge-in+json, fields: {party: caller, event: speech-started, engine: silero}}
+          - {contentType: application/x-barge-in+json, fields: {party: caller, event: speech-stopped, engine: silero}}
+          - {contentType: application/x-barge-in+json, fields: {party: agent}, max: 0}
+  - id: edge-webrtc-caller-talks
+    to: listen
+    headers: {X-Barge-In-VAD: freeswitch, X-Barge-In-VAD-Engine: webrtc}
+    steps:
+      - wait: {ms: 1000}
+      - speech: {ms: 2500}
+      - wait: {ms: 1500}
+      - hangup: {}
+    expect:
+      status: 200
+      backend:
+        headers: {X-Barge-In-VAD: freeswitch}
+        infos:
+          - {contentType: application/x-barge-in+json, fields: {party: caller, event: speech-started, engine: webrtc}}
+          - {contentType: application/x-barge-in+json, fields: {party: caller, event: speech-stopped, engine: webrtc}}
           - {contentType: application/x-barge-in+json, fields: {party: agent}, max: 0}
   - id: edge-agent-talks
     to: speak

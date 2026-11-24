@@ -4,7 +4,7 @@ name: Publish images
 #
 #   ghcr.io/spiegela/freeswitch-operator   the manager, and the address agent (Dockerfile, target manager)
 #   ghcr.io/spiegela/freeswitch-exporter   the FreeSWITCH metrics exporter (Dockerfile, target exporter)
-#   ghcr.io/spiegela/freeswitch            drachtio's FreeSWITCH plus mod_pgsql (images/freeswitch)
+#   ghcr.io/spiegela/freeswitch            drachtio's FreeSWITCH plus mod_pgsql, cut down (images/freeswitch)
 #   ghcr.io/spiegela/sipbench              the bench: sipbench, mockbackend, lkagent (sipbench/Dockerfile)
 #
 # Each is built for linux/amd64 and linux/arm64. A release (a push to main) is tagged `latest` and
@@ -46,7 +46,7 @@ jobs:
           - image: freeswitch
             context: images/freeswitch
             target: ""
-            description: FreeSWITCH 1.10.10 (drachtio's build) plus mod_pgsql
+            description: FreeSWITCH 1.10.10 (drachtio's build) plus mod_pgsql, cut down for a SIP edge
           - image: sipbench
             context: sipbench
             target: ""

@@ -429,8 +429,8 @@ A minimal SBC, deliberately small enough to read in one sitting:
   a voice detector on what the caller sends, another on what the backend sends, each detection sent to the backend
   as a SIP INFO by the exporter's relay; the backend leg sets `fs_send_unsupported_info` so FreeSWITCH sends them), set
   by `BARGE_IN_VAD` and overridden per call by the caller's `X-Barge-In-VAD` header; the backend leg is told the
-  mode in `X-Barge-In-VAD`. `mod_vad_silero` and `mod_vad_detect` are loaded for it. See
-  [barge-in](../docs/barge-in.md).
+  mode in `X-Barge-In-VAD`. The detector is `BARGE_IN_VAD_ENGINE`'s (`silero` or `webrtc`), or the caller's
+  `X-Barge-In-VAD-Engine`; both are `mod_speech_detect`'s, which is loaded for it. See [barge-in](../docs/barge-in.md).
 - **Variables** come from the environment at start through `X-PRE-PROCESS cmd="exec-set"` (`bin/env.sh`):
   `BACKEND_HOST`, `LIVEKIT_HOST`, `TRANSFER_HOST`, `UNREACHABLE_HOST`, `RING_TIMEOUT`, `FALLBACK_TONE_HZ`,
   `FALLBACK_TONE_MS`, `ESL_LISTEN_IP`, `BARGE_IN_VAD`, `BARGE_IN_VAD_ENGINE`, `BARGE_IN_ECHO_CANCEL`.

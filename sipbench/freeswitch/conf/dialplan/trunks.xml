@@ -49,7 +49,8 @@
     <!--
       Barge-in voice detection (vars.xml, barge_in_vad): the fleet's mode, or the caller's X-Barge-In-VAD header
       (livekit | freeswitch). The backend gets the mode in force in the same header, so the agent knows whether to
-      run its own detector or listen for the edge's.
+      run its own detector or listen for the edge's. The detector (barge_in_vad_engine) likewise: the fleet's, or the
+      caller's X-Barge-In-VAD-Engine (silero | webrtc).
     -->
     <extension name="barge-in-mode" continue="true">
       <condition field="destination_number" expression="^.+$">
@@ -65,6 +66,11 @@
         <action application="set" data="barge_in_vad=$1" inline="true"/>
       </condition>
     </extension>
+    <extension name="barge-in-engine-from-caller" continue="true">
+      <condition field="${sip_h_X-Barge-In-VAD-Engine}" expression="^(silero|webrtc)$">
+        <action application="set" data="barge_in_vad_engine=$1" inline="true"/>
+      </condition>
+    </extension>
     <extension name="barge-in-mode-to-backend" continue="true">
       <condition field="destination_number" expression="^.+$">
         <action application="set" data="sip_h_X-Barge-In-VAD=${barge_in_vad}" inline="true"/>
@@ -74,42 +80,41 @@
     <!--
       With "freeswitch", once the call is answered: echo cancellation on what the caller sends (unless
       barge_in_echo_cancel is 0), then a detector on it (media bug "caller"), and a second detector on what the agent
-      sends, the backend leg's own audio (media bug "agent"), so a consumer can set a higher bar for caller speech
-      while we are talking. Each detector reads its leg's incoming audio only. Events, on each change: CUSTOM
-      vad_silero:detect (silero; detected-event start_talking or stop_talking, with a JSON body carrying the
-      window's "probability") or vad_detect:detection (webrtc; the same two), told apart by media-bugname.
+      sends, the backend leg's own audio (detector "agent"), so a consumer can set a higher bar for caller speech
+      while we are talking. Each detector reads its leg's incoming audio only. The detectors are mod_speech_detect's
+      (images/freeswitch/mod_speech_detect at the repository root); on each change they fire CUSTOM
+      speech_detect::change: Speech-Event started or stopped, Speech-Detector caller or agent, Speech-Engine,
+      Speech-At (when, in Unix ms) and, from silero, Speech-Probability.
     -->
     <extension name="barge-in-engine-silero" continue="true">
       <condition field="${barge_in_vad}" expression="^freeswitch$"/>
       <condition field="${barge_in_vad_engine}" expression="^silero$">
-        <!-- threshold 0.5; silence, padding and speech minimums at the module's defaults (100, 30, 250 ms) -->
-        <action application="set" data="barge_in_vad_api=uuid_vad_silero" inline="true"/>
-        <action application="set" data="barge_in_vad_args=continuous 0.5 0 0 0" inline="true"/>
+        <!-- a start takes 250 ms of windows scoring 0.5 or more; a stop, 100 ms scoring under 0.35 -->
+        <action application="set" data="barge_in_detector=silero threshold=0.5 min_speech_ms=250 min_silence_ms=100" inline="true"/>
       </condition>
     </extension>
     <extension name="barge-in-engine-webrtc" continue="true">
       <condition field="${barge_in_vad}" expression="^freeswitch$"/>
       <condition field="${barge_in_vad_engine}" expression="^webrtc$">
-        <!-- mode 3 (the strictest about what counts as voice), 300 ms of silence to stop, 100 ms of voice to start -->
-        <action application="set" data="barge_in_vad_api=uuid_vad_detect" inline="true"/>
-        <action application="set" data="barge_in_vad_args=continuous 3 300 100" inline="true"/>
+        <!-- mode 3 (the strictest about what counts as voice), 100 ms of voice to start, 300 ms of silence to stop -->
+        <action application="set" data="barge_in_detector=webrtc mode=3 voice_ms=100 silence_ms=300" inline="true"/>
       </condition>
     </extension>
     <extension name="barge-in-echo-cancel" continue="true">
-      <condition field="${barge_in_vad_api}" expression="^.+$"/>
+      <condition field="${barge_in_detector}" expression="^.+$"/>
       <condition field="${barge_in_echo_cancel}" expression="^[1-9][0-9]*$">
         <action application="set" data="api_on_answer_1=uuid_preprocess ${uuid} r.echo_cancel=${barge_in_echo_cancel}" inline="true"/>
       </condition>
     </extension>
     <extension name="barge-in-detect" continue="true">
-      <condition field="${barge_in_vad_api}" expression="^.+$">
-        <action application="set" data="api_on_answer_2=${barge_in_vad_api} ${uuid} start ${barge_in_vad_args} caller" inline="true"/>
+      <condition field="${barge_in_detector}" expression="^.+$">
+        <action application="set" data="api_on_answer_2=uuid_speech_detect ${uuid} start caller ${barge_in_detector}" inline="true"/>
         <!-- The backend leg's detector starts when that leg answers; its uuid is chosen here so the command can name it,
              and so the exporter's relay can find the leg to send this call's detections on as SIP INFO. FreeSWITCH
              sends an INFO only to a far end that says it takes them (X-FS-Support: send_info), which no agent does,
              unless the leg sets fs_send_unsupported_info. -->
         <action application="set" data="barge_in_agent_uuid=${create_uuid()}" inline="true"/>
-        <action application="set" data="barge_in_leg_vars=,origination_uuid=${barge_in_agent_uuid},fs_send_unsupported_info=true,api_on_answer=${barge_in_vad_api} ${barge_in_agent_uuid} start ${barge_in_vad_args} agent" inline="true"/>
+        <action application="set" data="barge_in_leg_vars=,origination_uuid=${barge_in_agent_uuid},fs_send_unsupported_info=true,api_on_answer=uuid_speech_detect ${barge_in_agent_uuid} start agent ${barge_in_detector}" inline="true"/>
       </condition>
     </extension>
 
