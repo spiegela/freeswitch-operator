@@ -1,0 +1,145 @@
+# The FreeSWITCH fleet
+
+A `FreeswitchCluster` runs one fleet of FreeSWITCH nodes: one pod per node on the host network, kept in Kamailio's
+dispatcher list while it can take calls, drained before it goes away, and rolled one node at a time when anything
+changes.
+
+## The `FreeswitchCluster` resource
+
+```yaml
+apiVersion: sip.instruments.com/v1alpha1
+kind: FreeswitchCluster
+metadata:
+  name: edge
+  namespace: telephony
+spec:
+  replicas: 3                       # one pod per node; keep one spare for updates
+  image: ghcr.io/spiegela/freeswitch@sha256:…   # any image with freeswitch and fs_cli; this one adds mod_pgsql
+  nodeSelector:                     # pin to the edge node group
+    node-role.example.com/sip-edge: "true"
+  tolerations: []
+  env: []                           # read by the configuration (vars.xml), e.g. call tracking's CORE_DB_DSN
+  sip:
+    port: 5060                      # the profile Kamailio dispatches to
+  rtp:
+    portRangeStart: 16384           # must match the node security group
+    portRangeEnd: 32768
+  externalAddress:
+    source: NodeExternalIP          # NodeExternalIP | AddressPool | None
+    # addressPoolRef: {name: edge-media}   # with AddressPool: a SIPAddressPool (address-pools.md)
+  config:
+    mountPath: /usr/local/freeswitch/conf   # point FreeSWITCH here with -conf
+    configMapRefs:                  # each ConfigMap's keys become files in its directory; an edit rolls the fleet
+      - {name: edge-freeswitch-conf, path: "."}
+      - {name: edge-freeswitch-profiles, path: sip_profiles}
+  drain:
+    maxDrainSeconds: 7200           # upper bound on waiting for live calls to finish
+  # liveness: {}                    # opt-in hang detection (below)
+  dispatcher:
+    setID: 1                        # Kamailio dispatcher set for this fleet
+    configMapName: edge-dispatcher  # the operator writes dispatcher.list here
+    jsonrpcURL: ""                  # optional, for a Kamailio you run yourself (below)
+  metrics:                          # optional: a Prometheus exporter beside FreeSWITCH in each pod (metrics.md)
+    exporterImage: ghcr.io/spiegela/freeswitch-exporter@sha256:…
+    port: 9282
+status:
+  readyReplicas: 2
+  members:                          # one entry per pod
+    - pod: edge-0
+      node: ip-10-0-1-23
+      address: 10.0.1.23            # what Kamailio dispatches to (the node's private address)
+      externalAddress: 203.0.113.10 # what peers see
+      state: Active                 # Starting | Active | Draining
+  currentRevision: edge-7c9d…
+  updateRevision: edge-7c9d…
+  conditions: []
+```
+
+[`config/samples`](../config/samples/) has a complete example, and [`deploy/kind/freeswitchcluster.yaml`](../deploy/kind/freeswitchcluster.yaml)
+is the one the kind edge runs.
+
+## Pods, service and disruption budget
+
+The operator renders a StatefulSet with:
+
+- `hostNetwork: true` and `dnsPolicy: ClusterFirstWithHostNet`, so the pod uses the node's network but can still
+  resolve cluster services.
+- A required pod anti-affinity on the hostname, so there is never more than one FreeSWITCH per node (ports clash
+  otherwise).
+- `updateStrategy: OnDelete`, so the operator, not the StatefulSet controller, decides when a pod is replaced.
+- `terminationGracePeriodSeconds` set from `drain.maxDrainSeconds`, so a draining pod isn't killed early.
+- A `preStop` hook, a startup probe and a readiness probe from scripts the operator ships in a ConfigMap, so any
+  image with `freeswitch` and `fs_cli` works:
+  - **Startup** passes once FreeSWITCH is ready with a SIP profile running on `sip.port`, the port Kamailio sends
+    to. (FreeSWITCH calls itself ready even with no profile loaded.) A pod that doesn't get there within two
+    minutes is restarted. That costs nothing: it has never been ready, so it holds no calls.
+  - **Readiness** adds "not draining" and, when required, "knows its external address". It keeps re-checking the
+    profile, so a profile that stops later takes the node out of dispatch without touching its calls.
+  - **Liveness is opt-in** (`spec.liveness`). A failure restarts the container and drops every call on the node,
+    and `fs_cli` can be slow under load, so a false positive at peak would do more harm than the hang it guards
+    against. A crash needs no probe: the process exits and the container restarts. With `liveness: {}` the probe
+    fails only when FreeSWITCH doesn't answer `fs_cli status` at all (not ready, paused and draining all count as
+    alive). It checks every 30 s with a 15 s timeout and restarts after 10 misses in a row, about five minutes of
+    silence. `fs_cli` gives up two seconds before the probe does, so a slow answer is a counted miss, never a
+    killed probe.
+- A downward-API volume of the pod's annotations, through which the operator hands the pod its external address
+  ([address pools](address-pools.md)).
+
+It also creates a headless Service selecting the pods (readiness decides membership) and a PodDisruptionBudget
+with `maxUnavailable: 1`.
+
+## Dispatcher membership
+
+**The headless Service's EndpointSlices are the source of truth: a ready endpoint takes new calls.** The operator
+watches them and:
+
+1. Renders Kamailio's `dispatcher.list` (one line per ready node, set `dispatcher.setID`) into the ConfigMap named
+   by `dispatcher.configMapName`. A `KamailioCluster` that dispatches to the fleet reads it and drives its own pods
+   ([Kamailio](kamailio.md)); a Kamailio you run yourself mounts it.
+2. For a Kamailio you run yourself, if `dispatcher.jsonrpcURL` is set, calls Kamailio's JSON-RPC:
+   `dispatcher.set_state` to take a draining node out at once, then `dispatcher.reload` once the new list should be
+   on disk (`dispatcher.reloadDelaySeconds`, a guess at the kubelet's sync time). After each reload it reads the
+   list back (`dispatcher.list`) and reloads again every 10 s until Kamailio holds the one it wrote. When the URL
+   names a Service in the cluster, each call goes to every ready Kamailio pod behind it, not just the one the
+   Service would pick, so every Kamailio hears of each change. A Kamailio that starts later reads the current list
+   from disk.
+
+Kamailio's own OPTIONS probing (`ds_ping_interval`) stays on as a backstop. FreeSWITCH answers new calls with `503`
+while paused, so the dispatcher fails over on a `503` in the gap between "not ready" and "Kamailio knows".
+
+## Drains and rolling updates
+
+**One mechanism serves both: a pod is drained by deleting it, and its `preStop` hook does the waiting.**
+
+- `preStop` marks the pod as draining (readiness fails at once, so it leaves dispatch), runs `fsctl pause inbound`,
+  and waits until `show calls count` reaches zero or `maxDrainSeconds` passes. If FreeSWITCH is still starting, it
+  first waits (up to 60 s) for it to be ready: FreeSWITCH loses a SIGTERM that arrives while it starts, and the pod
+  would then sit `Terminating` for its whole grace period.
+- **Rolling update:** when the pod template changes, the operator replaces one pod at a time, and only while every
+  other pod is ready and none is terminating: delete, wait for the replacement to pass readiness, move on. A
+  replacement that never gets its SIP profile up stops the roll there, with the rest of the fleet still serving.
+- **Node drain, autoscaler consolidation or node expiry:** eviction respects the PodDisruptionBudget, and the same
+  `preStop` drain runs under the same long grace period.
+- **Keep a spare.** With one pod per node, an update without a spare runs a node short for its whole length.
+
+## Configuration from ConfigMaps
+
+The operator assembles FreeSWITCH's configuration directory from ConfigMaps (applied from git by Flux, say). Each
+reference names a directory under `config.mountPath` (`.` for the top, `autoload_configs`, `sip_profiles`, ...).
+The operator lays the ConfigMaps' keys out there as one read-only projected volume, so a whole tree like
+FreeSWITCH's own fits.
+
+- **An edit rolls the fleet; it never lands in a running pod.** Pods never mount the ConfigMaps themselves: the
+  kubelet would push an edit into every running pod within a minute, ahead of any drain. Instead the operator
+  copies each one into an immutable ConfigMap named by a hash of its contents (`<cluster>-config-<hash>`), and each
+  revision of the pod template mounts its own copies. An edit makes a new template, which is rolled through one
+  drained node at a time, while pods not yet replaced keep the files they started with. Copies that no template or
+  pod uses any more are deleted.
+- **A bad reference stops everything.** A missing or empty ConfigMap, or two claiming the same path, marks the
+  fleet `Degraded`, leaves the running pods alone and pauses any roll in progress. An empty one is nearly always an
+  accident, and rolling it out could remove a whole directory, such as every SIP profile. To ship an empty
+  directory on purpose, drop the reference.
+
+sipbench's edge configuration ([`sipbench/freeswitch/conf`](../sipbench/freeswitch/conf/)) is the working example,
+with [`sipbench/freeswitch/kustomization.yaml`](../sipbench/freeswitch/kustomization.yaml) turning it into
+ConfigMaps.

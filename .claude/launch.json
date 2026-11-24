@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "call-watch",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["/Users/spiegela/CI/platform-gitops/tools/call-watch/call_watch.py"],
+      "port": 8787
+    }
+  ]
+}

@@ -35,7 +35,7 @@
        the agent behind LiveKit SIP, and the edge only says so (X-Barge-In-VAD on the backend leg). "freeswitch" has
        the edge cancel echo and run a voice detector on what the caller sends, and another on what the agent sends
        (so a consumer knows when we are talking), firing events on the event socket. A call's X-Barge-In-VAD header
-       overrides it. See dialplan/trunks.xml and "Voice detection for barge-in" in the top-level README. -->
+       overrides it. See dialplan/trunks.xml and docs/barge-in.md at the repository root. -->
   <X-PRE-PROCESS cmd="exec-set" data="barge_in_vad=/bin/sh /usr/local/freeswitch/conf/bin/env.sh BARGE_IN_VAD livekit"/>
   <!-- The detector with "freeswitch": silero (mod_vad_silero, a neural model; events carry a probability) or webrtc
        (mod_vad_detect, FreeSWITCH's libfvad VAD; start and stop events only). -->

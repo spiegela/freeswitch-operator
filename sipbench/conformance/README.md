@@ -36,7 +36,7 @@ cases:
     status: covered                   # covered | partial | planned | not-applicable
     scenarios: [dtmf-both-ways]       # sipbench scenario names (the name: field); required for covered/partial
     gap: ...                          # partial: what the scenarios don't check yet
-    milestone: M2                     # planned: when (see the milestones in the top-level README)
+    milestone: M5                     # planned: which roadmap feature (below)
     impairment: {loss: 3%, jitter: 30ms}   # optional: network conditions the case runs under
     reason: ...                       # not-applicable: why (e.g. registrar behaviour; the edge is no registrar)
 ```
@@ -48,7 +48,9 @@ cases:
 Statuses:
 - **covered**: a scenario checks what `expect` says.
 - **partial**: a scenario checks some of it; `gap` says what's missing.
-- **planned**: worth checking on this edge; `milestone` says when.
+- **planned**: worth checking on this edge; `milestone` says which feature on the
+  [roadmap](../../README.md#roadmap) will check it: `M2b` bench tooling, `M3` address pools on AWS, `M4` failover
+  with call recovery, `M5` peers.
 - **not-applicable**: doesn't apply to this edge (a registrar test, an ISUP gateway test); `reason` says why.
 
 Sources' text stays out of this repository: entries carry the source's identifiers and our own paraphrase.

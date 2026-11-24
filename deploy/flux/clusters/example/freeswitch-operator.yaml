@@ -6,9 +6,7 @@ metadata:
   namespace: flux-system
 spec:
   interval: 10m
-  url: ssh://git@git.example.com/sip/freeswitch-operator.git
-  secretRef:
-    name: freeswitch-operator-deploy-key
+  url: https://github.com/spiegela/freeswitch-operator.git
   ref:
     tag: v0.1.0
 ---
@@ -27,5 +25,5 @@ spec:
   wait: true
   images:
     - name: controller
-      newName: registry.example.com/sip/freeswitch-operator
-      newTag: v0.1.0
+      newName: ghcr.io/spiegela/freeswitch-operator   # published by .github/workflows/publish.yml
+      newTag: "0.1.0"                               # the image tag drops the git tag's "v"
