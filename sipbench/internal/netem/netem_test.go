@@ -260,18 +260,20 @@ func TestPlan(t *testing.T) {
 		"ip link set sbnetem0 up",
 		"ip link set sbnetem1 up",
 		"tc qdisc add dev sbnetem1 handle ffff: ingress",
-		"tc filter add dev sbnetem1 parent ffff: matchall action skbedit ptype host",
+		"tc filter add dev sbnetem1 parent ffff: matchall action skbedit ptype host pipe action skbedit mark 0x5b4e pipe " +
+			"action mirred ingress redirect dev eth0",
 		"tc qdisc add dev sbnetem0 root handle 1: prio bands 3 priomap" + zeros,
 		"tc qdisc add dev eth0 handle ffff: ingress",
+		"tc filter add dev eth0 parent ffff: protocol ip prio 1 u32 match mark 0x5b4e 0xffffffff action pass",
 		// Impairment 1: RTP out only, from the runner's RTP ports.
-		"tc filter add dev eth0 parent 1: protocol ip prio 1 u32 match ip protocol 17 0xff match ip sport 20480 0xf000 flowid 1:2",
+		"tc filter add dev eth0 parent 1: protocol ip prio 2 u32 match ip protocol 17 0xff match ip sport 20480 0xf000 flowid 1:2",
 		// Impairment 2: SIP both ways, to and from the edge's SIP port, over UDP and TCP.
-		"tc filter add dev eth0 parent 1: protocol ip prio 2 u32 match ip protocol 17 0xff match ip dport 5060 0xffff flowid 1:3",
-		"tc filter add dev eth0 parent 1: protocol ip prio 2 u32 match ip protocol 6 0xff match ip dport 5060 0xffff flowid 1:3",
-		"tc filter add dev eth0 parent ffff: protocol ip prio 2 u32 match ip protocol 17 0xff match ip sport 5060 0xffff action mirred egress redirect dev sbnetem0",
-		"tc filter add dev sbnetem0 parent 1: protocol ip prio 2 u32 match ip protocol 17 0xff match ip sport 5060 0xffff flowid 1:3",
-		"tc filter add dev eth0 parent ffff: protocol ip prio 2 u32 match ip protocol 6 0xff match ip sport 5060 0xffff action mirred egress redirect dev sbnetem0",
-		"tc filter add dev sbnetem0 parent 1: protocol ip prio 2 u32 match ip protocol 6 0xff match ip sport 5060 0xffff flowid 1:3",
+		"tc filter add dev eth0 parent 1: protocol ip prio 3 u32 match ip protocol 17 0xff match ip dport 5060 0xffff flowid 1:3",
+		"tc filter add dev eth0 parent 1: protocol ip prio 3 u32 match ip protocol 6 0xff match ip dport 5060 0xffff flowid 1:3",
+		"tc filter add dev eth0 parent ffff: protocol ip prio 3 u32 match ip protocol 17 0xff match ip sport 5060 0xffff action mirred egress redirect dev sbnetem0",
+		"tc filter add dev sbnetem0 parent 1: protocol ip prio 3 u32 match ip protocol 17 0xff match ip sport 5060 0xffff flowid 1:3",
+		"tc filter add dev eth0 parent ffff: protocol ip prio 3 u32 match ip protocol 6 0xff match ip sport 5060 0xffff action mirred egress redirect dev sbnetem0",
+		"tc filter add dev sbnetem0 parent 1: protocol ip prio 3 u32 match ip protocol 6 0xff match ip sport 5060 0xffff flowid 1:3",
 	}, "\n")
 	if got := lines(p.Setup); got != wantSetup {
 		t.Errorf("setup:\n%s\nwant:\n%s", got, wantSetup)

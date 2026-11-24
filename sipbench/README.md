@@ -307,8 +307,10 @@ Two mechanisms, chosen by the knobs:
   and TCP to or from the edge's SIP port, `rtp` is the runner's RTP ports (it keeps its media to 20480-24575 so
   one u32 mask matches them), `all` is both; DNS, the mock's API and the Kubernetes API are never touched.
   `from-edge` needs what arrives to be delayed too, and tc only shapes what leaves an interface: matching arrivals
-  are redirected out of a veth pair (`sbnetem0`/`sbnetem1`) and come back in through its peer. (The ifb device does
-  this usually; the Docker Desktop kernel, and so kind's, has none.) `burst` turns `loss` into Gilbert-Elliott
+  are redirected out of a veth pair (`sbnetem0`/`sbnetem1`), then marked and sent back in through the interface
+  they arrived on, where marked packets skip the redirect. (The ifb device does this usually; the Docker Desktop
+  kernel, and so kind's, has none. They go back in through that interface, not the address-less peer, because
+  reverse-path filtering (`rp_filter` 1 or 2, as on Ubuntu hosts) would drop them there.) `burst` turns `loss` into Gilbert-Elliott
   loss with that mean run length. `at`/`for` turn an impairment on that long after the first call is answered, and
   off again. The runner removes everything when the scenario ends, and clears leftovers before it starts.
 - **The runner's SIP layer** for `drop` and `match`: each call has its own UDP socket, and named messages are
