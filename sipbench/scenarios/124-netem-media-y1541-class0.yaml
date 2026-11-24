@@ -1,5 +1,6 @@
 name: netem-media-y1541-class0
 area: impairment
+long: true
 description: >
   The caller's media at the ITU-T Y.1541 class 0 limits, each direction: 100 ms delay, 50 ms of jitter around
   it, 0.1% loss. Each side hears the other's tone, and the caller measures about the injected loss.

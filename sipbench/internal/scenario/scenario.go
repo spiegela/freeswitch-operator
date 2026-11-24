@@ -54,6 +54,9 @@ type Scenario struct {
 	Metrics []MetricCheck `yaml:"metrics,omitempty"`
 	// TimeoutMs bounds the whole scenario. Default 60000.
 	TimeoutMs int `yaml:"timeoutMs,omitempty"`
+	// Long marks a scenario that takes long enough (waiting out a media timeout, a blackout, a full roll) to leave
+	// out of quick runs: sipbench -short skips it. CI's pull requests run -short; main and release tags run it all.
+	Long bool `yaml:"long,omitempty"`
 
 	// File is where the scenario was loaded from.
 	File string `yaml:"-"`

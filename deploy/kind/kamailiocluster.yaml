@@ -15,4 +15,6 @@ spec:
     source: None
   dispatch:
     - freeswitchCluster: edge
-  reloadDelaySeconds: 75
+  # kind's kubelets sync every 10 s (kind-config.yaml), not the default minute, so the list is on disk well
+  # within this; the operator checks it loaded, and reloads again every 10 s until it has.
+  reloadDelaySeconds: 20

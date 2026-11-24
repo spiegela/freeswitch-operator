@@ -1,5 +1,6 @@
 name: netem-dtmf-loss
 area: impairment
+long: true
 description: >
   RFC 4733 digits under 5% media loss each way, 20 times over: the backend records exactly 1234# and the caller
   exactly 4321 every time (no digit missing, none doubled, order kept).

@@ -50,8 +50,12 @@ jobs:
       - name: Raise inotify limits for a six-node cluster
         run: sudo sysctl -w fs.inotify.max_user_instances=512 fs.inotify.max_user_watches=524288
 
-      - name: Create the cluster
-        run: make kind-up
+      # The images build while kind starts the nodes; deploy then finds them in the build cache.
+      - name: Create the cluster and build the images
+        run: |
+          hack/kind.sh images & images=$!
+          make kind-up
+          wait "$images"
 
       - name: Deploy the operator, Kamailio, the FreeswitchCluster and the bench
         run: make kind-deploy

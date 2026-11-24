@@ -1,5 +1,6 @@
 name: node-lost-mid-call
 area: fleet
+long: true
 description: >
   An edge node goes dark mid-call. Ten seconds into a call the runner takes the call's node off the network for
   two minutes (no packet in or out, ARP included, as if it had lost power), longer than FreeSWITCH's media

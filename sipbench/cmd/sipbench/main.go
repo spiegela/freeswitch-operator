@@ -137,6 +137,7 @@ func run(args []string) (int, error) {
 	prom := fs.String("prometheus", env("SIPBENCH_PROMETHEUS", ""),
 		"Prometheus HTTP API the scenarios' metric checks query, e.g. http://prometheus:9090; empty skips them")
 	only := fs.String("run", env("SIPBENCH_RUN", ""), "only run scenarios whose name matches this regexp")
+	short := fs.Bool("short", env("SIPBENCH_SHORT", "") == "true", "skip the scenarios marked long")
 	jsonOut := fs.String("json", env("SIPBENCH_JSON", ""),
 		"write the JSON report here ('-' for stdout, which moves the summary to stderr)")
 	junitOut := fs.String("junit", "", "write a JUnit XML report here")
@@ -157,18 +158,8 @@ func run(args []string) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	if *only != "" {
-		re, err := regexp.Compile(*only)
-		if err != nil {
-			return 2, fmt.Errorf("-run: %w", err)
-		}
-		var kept []*scenario.Scenario
-		for _, s := range ss {
-			if re.MatchString(s.Name) {
-				kept = append(kept, s)
-			}
-		}
-		ss = kept
+	if ss, err = pick(ss, *only, *short); err != nil {
+		return 2, err
 	}
 
 	capSet := map[string]bool{}
@@ -261,4 +252,31 @@ func writeTo(path string, write func(io.Writer) error) error {
 		return errors.Join(err, f.Close())
 	}
 	return f.Close()
+}
+
+// pick keeps the scenarios whose name matches only (a regexp; empty keeps all), and with short leaves out those
+// marked long, saying which.
+func pick(ss []*scenario.Scenario, only string, short bool) ([]*scenario.Scenario, error) {
+	var re *regexp.Regexp
+	if only != "" {
+		var err error
+		if re, err = regexp.Compile(only); err != nil {
+			return nil, fmt.Errorf("-run: %w", err)
+		}
+	}
+	var kept []*scenario.Scenario
+	var long []string
+	for _, s := range ss {
+		switch {
+		case re != nil && !re.MatchString(s.Name):
+		case short && s.Long:
+			long = append(long, s.Name)
+		default:
+			kept = append(kept, s)
+		}
+	}
+	if len(long) > 0 {
+		fmt.Fprintf(os.Stderr, "-short: leaving out %d long scenarios: %s\n", len(long), strings.Join(long, ", "))
+	}
+	return kept, nil
 }

@@ -3,6 +3,12 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: freeswitch-operator
+# Every kubelet syncs its pods every 10 s (the default is a minute), so a changed ConfigMap, the dispatcher list
+# above all, reaches the mounted files within seconds; the KamailioCluster's reloadDelaySeconds counts on it.
+kubeadmConfigPatches:
+  - |
+    kind: KubeletConfiguration
+    syncFrequency: 10s
 nodes:
   - role: control-plane
   - role: worker

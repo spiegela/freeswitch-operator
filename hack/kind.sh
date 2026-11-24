@@ -3,6 +3,7 @@
 # behind and in front.
 #
 #   hack/kind.sh up        create the cluster (deploy/kind/kind-config.yaml)
+#   hack/kind.sh images    build the images (deploy does too; run it beside up to have them ready sooner)
 #   hack/kind.sh deploy    build and load the images, install MetalLB, the operator and the address agent, the
 #                          edge's SIPAddressPool, apply deploy/kind/monitoring and deploy/kind, wait for both
 #                          fleets and for every Kamailio to load the dispatcher list
@@ -10,8 +11,9 @@
 #                          our patched LiveKit SIP (LIVEKIT_SIP_IMAGE, default livekit-sip:info-dev, built from the
 #                          sip-info-to-room branch of github.com/spiegela/sip) and sipbench's stand-in agent; after deploy, which builds sipbench:dev
 #   hack/kind.sh bench [re] run sipbench through Kamailio; an optional regexp picks scenarios by name, and
-#                          SIPBENCH_REPORT=<file> saves the run's JSON report there (for the report card). With
-#                          LiveKit deployed the runner asks its agent too (the livekit capability)
+#                          SIPBENCH_REPORT=<file> saves the run's JSON report there (for the report card), and
+#                          SIPBENCH_SHORT=true leaves out the scenarios marked long. With LiveKit deployed the
+#                          runner asks its agent too (the livekit capability)
 #   hack/kind.sh status    both fleets, their members and the dispatcher list each Kamailio has loaded
 #   hack/kind.sh down      delete the cluster
 #
@@ -74,15 +76,59 @@ tidy_images() {
   docker image prune -f >/dev/null
 }
 
-deploy() {
+# Run commands side by side, each "<label>\t<command>" line one job, and fail if any of them did. Each job's
+# output is held until it ends, so the jobs' lines don't interleave.
+together() {
+  local -a pids=() labels=() logs=()
+  local label cmd log i failed=0
+  while IFS=$'\t' read -r label cmd; do
+    log=$(mktemp)
+    bash -c "$cmd" >"$log" 2>&1 &
+    pids+=($!) labels+=("$label") logs+=("$log")
+  done
+  for i in "${!pids[@]}"; do
+    if wait "${pids[$i]}"; then
+      echo "${labels[$i]}: done"
+    else
+      echo "${labels[$i]}: failed" >&2
+      cat "${logs[$i]}" >&2
+      failed=1
+    fi
+    rm -f "${logs[$i]}"
+  done
+  return "$failed"
+}
+
+# Build the images side by side (the exporter after the operator: it shares the Go build stage). Unchanged ones come straight from the build cache, so deploy can rebuild after
+# images has run beside up.
+images() {
   say "building images"
-  make -C "$ROOT" kustomize >/dev/null
-  docker build -q -t freeswitch-operator:dev "$ROOT"
-  docker build -q --target exporter -t freeswitch-exporter:dev "$ROOT"
-  docker build -q -t sipbench:dev "$ROOT/sipbench"
-  docker build -q -t freeswitch:dev "$ROOT/images/freeswitch"
+  together <<EOT
+freeswitch-operator:dev, freeswitch-exporter:dev	docker build -q -t freeswitch-operator:dev "$ROOT" && docker build -q --target exporter -t freeswitch-exporter:dev "$ROOT"
+sipbench:dev	docker build -q -t sipbench:dev "$ROOT/sipbench"
+freeswitch:dev	docker build -q -t freeswitch:dev "$ROOT/images/freeswitch"
+EOT
+}
+
+# Load each image only onto the nodes that run it, side by side: FreeSWITCH (by far the largest) onto the sip-edge
+# nodes; the operator (the manager and the address agent), the exporter and sipbench (the bench, the mock backend,
+# and blackouts run on edge nodes) onto every node.
+load_images() {
+  local edge
+  edge=$("${KUBECTL[@]}" get nodes -l node-role.example.com/sip-edge=true -o jsonpath='{.items[*].metadata.name}')
   say "loading images into kind"
-  "$KIND" load docker-image --name "$CLUSTER" freeswitch-operator:dev freeswitch-exporter:dev sipbench:dev freeswitch:dev
+  together <<EOT
+freeswitch:dev	"$KIND" load docker-image --name "$CLUSTER" --nodes "${edge// /,}" freeswitch:dev
+freeswitch-operator:dev	"$KIND" load docker-image --name "$CLUSTER" freeswitch-operator:dev
+freeswitch-exporter:dev	"$KIND" load docker-image --name "$CLUSTER" freeswitch-exporter:dev
+sipbench:dev	"$KIND" load docker-image --name "$CLUSTER" sipbench:dev
+EOT
+}
+
+deploy() {
+  make -C "$ROOT" kustomize >/dev/null
+  images
+  load_images
   tidy_images
   say "pulling pinned images on the nodes"
   pull_pinned
@@ -328,6 +374,7 @@ bench() {
   # nothing, hence the plain cat without either.)
   if [ -n "$filter" ]; then envs+=("SIPBENCH_RUN=$filter"); fi
   if [ -n "$report" ]; then envs+=("SIPBENCH_JSON=-"); fi
+  if [ "${SIPBENCH_SHORT:-}" = true ]; then envs+=("SIPBENCH_SHORT=true"); fi
   if "${KUBECTL[@]}" -n livekit get deployment/lkagent >/dev/null 2>&1; then
     envs+=("SIPBENCH_LKAGENT=http://lkagent.livekit.svc.cluster.local:8080")
   fi
@@ -363,6 +410,6 @@ down() { "$KIND" delete cluster --name "$CLUSTER"; }
 cmd="${1:-}"
 shift || true
 case "$cmd" in
-  up | deploy | livekit | bench | status | down) "$cmd" "$@" ;;
-  *) sed -n '2,15p' "$0"; exit 2 ;;
+  up | images | deploy | livekit | bench | status | down) "$cmd" "$@" ;;
+  *) sed -n '2,18p' "$0"; exit 2 ;;
 esac

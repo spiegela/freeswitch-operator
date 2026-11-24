@@ -1,5 +1,6 @@
 name: netem-media-loss
 area: impairment
+long: true
 description: >
   5% independent loss on the caller's media, each direction. Each side still hears the other's tone in at least
   90% of its frames, and the loss the caller measures by RTP sequence number matches what was injected. The

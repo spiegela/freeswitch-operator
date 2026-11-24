@@ -1,5 +1,6 @@
 name: netem-sig-loss-random
 area: impairment
+long: true
 description: >
   5% random loss on the caller's signalling, each direction, over 50 calls. Every call is answered and ends
   cleanly with one leg at the backend; retransmissions recover the losses, so setup time p95 stays within about
