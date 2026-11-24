@@ -9,7 +9,8 @@ spec:
   # One FreeSWITCH per node; keep one spare for updates and failover.
   replicas: 3
   # Any image with freeswitch, fs_cli and /bin/sh. This public image (FreeSWITCH 1.10.10, amd64 and arm64)
-  # is the one sipbench tests against; build and pin your own once you need something it lacks.
+  # is the one sipbench's compose bench tests against. For call tracking use the project's own build of it with
+  # mod_pgsql, ghcr.io/spiegela/freeswitch (docs/call-tracking.md).
   image: drachtio/drachtio-freeswitch-mrf:0.9.6@sha256:cb81acc1112990ca33693374f1de7443d44cf9c95e6ae6c02ba1edcee4b68bba
   # The config below is mounted read-only, and this image's entrypoint edits its config (sed -i) before starting,
   # so it would exit at once. Run the binary against the assembled config instead.
@@ -46,10 +47,11 @@ spec:
     transport: udp
     # A KamailioCluster (sip_v1alpha1_kamailiocluster.yaml) reads this list and drives its own pods. Only a
     # Kamailio you run yourself needs jsonrpcURL here.
-  # A Prometheus exporter beside FreeSWITCH in each pod (see "Metrics and alerts" in the README). The exporter
-  # image is built from this repository (make docker-build-exporter); pin it by digest. Changing it rolls the fleet.
+  # A Prometheus exporter beside FreeSWITCH in each pod (docs/metrics.md). The exporter
+  # image is published from this repository (ghcr.io/spiegela/freeswitch-exporter); pin it by digest. Changing it
+  # rolls the fleet.
   # metrics:
-  #   exporterImage: <registry>/freeswitch-exporter@sha256:<digest>
+  #   exporterImage: ghcr.io/spiegela/freeswitch-exporter@sha256:<digest>
   #   port: 9282
   #   eventSocket:
   #     passwordSecretRef: {name: edge-event-socket, key: password}

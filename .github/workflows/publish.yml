@@ -1,0 +1,109 @@
+name: Publish images
+
+# Publishes the project's images to the GitHub Container Registry, for anyone running the operator:
+#
+#   ghcr.io/spiegela/freeswitch-operator   the manager, and the address agent (Dockerfile, target manager)
+#   ghcr.io/spiegela/freeswitch-exporter   the FreeSWITCH metrics exporter (Dockerfile, target exporter)
+#   ghcr.io/spiegela/freeswitch            drachtio's FreeSWITCH plus mod_pgsql (images/freeswitch)
+#   ghcr.io/spiegela/sipbench              the bench: sipbench, mockbackend, lkagent (sipbench/Dockerfile)
+#
+# Each is built for linux/amd64 and linux/arm64. A release (a push to main) is tagged `latest` and
+# `sha-<short commit>`; a `v*` tag adds its version (`1.2.3` and `1.2`). It runs only on the public GitHub
+# repository, whose own token pushes the packages; in a fork or mirror the job is skipped.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'spiegela/freeswitch-operator'
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io/spiegela
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: freeswitch-operator
+            context: .
+            target: manager
+            description: Kubernetes operator for a FreeSWITCH SIP edge behind Kamailio
+          - image: freeswitch-exporter
+            context: .
+            target: exporter
+            description: Prometheus exporter for FreeSWITCH, run beside each FreeSWITCH node
+          - image: freeswitch
+            context: images/freeswitch
+            target: ""
+            description: FreeSWITCH 1.10.10 (drachtio's build) plus mod_pgsql
+          - image: sipbench
+            context: sipbench
+            target: ""
+            description: SIP test bench for the FreeSWITCH edge
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # images/freeswitch compiles mod_pgsql against the target's own headers, so its arm64 build runs emulated.
+      # The Go images cross-compile on the runner's own platform.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags and labels
+        id: meta
+        env:
+          # Annotate the multi-arch index too, which is what GHCR shows.
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/spiegela/${{ matrix.image }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.vendor=Computer Instruments
+          annotations: |
+            org.opencontainers.image.description=${{ matrix.description }}
+
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

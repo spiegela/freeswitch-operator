@@ -47,7 +47,7 @@ docker compose down
 ```
 
 On a cluster, behind Kamailio and a `FreeswitchCluster`: `make kind-up kind-deploy kind-bench` from the repository
-root (see "The edge on kind" in the top-level README). The same configuration and scenarios run there:
+root (see [the edge on kind](../docs/development.md#the-edge-on-kind)). The same configuration and scenarios run there:
 [`freeswitch/kustomization.yaml`](freeswitch/kustomization.yaml) turns `freeswitch/conf` into one ConfigMap per
 directory, and [`k8s/`](k8s/) holds the mock backend, the runner's transfer Service and the runner Job. Add a file
 under `freeswitch/conf` to that kustomization too; `go test ./...` fails until you do. `hack/kind.sh bench <regexp>`
@@ -355,7 +355,7 @@ To run the netem scenarios in compose beside another checkout, give the stack it
 `metrics:` lists counters a scenario should raise, each a PromQL query giving one number and the least it must rise
 by: `{query: 'sum(kamailio_rejected_requests_total{reason="uri_scheme"})', increase: 4}`. No result counts as 0.
 The runner queries the Prometheus HTTP API named by `-prometheus` (`SIPBENCH_PROMETHEUS`; on kind the Prometheus
-the Collector sends to, see the top-level README). Before the scenario it waits for each value to hold still for
+the Collector sends to, see [development](../docs/development.md#the-edge-on-kind)). Before the scenario it waits for each value to hold still for
 12 s, so a count from the scenario before can't land in this one; after it, it waits up to a minute for the rise.
 Without `-prometheus` the checks are reported as not checked and don't fail the scenario. Results carry `metrics`:
 each query's value before and after.
@@ -424,8 +424,8 @@ A minimal SBC, deliberately small enough to read in one sitting:
   a voice detector on what the caller sends, another on what the backend sends, each detection sent to the backend
   as a SIP INFO by the exporter's relay; the backend leg sets `fs_send_unsupported_info` so FreeSWITCH sends them), set
   by `BARGE_IN_VAD` and overridden per call by the caller's `X-Barge-In-VAD` header; the backend leg is told the
-  mode in `X-Barge-In-VAD`. `mod_vad_silero` and `mod_vad_detect` are loaded for it. See "Voice detection for
-  barge-in" in the top-level README.
+  mode in `X-Barge-In-VAD`. `mod_vad_silero` and `mod_vad_detect` are loaded for it. See
+  [barge-in](../docs/barge-in.md).
 - **Variables** come from the environment at start through `X-PRE-PROCESS cmd="exec-set"` (`bin/env.sh`):
   `BACKEND_HOST`, `LIVEKIT_HOST`, `TRANSFER_HOST`, `UNREACHABLE_HOST`, `RING_TIMEOUT`, `FALLBACK_TONE_HZ`,
   `FALLBACK_TONE_MS`, `ESL_LISTEN_IP`, `BARGE_IN_VAD`, `BARGE_IN_VAD_ENGINE`, `BARGE_IN_ECHO_CANCEL`.

@@ -8,8 +8,9 @@ metadata:
 spec:
   # One FreeSWITCH per node; keep one spare for updates and failover.
   replicas: 3
-  # Any image with freeswitch, fs_cli and /bin/sh. Build and pin your own for production.
-  image: registry.example.com/freeswitch:1.10.12-1
+  # Any image with freeswitch, fs_cli and /bin/sh. This one is the project's own (images/freeswitch); pin it by
+  # digest in production.
+  image: ghcr.io/spiegela/freeswitch:0.1.0
   # The config below is mounted read-only: run freeswitch against it directly, past any entrypoint that edits
   # its config before starting (many public images do).
   command: ["/usr/local/freeswitch/bin/freeswitch"]

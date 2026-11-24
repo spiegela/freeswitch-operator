@@ -1,13 +1,17 @@
 # One image with the bench binaries: sipbench (the runner), mockbackend, and lkagent (a stand-in LiveKit agent).
-FROM golang:1.26-alpine AS build
+# The build stage runs on the build machine's own platform and cross-compiles for the target.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/sipbench ./cmd/sipbench \
- && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mockbackend ./cmd/mockbackend \
- && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/lkagent ./cmd/lkagent
+RUN export CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+ && go build -trimpath -ldflags="-s -w" -o /out/sipbench ./cmd/sipbench \
+ && go build -trimpath -ldflags="-s -w" -o /out/mockbackend ./cmd/mockbackend \
+ && go build -trimpath -ldflags="-s -w" -o /out/lkagent ./cmd/lkagent
 
 FROM alpine:3.22
 # tc and ip impair the runner's own traffic for the netem scenarios, and need NET_ADMIN, which only the runner's

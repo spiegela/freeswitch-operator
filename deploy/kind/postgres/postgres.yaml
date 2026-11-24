@@ -1,6 +1,6 @@
 # The edge's shared PostgreSQL on kind: FreeSWITCH's core db (channels, calls, registrations) and sofia's call
 # tracking (the recovery table), which another node reads to `sofia recover` a lost node's calls. One small instance
-# on a proxy node, as the sandbox runs it; production uses Aurora, and only the connection settings change
+# on a proxy node. A managed PostgreSQL (Aurora, say) works the same way: only the connection settings change
 # (deploy/kind/freeswitchcluster.yaml: CORE_DB_DSN and PGPASSWORD).
 apiVersion: v1
 kind: Secret
