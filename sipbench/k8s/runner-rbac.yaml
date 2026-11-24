@@ -1,9 +1,10 @@
 # What the runner may do to the fleet under test, for the scenarios that require "fleet" (drain-mid-call,
 # rolling-update-live-call, bad-config-stops-roll, pool-media-address, node-lost-mid-call): read the
-# FreeswitchCluster and roll it, read its pods' external addresses and evict them, edit the ConfigMaps it reads and
-# put them back, cordon and uncordon nodes and read whether they are ready, and, for "node-blackout", start a pod on
-# an edge node that takes the node off the network for a while (host network, root, NET_ADMIN: a bench-only power,
-# for a namespace that admits privileged pods), read its log and delete it. Only the runner Job uses this account.
+# FreeswitchCluster and roll it, read the KamailioClusters to see whether those dispatching to it hold its list, read
+# its pods' external addresses and evict them, edit the ConfigMaps it reads and put them back, cordon and uncordon
+# nodes and read whether they are ready, and, for "node-blackout", start a pod on an edge node that takes the node
+# off the network for a while (host network, root, NET_ADMIN: a bench-only power, for a namespace that admits
+# privileged pods), read its log and delete it. Only the runner Job uses this account.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -21,6 +22,9 @@ rules:
   - apiGroups: ["sip.instruments.com"]
     resources: ["freeswitchclusters"]
     verbs: ["get", "update"]
+  - apiGroups: ["sip.instruments.com"]
+    resources: ["kamailioclusters"]
+    verbs: ["list"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "create", "delete"]

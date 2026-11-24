@@ -261,7 +261,7 @@ the RFC 4475 or ETSI texts.
 | `breakConfig: {configMap, key, replace or match, with}` | edit a ConfigMap the fleet reads: the first `replace` (literal text) or the first match of `match` (a Go regular expression; `with` may use `$1`) |
 | `restoreConfig: {}` | put back every ConfigMap `breakConfig` edited |
 | `waitMember: {of: <call>, state, timeoutMs}` | wait until the call's pod is `Active`, `Draining`, `Starting` or `Gone` |
-| `waitFleetCurrent: {timeoutMs}` | wait until every pod runs the latest template and takes calls |
+| `waitFleetCurrent: {timeoutMs}` | wait until every pod runs the latest template and takes calls, and every KamailioCluster dispatching to the fleet holds a list of all of them (a reload after that would restart its probes of a node a later scenario takes away) |
 | `expectRollStuck: {forMs, timeoutMs}` | wait for a roll's first replacement, then fail if the roll goes further within `forMs`, more than one pod stops taking calls, or the replacement takes calls |
 | `blackoutNodeOf: {of, forMs}` | take the call's edge node off the network for `forMs` (at most 10 minutes), as if it had lost power; done once the node is dark |
 | `waitNode: {of, state, timeoutMs}` | wait until the call's node is `Ready` or `NotReady`, as Kubernetes reports it |
