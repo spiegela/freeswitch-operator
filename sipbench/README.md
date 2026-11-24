@@ -122,6 +122,7 @@ One YAML file per scenario in `scenarios/`. A full example:
 name: blind-transfer
 area: transfers
 requires: [mock]                 # skipped unless the run provides every capability listed
+long: false                      # true: sipbench -short leaves it out (pull requests' CI runs -short)
 setup: []                        # FreeSWITCH API commands over the event socket before ...
 teardown: []                     # ... and after
 backend:                         # routes added to the mock for this scenario only

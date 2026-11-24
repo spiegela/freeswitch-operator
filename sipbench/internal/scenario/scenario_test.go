@@ -14,11 +14,19 @@ func TestShippedScenariosLoad(t *testing.T) {
 		t.Fatalf("loaded %d scenarios, expected the full set", len(ss))
 	}
 	names := map[string]bool{}
+	long := 0
 	for _, s := range ss {
 		if names[s.Name] {
 			t.Errorf("duplicate scenario name %q", s.Name)
 		}
 		names[s.Name] = true
+		if s.Long {
+			long++
+		}
+	}
+	// -short (pull requests) must still run most of the set.
+	if long == 0 || long*2 > len(ss) {
+		t.Errorf("%d of %d scenarios are marked long; want some, and fewer than half", long, len(ss))
 	}
 }
 

@@ -1,5 +1,6 @@
 name: netem-oneway-outbound-dead
 area: impairment
+long: true
 description: >
   The edge's media never reaches the caller. The caller hears nothing, the backend hears the caller. The edge
   still receives media, so it must not time the call out: the call outlasts the 60 s media timeout and ends

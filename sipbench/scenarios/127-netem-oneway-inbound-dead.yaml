@@ -1,5 +1,6 @@
 name: netem-oneway-inbound-dead
 area: impairment
+long: true
 description: >
   The caller's media never reaches the edge. Signalling completes and the caller hears the backend, but the
   backend never hears the caller. The edge notices no RTP arriving and ends the call on its media timeout

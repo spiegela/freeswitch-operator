@@ -1,7 +1,9 @@
 name: Tests
 
+# Pull requests, and main once they land. (Not every branch push too: a pull request's branch would run twice.)
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions: {}

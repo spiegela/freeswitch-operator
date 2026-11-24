@@ -1,5 +1,6 @@
 name: netem-sig-ack-never
 area: impairment
+long: true
 description: >
   No ACK ever reaches the edge. It resends its 200 (the gaps doubling up to T2), gives up 64*T1 after the first,
   and ends the call: a BYE toward the caller, and the backend leg released.

@@ -34,7 +34,8 @@ sipbench has its own instructions in [`sipbench/README.md`](../sipbench/README.m
 ```sh
 make kind-up         # create the cluster (about 6 GB of Docker memory)
 make kind-deploy     # build and load the images, install MetalLB and the operator, apply deploy/kind, wait for both fleets
-make kind-bench      # run sipbench through Kamailio; hack/kind.sh bench <regexp> runs a subset
+make kind-bench      # run sipbench through Kamailio; hack/kind.sh bench <regexp> runs a subset, and
+                     # SIPBENCH_SHORT=true leaves out the scenarios marked long
 hack/kind.sh livekit # optional: LiveKit behind the edge's lk numbers, for the livekit scenarios (below)
 hack/kind.sh status  # both fleets' members, the combined dispatcher list, and what each Kamailio has loaded
 make kind-down
@@ -73,6 +74,15 @@ These take a few minutes and leave the fleet as they found it (nodes uncordoned,
 Checked by hand, not by a scenario: JSON-RPC without the token gets `401`; a deleted edge pod shows inactive on both
 Kamailios within a second; a change to the rendered Kamailio config rolls the proxies one pod at a time; a draining
 Kamailio answers new INVITEs with `503 Draining`.
+
+### In CI
+
+The [E2E workflow](../.github/workflows/test-e2e.yml) runs the bench on kind. On a pull request it runs the short
+set: scenarios marked `long: true` (those that wait out a media timeout or a blackout, a stuck roll, and the media
+quality figures the report card keeps) are left out, which keeps the job near a quarter of an hour. Pushes to
+`main`, `v*` tags and a run by hand (`gh workflow run test-e2e.yml --ref <branch>`) run all of it, as does the
+report card. The images build while kind creates the nodes, side by side, and FreeSWITCH's only goes to the edge
+nodes; kind's kubelets sync every 10 s, so its Kamailios reload a changed dispatcher list after 20 s, not 75.
 
 ## The report card
 

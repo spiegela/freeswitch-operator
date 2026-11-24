@@ -1,5 +1,6 @@
 name: netem-media-lte-bad
 area: impairment
+long: true
 description: >
   A poor mobile path, each direction: 36 ms delay, 30 ms jitter, 6% loss in runs of about 2 packets. The call
   stays up, tones are still recognised both ways in at least 85% of their frames, and no tone goes missing for

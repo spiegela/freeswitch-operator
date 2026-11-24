@@ -1,5 +1,6 @@
 name: bad-config-stops-roll
 area: fleet
+long: true
 description: >
   A bad config stops the roll at one node. The runner edits the fleet's SIP profiles so the trunks profile
   listens on 5061 instead of the SIP port: the operator snapshots the change and starts a roll, and the first

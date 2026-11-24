@@ -1,5 +1,6 @@
 name: netem-media-lte
 area: impairment
+long: true
 description: >
   A typical mobile caller's path, each direction: 40 ms delay, 3 ms jitter, 1% loss in runs of about 2 packets
   (Gilbert-Elliott). Tones are heard both ways with at least 95% of their frames, and the caller measures loss
