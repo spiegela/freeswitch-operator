@@ -43,3 +43,36 @@ func TestPick(t *testing.T) {
 		t.Error("took a bad regexp")
 	}
 }
+
+func TestShareable(t *testing.T) {
+	ss, err := scenario.LoadDir("../../scenarios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]*scenario.Scenario{}
+	n := 0
+	for _, s := range ss {
+		byName[s.Name] = s
+		if shareable(s) {
+			n++
+		}
+	}
+	for name, want := range map[string]bool{
+		"basic-two-way":            true,
+		"raw-unknown-version":      true,
+		"blind-transfer":           true,
+		"drain-mid-call":           false, // fleet actions
+		"netem-media-baseline":     false, // impairs the runner's own traffic
+		"rolling-update-live-call": false,
+		"raw-malformed-requests":   false, // checks Kamailio's counters
+	} {
+		if s := byName[name]; s == nil {
+			t.Errorf("no scenario %s", name)
+		} else if got := shareable(s); got != want {
+			t.Errorf("shareable(%s) = %v, want %v", name, got, want)
+		}
+	}
+	if n == 0 || n == len(ss) {
+		t.Errorf("%d of %d scenarios shareable", n, len(ss))
+	}
+}

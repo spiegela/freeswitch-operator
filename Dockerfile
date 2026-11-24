@@ -11,21 +11,21 @@ WORKDIR /workspace
 # Copy the Go Modules manifests
 COPY go.mod go.mod
 COPY go.sum go.sum
-# cache deps before building and copying source so that we don't need to re-download as much
-# and so that source changes don't invalidate our downloaded layer
-RUN go mod download
+# The module and build caches are BuildKit cache mounts: they outlive the build, so a rebuild compiles only what
+# changed (CI carries them between runs too; see test-e2e.yml).
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 # Copy the Go source (relies on .dockerignore to filter)
 COPY . .
 
-# Build
-# the GOARCH has no default value to allow the binary to be built according to the host where the command
-# was called. For example, if we call make docker-build in a local env which has the Apple Silicon M1 SO
-# the docker BUILDPLATFORM arg will be linux/arm64 when for Apple x86 it will be linux/amd64. Therefore,
-# by leaving it empty we can ensure that the container and binary shipped on it will have the same platform.
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o freeswitch-exporter ./cmd/freeswitch-exporter
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o address-agent ./cmd/address-agent
+# Build all three in one step, sharing the build cache: only the first compiles the dependencies. GOARCH has no
+# default, so the binaries are built for the target platform buildx passes (the build machine's own for a plain
+# docker build).
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    export CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+ && go build -o manager cmd/main.go \
+ && go build -o freeswitch-exporter ./cmd/freeswitch-exporter \
+ && go build -o address-agent ./cmd/address-agent
 
 # The FreeSWITCH exporter, a separate image (docker build --target exporter) so that a new operator release
 # doesn't change the FreeSWITCH pod template, which would roll every fleet.

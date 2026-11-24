@@ -79,10 +79,14 @@ Kamailio answers new INVITEs with `503 Draining`.
 
 The [E2E workflow](../.github/workflows/test-e2e.yml) runs the bench on kind. On a pull request it runs the short
 set: scenarios marked `long: true` (those that wait out a media timeout or a blackout, a stuck roll, and the media
-quality figures the report card keeps) are left out, which keeps the job near a quarter of an hour. Pushes to
-`main`, `v*` tags and a run by hand (`gh workflow run test-e2e.yml --ref <branch>`) run all of it, as does the
-report card. The images build while kind creates the nodes, side by side, and FreeSWITCH's only goes to the edge
-nodes; kind's kubelets sync every 10 s, so its Kamailios reload a changed dispatcher list after 20 s, not 75.
+quality figures the report card keeps) are left out. Pushes to `main`, `v*` tags and a run by hand
+(`gh workflow run test-e2e.yml --ref <branch>`) run all of it, as does the report card. Either way, scenarios that
+leave the edge and the network alone run four at a time (`SIPBENCH_PARALLEL`), ahead of the rest.
+
+To keep the deploy short, the images build while kind creates the nodes, side by side, and FreeSWITCH's only goes
+to the edge nodes. The Go builds keep their module and build caches in BuildKit cache mounts, which the job carries
+between runs (main saves them, pull requests restore main's), so a pull request compiles only what it changed. kind's
+kubelets sync every 10 s, so its Kamailios reload a changed dispatcher list after 20 s, not 75.
 
 ## The report card
 

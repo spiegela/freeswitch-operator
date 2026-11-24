@@ -12,8 +12,9 @@
 #                          sip-info-to-room branch of github.com/spiegela/sip) and sipbench's stand-in agent; after deploy, which builds sipbench:dev
 #   hack/kind.sh bench [re] run sipbench through Kamailio; an optional regexp picks scenarios by name, and
 #                          SIPBENCH_REPORT=<file> saves the run's JSON report there (for the report card), and
-#                          SIPBENCH_SHORT=true leaves out the scenarios marked long. With LiveKit deployed the
-#                          runner asks its agent too (the livekit capability)
+#                          SIPBENCH_SHORT=true leaves out the scenarios marked long, and SIPBENCH_PARALLEL=<n> runs
+#                          up to n shareable scenarios at once. With LiveKit deployed the runner asks its agent
+#                          too (the livekit capability)
 #   hack/kind.sh status    both fleets, their members and the dispatcher list each Kamailio has loaded
 #   hack/kind.sh down      delete the cluster
 #
@@ -375,6 +376,7 @@ bench() {
   if [ -n "$filter" ]; then envs+=("SIPBENCH_RUN=$filter"); fi
   if [ -n "$report" ]; then envs+=("SIPBENCH_JSON=-"); fi
   if [ "${SIPBENCH_SHORT:-}" = true ]; then envs+=("SIPBENCH_SHORT=true"); fi
+  if [ -n "${SIPBENCH_PARALLEL:-}" ]; then envs+=("SIPBENCH_PARALLEL=$SIPBENCH_PARALLEL"); fi
   if "${KUBECTL[@]}" -n livekit get deployment/lkagent >/dev/null 2>&1; then
     envs+=("SIPBENCH_LKAGENT=http://lkagent.livekit.svc.cluster.local:8080")
   fi
@@ -411,5 +413,5 @@ cmd="${1:-}"
 shift || true
 case "$cmd" in
   up | images | deploy | livekit | bench | status | down) "$cmd" "$@" ;;
-  *) sed -n '2,18p' "$0"; exit 2 ;;
+  *) sed -n '2,19p' "$0"; exit 2 ;;
 esac

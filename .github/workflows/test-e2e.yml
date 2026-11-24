@@ -73,6 +73,36 @@ jobs:
       - name: Raise inotify limits for a six-node cluster
         run: sudo sysctl -w fs.inotify.max_user_instances=512 fs.inotify.max_user_watches=524288
 
+      # Go's module and build caches for the image builds (BuildKit cache mounts in both Dockerfiles), carried between
+      # runs so a build compiles only what changed. Pushes to main save them; pull requests only restore main's, so
+      # they don't spend time extracting and uploading them.
+      - name: Restore the image builds' Go caches
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            image-go-mod
+            image-go-build
+          key: image-go-${{ runner.arch }}-${{ hashFiles('go.sum', 'sipbench/go.sum') }}-${{ github.sha }}
+          restore-keys: image-go-${{ runner.arch }}-
+
+      - name: Restore and save the image builds' Go caches
+        if: github.event_name != 'pull_request'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            image-go-mod
+            image-go-build
+          key: image-go-${{ runner.arch }}-${{ hashFiles('go.sum', 'sipbench/go.sum') }}-${{ github.sha }}
+          restore-keys: image-go-${{ runner.arch }}-
+
+      - name: Hand the Go caches to BuildKit
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
+        with:
+          cache-map: |
+            {"image-go-mod": "/go/pkg/mod", "image-go-build": "/root/.cache/go-build"}
+          skip-extraction: ${{ github.event_name == 'pull_request' }}
+
       # The images build while kind starts the nodes; deploy then finds them in the build cache.
       - name: Create the cluster and build the images
         run: |
@@ -86,6 +116,8 @@ jobs:
       - name: Run sipbench
         env:
           SIPBENCH_SHORT: ${{ github.event_name == 'pull_request' }}
+          # Scenarios that leave the edge and the network alone run four at a time, ahead of the rest.
+          SIPBENCH_PARALLEL: "4"
         run: make kind-bench
 
       - name: Show the cluster's state

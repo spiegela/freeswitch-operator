@@ -5,10 +5,12 @@ ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+# BuildKit cache mounts, as in the operator's Dockerfile: a rebuild compiles only what changed.
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd ./cmd
 COPY internal ./internal
-RUN export CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    export CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
  && go build -trimpath -ldflags="-s -w" -o /out/sipbench ./cmd/sipbench \
  && go build -trimpath -ldflags="-s -w" -o /out/mockbackend ./cmd/mockbackend \
  && go build -trimpath -ldflags="-s -w" -o /out/lkagent ./cmd/lkagent

@@ -19,7 +19,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -138,11 +140,20 @@ func run(args []string) (int, error) {
 		"Prometheus HTTP API the scenarios' metric checks query, e.g. http://prometheus:9090; empty skips them")
 	only := fs.String("run", env("SIPBENCH_RUN", ""), "only run scenarios whose name matches this regexp")
 	short := fs.Bool("short", env("SIPBENCH_SHORT", "") == "true", "skip the scenarios marked long")
+	parallel := fs.Int("parallel", 1, "run up to this many scenarios at once that leave the edge and the network "+
+		"alone (no setup, actions, impairments or metric checks; SIPBENCH_PARALLEL); the rest run one at a time after them")
 	jsonOut := fs.String("json", env("SIPBENCH_JSON", ""),
 		"write the JSON report here ('-' for stdout, which moves the summary to stderr)")
 	junitOut := fs.String("junit", "", "write a JUnit XML report here")
 	level := fs.String("log-level", "warn", "debug, info, warn or error")
 	waitFor := fs.Duration("wait", 30*time.Second, "how long to wait for the edge to answer OPTIONS before starting")
+	if v := os.Getenv("SIPBENCH_PARALLEL"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return 2, fmt.Errorf("SIPBENCH_PARALLEL: %w", err)
+		}
+		*parallel = n
+	}
 	_ = fs.Parse(args)
 
 	var lv slog.Level
@@ -208,13 +219,8 @@ func run(args []string) (int, error) {
 	}
 
 	rep := &runner.Report{StartedAt: time.Now().UTC(), Edge: *edge, Caps: capList}
-	for _, s := range ss {
-		if ctx.Err() != nil {
-			break
-		}
-		res := r.Run(ctx, s)
+	for _, res := range runAll(ctx, r, ss, *parallel) {
 		rep.Add(res)
-		fmt.Fprintf(os.Stderr, "%-4s %s\n", strings.ToUpper(res.Status), s.Name)
 	}
 	// With the JSON report on stdout the summary goes to stderr, so stdout is the report alone.
 	summary := io.Writer(os.Stdout)
@@ -279,4 +285,60 @@ func pick(ss []*scenario.Scenario, only string, short bool) ([]*scenario.Scenari
 		fmt.Fprintf(os.Stderr, "-short: leaving out %d long scenarios: %s\n", len(long), strings.Join(long, ", "))
 	}
 	return kept, nil
+}
+
+// shareable reports whether s can run beside other scenarios: it changes nothing outside its own calls (no setup
+// commands, fleet actions or impairments) and checks no edge-wide counters, which other calls would move too.
+func shareable(s *scenario.Scenario) bool {
+	return len(s.Setup) == 0 && len(s.Teardown) == 0 && len(s.Actions) == 0 && len(s.Impairments) == 0 &&
+		len(s.Metrics) == 0
+}
+
+// runAll runs ss and returns their results in the same order. Up to parallel of the shareable ones run at once,
+// first; the rest run one at a time after them. Each result's line is printed as it ends.
+func runAll(ctx context.Context, r *runner.Runner, ss []*scenario.Scenario, parallel int) []runner.Result {
+	results := make([]runner.Result, len(ss))
+	done := make([]bool, len(ss))
+	var mu sync.Mutex
+	finish := func(i int, res runner.Result) {
+		mu.Lock()
+		defer mu.Unlock()
+		results[i], done[i] = res, true
+		fmt.Fprintf(os.Stderr, "%-4s %s\n", strings.ToUpper(res.Status), ss[i].Name)
+	}
+	if parallel > 1 {
+		var wg sync.WaitGroup
+		slots := make(chan struct{}, parallel)
+		for i, s := range ss {
+			if !shareable(s) {
+				continue
+			}
+			wg.Go(func() {
+				select {
+				case slots <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-slots }()
+				finish(i, r.Run(ctx, s))
+			})
+		}
+		wg.Wait()
+	}
+	for i, s := range ss {
+		if done[i] {
+			continue
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		finish(i, r.Run(ctx, s))
+	}
+	var out []runner.Result
+	for i := range ss {
+		if done[i] {
+			out = append(out, results[i])
+		}
+	}
+	return out
 }

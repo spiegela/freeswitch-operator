@@ -37,6 +37,10 @@ docker compose down
 `--use-aliases` matters: the edge places transfers to `sipbench:5090`, so the runner must answer to that
 name on the compose network.
 
+`-short` leaves out the scenarios marked `long: true`. `-parallel <n>` runs up to n scenarios at once, first, among
+those that leave the edge and the network alone: no `setup`, `actions`, `impairments` or `metrics`, which would
+disturb or count each other's calls. The rest then run one at a time. Results stay in file order either way.
+
 Unit tests and the integration test:
 
 ```sh
