@@ -96,15 +96,19 @@ func TestDrainWaitsForAStartingFreeSWITCH(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "drain.sh"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Not ready for the first two status calls, then ready with no calls; every command is logged.
+	// Not ready for the first two status calls, then ready; after the pause, one call leg, then none. The core db
+	// keeps a row for a call long gone, which the drain must not wait for. Every command is logged.
 	fake := `#!/bin/sh
 d='` + dir + `'
 echo "$*" >> "$d/log"
 case "$*" in
   *"-x status")
     n=$(cat "$d/n" 2>/dev/null || echo 0); echo $((n + 1)) > "$d/n"
-    if [ "$n" -ge 2 ]; then echo "FreeSWITCH is ready"; else exit 1; fi ;;
-  *"show calls count"*) echo "0 total." ;;
+    if [ "$n" -lt 2 ]; then exit 1; fi
+    echo "FreeSWITCH (Version 1.10.10) is ready"
+    if [ "$n" -eq 3 ]; then legs=1; else legs=0; fi
+    echo "$legs session(s) - peak 2, last 5min 2 " ;;
+  *"show calls count"*) echo "1 total." ;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(dir, "fs_cli"), []byte(fake), 0o755); err != nil {
@@ -130,8 +134,8 @@ esac
 			pauseAt = i
 		}
 	}
-	if status != 3 || pauseAt != 3 {
-		t.Fatalf("want three status checks, then the pause; got %q", calls)
+	if pauseAt != 3 || status != 5 {
+		t.Fatalf("want three status checks, the pause, then two more (one call leg, then none); got %q", calls)
 	}
 	if !strings.Contains(string(out), "no live calls") {
 		t.Fatalf("output %q", out)

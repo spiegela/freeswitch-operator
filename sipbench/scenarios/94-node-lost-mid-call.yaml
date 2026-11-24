@@ -41,7 +41,9 @@ calls:
         answered: true
         tonesHeard: [600]
         otherNodeThan: a
-  # Placed once the dispatcher's probes (two missed, 10 to 20 s) have taken the node out: no failover delay.
+  # Placed once the dispatcher's probes have taken the node out (two missed: a probe every 10 s, each failing after
+  # 5 s, so 15 to 25 s), and before Kubernetes marks the node NotReady (about 50 s on kind), so the probes alone
+  # are tested: no failover delay. The operator's dispatcher reloads in between must keep the node out.
   - id: c
     to: agent
     startAfter: dark

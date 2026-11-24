@@ -49,8 +49,11 @@ done
 cli -x "fsctl pause inbound" >/dev/null 2>&1 || true
 start=$(date +%s)
 while :; do
-  # "show calls count" prints "<n> total."
-  n=$(cli -x "show calls count" 2>/dev/null | awk '/total/ {print $1; exit}')
+  # FreeSWITCH's own count of the call legs it holds: status prints "<n> session(s) - peak ...". Not "show calls
+  # count", which reads the core db: with the core db in a database, a statement the database refuses (a caller
+  # name too long for its column) rolls back the others batched with it, the deletes of ended calls among them,
+  # and a node would wait out the whole drain limit for calls long gone.
+  n=$(cli -x "status" 2>/dev/null | awk '/session\(s\) - peak/ {print $1; exit}')
   case "$n" in
     ''|*[!0-9]*) echo "freeswitch-operator: FreeSWITCH not answering; nothing to wait for"; break ;;
   esac
@@ -60,7 +63,7 @@ while :; do
   fi
   now=$(date +%s)
   if [ $((now - start)) -ge "$max" ]; then
-    echo "freeswitch-operator: drain limit of ${max}s reached with $n calls; stopping"
+    echo "freeswitch-operator: drain limit of ${max}s reached with $n call legs; stopping"
     break
   fi
   sleep 2

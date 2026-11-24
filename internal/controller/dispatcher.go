@@ -140,7 +140,7 @@ type DispatcherNotifier interface {
 	// Reload makes Kamailio re-read its dispatcher list from disk (dispatcher.reload), then checks that each set in
 	// want now holds exactly its URIs (dispatcher.list); sets not in want aren't checked. If one doesn't, the error
 	// wraps errListNotLoaded: the kubelet has not yet written the new file into that pod, and a later reload will
-	// pick it up.
+	// pick it up. Destinations Kamailio held inactive before the reload stay inactive, if still listed.
 	Reload(ctx context.Context, want map[int32][]string) error
 }
 
@@ -178,6 +178,13 @@ func (n *jsonrpcNotifier) SetInactive(ctx context.Context, setID int32, uri stri
 }
 
 func (n *jsonrpcNotifier) Reload(ctx context.Context, want map[int32][]string) error {
+	// A reload rebuilds Kamailio's lists from the file, with each destination's state as the file gives it: a node
+	// the probes had taken out of rotation is back in it, and must fail two probes again (15 to 25 s) to leave it,
+	// while every call sent there waits out DS_FR_TIMER first. So the destinations held inactive before are set
+	// inactive again after, if still listed; the probes bring each back once it answers. (The operator reloads
+	// every 10 s until the kubelet has written a new list, so without this a dead node could stay in rotation.)
+	// (Best effort: a list Kamailio can't show is no reason not to reload, and the reload's own error says more.)
+	before, _ := n.destinations(ctx)
 	if err := n.call(ctx, "dispatcher.reload", nil, nil); err != nil {
 		// Kamailio refuses a reload within ds_reload_delta (5 s) of the last one, as when two reconciles come close
 		// together. That reload read the file too: what it loaded decides, as for any other.
@@ -190,24 +197,56 @@ func (n *jsonrpcNotifier) Reload(ctx context.Context, want map[int32][]string) e
 	if err != nil {
 		return err
 	}
+	var errs []error
+	for _, id := range slices.Sorted(maps.Keys(have)) {
+		for _, t := range have[id] {
+			if !t.inactive() && slices.ContainsFunc(before[id], func(b dispatcherTarget) bool {
+				return b.URI == t.URI && b.inactive()
+			}) {
+				errs = append(errs, n.SetInactive(ctx, id, t.URI))
+			}
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("keeping destinations inactive across the reload: %w", err)
+	}
 	ids := slices.Sorted(maps.Keys(want))
 	for _, id := range ids {
-		if !sameURIs(have[id], want[id]) {
-			return fmt.Errorf("%w: set %d holds %v, want %v", errListNotLoaded, id, have[id], want[id])
+		if uris := targetURIs(have[id]); !sameURIs(uris, want[id]) {
+			return fmt.Errorf("%w: set %d holds %v, want %v", errListNotLoaded, id, uris, want[id])
 		}
 	}
 	return nil
 }
 
-// destinations lists the URIs Kamailio holds, by dispatcher set (dispatcher.list).
-func (n *jsonrpcNotifier) destinations(ctx context.Context) (map[int32][]string, error) {
+// dispatcherTarget is one destination as dispatcher.list shows it.
+type dispatcherTarget struct {
+	URI string
+	// Flags is the state, then the probing mode: A(ctive), I(nactive), D(isabled) or T(rying); P(robing), N(o
+	// ping) or X.
+	Flags string
+}
+
+func (t dispatcherTarget) inactive() bool { return strings.HasPrefix(t.Flags, "I") }
+
+func targetURIs(ts []dispatcherTarget) []string {
+	out := make([]string, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, t.URI)
+	}
+	return out
+}
+
+// destinations lists the destinations Kamailio holds, by dispatcher set (dispatcher.list).
+func (n *jsonrpcNotifier) destinations(ctx context.Context) (map[int32][]dispatcherTarget, error) {
 	var res struct {
 		Records []struct {
 			Set struct {
 				ID      int32 `json:"ID"`
 				Targets []struct {
 					Dest struct {
-						URI string `json:"URI"`
+						URI   string `json:"URI"`
+						Flags string `json:"FLAGS"`
 					} `json:"DEST"`
 				} `json:"TARGETS"`
 			} `json:"SET"`
@@ -220,10 +259,10 @@ func (n *jsonrpcNotifier) destinations(ctx context.Context) (map[int32][]string,
 		}
 		return nil, err
 	}
-	out := map[int32][]string{}
+	out := map[int32][]dispatcherTarget{}
 	for _, r := range res.Records {
 		for _, t := range r.Set.Targets {
-			out[r.Set.ID] = append(out[r.Set.ID], t.Dest.URI)
+			out[r.Set.ID] = append(out[r.Set.ID], dispatcherTarget{URI: t.Dest.URI, Flags: t.Dest.Flags})
 		}
 	}
 	return out, nil

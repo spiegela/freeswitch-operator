@@ -99,7 +99,9 @@ watches them and:
 2. For a Kamailio you run yourself, if `dispatcher.jsonrpcURL` is set, calls Kamailio's JSON-RPC:
    `dispatcher.set_state` to take a draining node out at once, then `dispatcher.reload` once the new list should be
    on disk (`dispatcher.reloadDelaySeconds`, a guess at the kubelet's sync time). After each reload it reads the
-   list back (`dispatcher.list`) and reloads again every 10 s until Kamailio holds the one it wrote. When the URL
+   list back (`dispatcher.list`) and reloads again every 10 s until Kamailio holds the one it wrote. Kamailio's
+   reload makes every destination active again, so the operator sets the ones Kamailio held inactive before it
+   (failed probes, or a drain) inactive again after; the probes bring each back once it answers. When the URL
    names a Service in the cluster, each call goes to every ready Kamailio pod behind it, not just the one the
    Service would pick, so every Kamailio hears of each change. A Kamailio that starts later reads the current list
    from disk.
@@ -112,7 +114,9 @@ while paused, so the dispatcher fails over on a `503` in the gap between "not re
 **One mechanism serves both: a pod is drained by deleting it, and its `preStop` hook does the waiting.**
 
 - `preStop` marks the pod as draining (readiness fails at once, so it leaves dispatch), runs `fsctl pause inbound`,
-  and waits until `show calls count` reaches zero or `maxDrainSeconds` passes. If FreeSWITCH is still starting, it
+  and waits until FreeSWITCH holds no sessions (its own count, from `status`) or `maxDrainSeconds` passes. Not
+  `show calls count`: that reads the core db, where a database core db can keep rows for calls long gone (a
+  statement PostgreSQL refuses rolls back the others batched with it). If FreeSWITCH is still starting, it
   first waits (up to 60 s) for it to be ready: FreeSWITCH loses a SIGTERM that arrives while it starts, and the pod
   would then sit `Terminating` for its whole grace period.
 - **Rolling update:** when the pod template changes, the operator replaces one pod at a time, and only while every
