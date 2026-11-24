@@ -14,7 +14,8 @@
 #                          SIPBENCH_REPORT=<file> saves the run's JSON report there (for the report card), and
 #                          SIPBENCH_SHORT=true leaves out the scenarios marked long, and SIPBENCH_PARALLEL=<n> runs
 #                          up to n shareable scenarios at once. With LiveKit deployed the runner asks its agent
-#                          too (the livekit capability)
+#                          too (the livekit capability). The bench also fails if PostgreSQL refused any of
+#                          FreeSWITCH's core-db statements meanwhile
 #   hack/kind.sh status    both fleets, their members and the dispatcher list each Kamailio has loaded
 #   hack/kind.sh down      delete the cluster
 #
@@ -161,6 +162,10 @@ deploy() {
   "${KUBECTL[@]}" apply --server-side -f "$ROOT/deploy/kind/namespace.yaml"
   "$KUSTOMIZE" build "$ROOT/deploy/kind/postgres" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -
   "${KUBECTL[@]}" -n "$NS" rollout status statefulset/postgres --timeout=180s
+  # Before FreeSWITCH first starts, so the tables it makes come out with no length limits; it changes nothing the
+  # second time (deploy/postgres/freeswitch-core-db.sql says why).
+  "${KUBECTL[@]}" -n "$NS" exec -i postgres-0 -- psql -U freeswitch -d freeswitch -v ON_ERROR_STOP=1 -q \
+    <"$ROOT/deploy/postgres/freeswitch-core-db.sql"
 
   say "applying the edge"
   "$KUSTOMIZE" build "$ROOT/deploy/kind" | "${KUBECTL[@]}" apply --server-side --force-conflicts -f -
@@ -364,8 +369,9 @@ livekit() {
 }
 
 bench() {
-  local job filter="${1:-}" report="${SIPBENCH_REPORT:-}"
+  local job filter="${1:-}" report="${SIPBENCH_REPORT:-}" since
   local -a envs=()
+  since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   # Foreground: wait for the old runner pods too, or one still terminating would share the sipbench Service (and
   # its transfers) with the new one.
   "${KUBECTL[@]}" -n "$NS" delete job -l app.kubernetes.io/part-of=sipbench --ignore-not-found \
@@ -400,10 +406,25 @@ bench() {
     fi
     say "report written to $report"
   fi
-  if "${KUBECTL[@]}" -n "$NS" wait "$job" --for=condition=Complete --timeout=30s >/dev/null 2>&1; then
-    return 0
+  local status=0
+  if ! "${KUBECTL[@]}" -n "$NS" wait "$job" --for=condition=Complete --timeout=30s >/dev/null 2>&1; then
+    echo "bench failed" >&2
+    status=1
   fi
-  echo "bench failed" >&2
+  refused_statements "$since" || status=1
+  return $status
+}
+
+# refused_statements fails if PostgreSQL refused any statement since $1 (RFC 3339) other than the CREATE INDEXes
+# FreeSWITCH repeats at every start. Each refusal rolls back the core-db writes batched with it, so a call passing
+# the bench may still have cost another call its tracking (deploy/postgres/freeswitch-core-db.sql).
+refused_statements() {
+  local errors
+  errors=$("${KUBECTL[@]}" -n "$NS" logs postgres-0 --since-time="$1" 2>/dev/null \
+    | grep -A1 ' ERROR: ' | grep -v -e 'already exists' -e 'STATEMENT:  create index' -e '^--$' || true)
+  [ -z "$errors" ] && return 0
+  echo "PostgreSQL refused statements during the bench (each rolls back the core-db writes batched with it):" >&2
+  printf '%s\n' "$errors" | cut -c1-300 | head -n 20 >&2
   return 1
 }
 
