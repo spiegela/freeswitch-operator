@@ -24,11 +24,18 @@ const (
 )
 
 // Interface names the shaper creates for impairing what arrives: tc can only delay what leaves an interface, so
-// matching arrivals are redirected out of ifbIn, a veth, and come back in through its peer ifbPeer. (The ifb device
-// does this job usually; the Docker Desktop kernel has no ifb.)
+// matching arrivals are redirected out of ifbIn, a veth, and come out of its peer ifbPeer. (The ifb device does
+// this job usually; the Docker Desktop kernel has no ifb.)
+//
+// From ifbPeer they are marked and sent back into the interface they first arrived on, where a filter ahead of the
+// rest (bypassPrio) lets marked packets through. The stack then receives them on that interface: delivered from
+// ifbPeer, which has no address, reverse-path filtering (rp_filter 1 or 2, as on Ubuntu hosts) drops them all.
 const (
 	ifbIn   = "sbnetem0"
 	ifbPeer = "sbnetem1"
+
+	impairedMark = "0x5b4e"
+	bypassPrio   = "1"
 )
 
 // Words the tc and ip commands repeat.
@@ -37,6 +44,9 @@ const (
 	tcDel         = "del"
 	tcParent      = "parent"
 	ingressHandle = "ffff:" // the ingress qdisc's handle
+	tcPipe        = "pipe"
+	tcAction      = "action"
+	tcMatch       = "match"
 )
 
 // Shaper applies tc impairments to the runner's own traffic on one interface: the carrier-edge link, with the
@@ -92,16 +102,23 @@ func (s *Shaper) Plan(ims []*Impairment) (Plan, error) {
 			ipLink(tcAdd, ifbIn, "type", "veth", "peer", "name", ifbPeer),
 			ipLink("set", ifbIn, "up"),
 			ipLink("set", ifbPeer, "up"),
-			// What comes back in through the peer is addressed to Iface's MAC: deliver it to this host anyway.
+			// What comes out of the peer is addressed to Iface's MAC: take it as this host's, mark it, and send it
+			// back in through Iface.
 			qdisc(tcAdd, ifbPeer, "handle", ingressHandle, "ingress"),
-			tcFilter(ifbPeer, tcParent, ingressHandle, "matchall", "action", "skbedit", "ptype", "host"),
+			tcFilter(ifbPeer, tcParent, ingressHandle, "matchall",
+				tcAction, "skbedit", "ptype", "host", tcPipe,
+				tcAction, "skbedit", "mark", impairedMark, tcPipe,
+				tcAction, "mirred", "ingress", "redirect", "dev", s.Iface),
 			append(qdisc(tcAdd, ifbIn, "root", "handle", "1:", "prio", "bands", bands, "priomap"), priomap...),
 			qdisc(tcAdd, s.Iface, "handle", ingressHandle, "ingress"),
+			// Marked: it has been through its impairment already.
+			filter(s.Iface, ingressHandle, bypassPrio, []string{tcMatch, "mark", impairedMark, "0xffffffff"},
+				tcAction, "pass"),
 		)
 	}
 	for i, im := range ims {
 		band := strconv.Itoa(i + 2)
-		prio := strconv.Itoa(i + 1)
+		prio := strconv.Itoa(i + 2) // after bypassPrio
 		var on, off [][]string
 		if im.Out {
 			for _, m := range s.matches(im.Traffic, true) {
@@ -113,7 +130,7 @@ func (s *Shaper) Plan(ims []*Impairment) (Plan, error) {
 		if im.In {
 			for _, m := range s.matches(im.Traffic, false) {
 				p.Setup = append(p.Setup,
-					filter(s.Iface, ingressHandle, prio, m, "action", "mirred", "egress", "redirect", "dev", ifbIn),
+					filter(s.Iface, ingressHandle, prio, m, tcAction, "mirred", "egress", "redirect", "dev", ifbIn),
 					filter(ifbIn, "1:", prio, m, "flowid", "1:"+band))
 			}
 			on = append(on, netemCmd(tcAdd, ifbIn, band, im))
@@ -158,7 +175,7 @@ func (s *Shaper) matches(traffic string, out bool) [][]string {
 
 // u32Port matches an IP protocol (17 UDP, 6 TCP) and a port field (sport, dport) under a mask.
 func u32Port(proto, field, port, mask string) []string {
-	return []string{"match", "ip", "protocol", proto, "0xff", "match", "ip", field, port, mask}
+	return []string{tcMatch, "ip", "protocol", proto, "0xff", tcMatch, "ip", field, port, mask}
 }
 
 func ipLink(args ...string) []string { return append([]string{"ip", "link"}, args...) }
