@@ -290,19 +290,21 @@ func TestScriptsReferenceSharedPaths(t *testing.T) {
 	if !strings.Contains(readyScript, startupScriptName) || !strings.Contains(buildScriptsConfigMap(testCluster()).Data[startupScriptName], "sofia status") {
 		t.Fatal("ready script must run the startup checks, shipped beside it")
 	}
-	if !strings.Contains(drainScript, "fsctl pause inbound") || !strings.Contains(drainScript, "show calls count") {
-		t.Fatal("drain script must pause inbound calls and wait on the call count")
+	if !strings.Contains(drainScript, "fsctl pause inbound") || !strings.Contains(drainScript, `session\(s\) - peak`) {
+		t.Fatal("drain script must pause inbound calls and wait on FreeSWITCH's session count")
 	}
 }
 
-// fakeKamailio answers like Kamailio's jsonrpcs: dispatcher.reload copies the file on disk into memory, and
-// dispatcher.list shows memory, or HTTP 500 "No Destination Sets" when it holds none.
+// fakeKamailio answers like Kamailio's jsonrpcs: dispatcher.reload copies the file on disk into memory, every
+// destination active, and dispatcher.list shows memory, or HTTP 500 "No Destination Sets" when it holds none.
+// dispatcher.set_state "ip" makes a destination inactive.
 type fakeKamailio struct {
-	calls  []map[string]any
-	onDisk map[int][]string
-	loaded map[int][]string
-	fail   string // a JSON-RPC error message to answer every call with
-	busy   bool   // refuse dispatcher.reload as too soon after the last one
+	calls    []map[string]any
+	onDisk   map[int][]string
+	loaded   map[int][]string
+	inactive map[string]bool // by URI
+	fail     string          // a JSON-RPC error message to answer every call with
+	busy     bool            // refuse dispatcher.reload as too soon after the last one
 }
 
 func (k *fakeKamailio) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -324,7 +326,15 @@ func (k *fakeKamailio) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			rpcErr("Ongoing reload")
 			return
 		}
-		k.loaded = k.onDisk
+		k.loaded, k.inactive = k.onDisk, nil
+	case "dispatcher.set_state":
+		params, _ := req["params"].([]any)
+		if len(params) == 3 && params[0] == "ip" {
+			if k.inactive == nil {
+				k.inactive = map[string]bool{}
+			}
+			k.inactive[params[2].(string)] = true
+		}
 	case "dispatcher.list":
 		if len(k.loaded) == 0 {
 			rpcErr("No Destination Sets")
@@ -334,7 +344,11 @@ func (k *fakeKamailio) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for id, uris := range k.loaded {
 			var targets []any
 			for _, u := range uris {
-				targets = append(targets, map[string]any{"DEST": map[string]any{"URI": u, "FLAGS": "AP", "PRIORITY": 0}})
+				flags := "AP"
+				if k.inactive[u] {
+					flags = "IP"
+				}
+				targets = append(targets, map[string]any{"DEST": map[string]any{"URI": u, "FLAGS": flags, "PRIORITY": 0}})
 			}
 			records = append(records, map[string]any{"SET": map[string]any{"ID": id, "TARGETS": targets}})
 		}
@@ -397,6 +411,49 @@ func TestJSONRPCNotifier(t *testing.T) {
 	err := n.Reload(ctx, map[int32][]string{1: want})
 	if err == nil || !strings.Contains(err.Error(), "kamailio dispatcher.reload: 500 boom") || errors.Is(err, errListNotLoaded) {
 		t.Fatalf("expected the JSON-RPC error, got %v", err)
+	}
+}
+
+// A reload must not put back into rotation a node Kamailio had taken out (its probes failed, or the operator set it
+// inactive): Kamailio's own reload makes every destination active again.
+func TestJSONRPCNotifierKeepsInactiveDestinationsAcrossReload(t *testing.T) {
+	dead, live, gone := "sip:10.0.0.1:5060", "sip:10.0.0.2:5060", "sip:10.0.0.3:5060"
+	k := &fakeKamailio{
+		onDisk:   map[int][]string{1: {dead, live}},
+		loaded:   map[int][]string{1: {dead, live, gone}},
+		inactive: map[string]bool{dead: true, gone: true},
+	}
+	srv := httptest.NewServer(k)
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	n := NewJSONRPCNotifier(srv.URL, "")
+
+	if err := n.Reload(ctx, map[int32][]string{1: {dead, live}}); err != nil {
+		t.Fatal(err)
+	}
+	if !k.inactive[dead] || k.inactive[live] {
+		t.Fatalf("after the reload: inactive %v, want only %s", k.inactive, dead)
+	}
+	var setStates []any
+	for _, c := range k.calls {
+		if c["method"] == "dispatcher.set_state" {
+			setStates = append(setStates, c["params"])
+		}
+	}
+	if len(setStates) != 1 {
+		t.Fatalf("set_state calls %v: want one, for %s only (%s left the list)", setStates, dead, gone)
+	}
+
+	// Kamailio refused the reload as too soon after the last: nothing was reset, so nothing is set again.
+	k.calls, k.busy = nil, true
+	if err := n.Reload(ctx, map[int32][]string{1: {dead, live}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range k.calls {
+		if c["method"] == "dispatcher.set_state" {
+			t.Fatalf("set_state after a refused reload: %v", c)
+		}
 	}
 }
 

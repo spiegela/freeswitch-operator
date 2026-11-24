@@ -52,8 +52,10 @@ probes take a dead node out on their own).
 
 When a destination leaves, the operator marks it inactive on every ready Kamailio pod at once, by pod address. Once
 `reloadDelaySeconds` have passed, it has each pod reload, reads each pod's list back, and reloads again every 10 s
-until every pod holds the combined list (`status.dispatcherReloadedHash`). A fleet that is missing, has no
-`spec.dispatcher`, or reuses another's `setID` is left out and named in the `SetConflict` condition.
+until every pod holds the combined list (`status.dispatcherReloadedHash`). Each reload keeps out of rotation the
+destinations a pod held inactive before it (failed probes, or a drain); Kamailio's own reload would put them back. A
+fleet that is missing, has no `spec.dispatcher`, or reuses another's `setID` is left out and named in the
+`SetConflict` condition.
 
 ## What restarts
 
