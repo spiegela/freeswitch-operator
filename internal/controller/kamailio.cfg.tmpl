@@ -16,6 +16,9 @@
 {{- if .TrustedPeers}}
 # Trusted peers:{{range .TrustedPeers}} {{.Name}}{{end}}
 {{- end}}
+{{- if .Capture}}
+# SIP capture: HEPv3 to {{.Capture.Address}}, capture ID {{.CaptureID}}
+{{- end}}
 
 #!define SIP_PORT {{.SIPPort}}
 #!define RPC_PORT {{.RPCPort}}
@@ -78,6 +81,9 @@ loadmodule "xhttp_prom.so"
 {{- if .TrustedPeers}}
 loadmodule "ipops.so"
 {{- end}}
+{{- if .Capture}}
+loadmodule "siptrace.so"
+{{- end}}
 
 # Set to 1 over JSON-RPC by the pod's drain: new calls from peers then get 503 and go to another Kamailio.
 modparam("pv", "shvset", "draining=i:0")
@@ -123,6 +129,18 @@ modparam("xhttp_prom", "prom_counter", "name=silent_drops_total; label=cause")
 # When a node last answered anything relayed to it (any reply, 100 Trying included), in seconds since the epoch.
 modparam("pv", "shvset", "node_answered=i:0")
 
+{{- if .Capture}}
+# A HEPv3 copy of every SIP message sent or received (trace_mode 1 mirrors at the network layer, so no route has to
+# ask for it), over UDP to spec.capture.address. Copies are never waited on.
+modparam("siptrace", "duplicate_uri", "sip:{{.Capture.Address}}")
+modparam("siptrace", "hep_mode_on", 1)
+modparam("siptrace", "hep_version", 3)
+modparam("siptrace", "hep_capture_id", {{.CaptureID}})
+modparam("siptrace", "trace_to_database", 0)
+modparam("siptrace", "trace_on", 1)
+modparam("siptrace", "trace_mode", 1)
+
+{{end -}}
 modparam("jsonrpcs", "pretty_format", 1)
 # HTTP only (via xhttp). The default leaves HTTP off, and jsonrpc_dispatch() then drops each request unanswered.
 modparam("jsonrpcs", "transport", 1)

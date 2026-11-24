@@ -4,6 +4,7 @@ name: Publish images
 #
 #   ghcr.io/spiegela/freeswitch-operator   the manager, and the address agent (Dockerfile, target manager)
 #   ghcr.io/spiegela/freeswitch-exporter   the FreeSWITCH metrics exporter (Dockerfile, target exporter)
+#   ghcr.io/spiegela/call-tracer           per-call traces from HEP and LiveKit webhooks (Dockerfile, target call-tracer)
 #   ghcr.io/spiegela/freeswitch            drachtio's FreeSWITCH plus mod_pgsql, cut down (images/freeswitch)
 #   ghcr.io/spiegela/sipbench              the bench: sipbench, mockbackend, lkagent (sipbench/Dockerfile)
 #
@@ -43,6 +44,10 @@ jobs:
             context: .
             target: exporter
             description: Prometheus exporter for FreeSWITCH, run beside each FreeSWITCH node
+          - image: call-tracer
+            context: .
+            target: call-tracer
+            description: One OpenTelemetry trace per SIP call, from HEP captures and LiveKit webhooks
           - image: freeswitch
             context: images/freeswitch
             target: ""

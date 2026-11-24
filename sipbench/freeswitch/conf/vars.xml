@@ -54,6 +54,12 @@
        can take the calls over with `sofia recover`. Useful only with core_db_dsn: SQLite dies with its node. -->
   <X-PRE-PROCESS cmd="exec-set" data="track_calls=/bin/sh /usr/local/freeswitch/conf/bin/env.sh TRACK_CALLS false"/>
 
+  <!-- SIP capture, for per-call traces (docs/call-tracing.md at the repository root): with SIP_CAPTURE=yes both
+       profiles send a HEPv3 copy of every SIP message they send or receive to CAPTURE_SERVER, sofia's
+       capture-server (udp:host:port;hep=3;capture_id=N; a host name is resolved once, when the profiles start). -->
+  <X-PRE-PROCESS cmd="exec-set" data="sip_capture=/bin/sh /usr/local/freeswitch/conf/bin/env.sh SIP_CAPTURE no"/>
+  <X-PRE-PROCESS cmd="exec-set" data="capture_server=/bin/sh /usr/local/freeswitch/conf/bin/env.sh CAPTURE_SERVER 'udp:127.0.0.1:9060;hep=3;capture_id=2'"/>
+
   <!-- Where the event socket listens. The bench's runner uses it for admission tests; on a cluster keep it on
        127.0.0.1, where fs_cli (and the operator's ready and drain scripts) reach it. -->
   <X-PRE-PROCESS cmd="exec-set" data="esl_listen_ip=/bin/sh /usr/local/freeswitch/conf/bin/env.sh ESL_LISTEN_IP 0.0.0.0"/>

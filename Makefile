@@ -160,7 +160,7 @@ KAMAILIO_CFG_DIR ?= $(LOCALBIN)/kamailio-cfg
 check-kamailio-cfg: ## Render the KamailioCluster config template's test cases and check each with kamailio -c (needs docker)
 	mkdir -p "$(KAMAILIO_CFG_DIR)"
 	KAMAILIO_CFG_OUT="$(KAMAILIO_CFG_DIR)" go test ./internal/controller -run '^TestKamailioConfigRenders$$' -count=1
-	for name in no-sets one-set two-sets trusted-peers; do \
+	for name in no-sets one-set two-sets trusted-peers capture; do \
 	  docker run --rm -v "$(KAMAILIO_CFG_DIR):/cfg:ro" $(KAMAILIO_IMAGE) -c -f "/cfg/$$name.cfg" \
 	    -A PUBLIC_ADDR=192.0.2.10 -A PRIVATE_ADDR=127.0.0.1 >/dev/null || exit 1; \
 	  echo "kamailio -c $$name.cfg: ok"; \
@@ -168,6 +168,10 @@ check-kamailio-cfg: ## Render the KamailioCluster config template's test cases a
 	    -A PUBLIC_ADDR=192.0.2.10 -A PRIVATE_ADDR=127.0.0.1 -A BIND_ADDR=127.0.0.2 >/dev/null || exit 1; \
 	  echo "kamailio -c $$name.cfg with a bind address: ok"; \
 	done
+
+.PHONY: check-kamailio-capture
+check-kamailio-capture: check-kamailio-cfg ## Run Kamailio with spec.capture and check a HEPv3 copy of a request reaches a collector (needs docker)
+	hack/check-kamailio-capture.sh "$(KAMAILIO_CFG_DIR)" "$(KAMAILIO_IMAGE)"
 
 .PHONY: check-kamailio-trust
 check-kamailio-trust: check-kamailio-cfg ## Run Kamailio with spec.trustedPeers and check who gets an answer (needs docker)

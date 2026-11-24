@@ -56,6 +56,31 @@ spec:
           spec:
             description: spec defines the desired state of KamailioCluster
             properties:
+              capture:
+                description: |-
+                  capture, when set, sends a HEPv3 copy of every SIP message to a collector, for per-call traces. Copies go
+                  over UDP and are never waited on, so a missing collector costs nothing but the copies. Setting or changing
+                  it rolls the Kamailio pods.
+                properties:
+                  address:
+                    description: |-
+                      address of the collector, host:port. The host may be a DNS name (a Service in the cluster, say): Kamailio
+                      resolves it as it sends.
+                    maxLength: 255
+                    pattern: ^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?):[0-9]{1,5}$
+                    type: string
+                  captureID:
+                    default: 1
+                    description: |-
+                      captureID tells the collector which component sent a copy. Give each component its own, so a message
+                      that both ends of a hop capture can be told apart.
+                    format: int64
+                    maximum: 4294967295
+                    minimum: 1
+                    type: integer
+                required:
+                - address
+                type: object
               dispatch:
                 description: |-
                   dispatch lists the FreeSWITCH fleets new calls go to, in priority order: a call goes to the first fleet

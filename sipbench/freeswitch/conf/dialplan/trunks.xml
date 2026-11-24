@@ -127,6 +127,9 @@
         <action application="set" data="continue_on_fail=true"/>
         <action application="set" data="call_timeout=$${ring_timeout}"/>
         <action application="set" data="inherit_codec=true"/>
+        <!-- The caller's Call-ID on the backend leg, so a call tracer (docs/call-tracing.md) puts both legs in one
+             trace. A caller's own X-CID is replaced. -->
+        <action application="set" data="sip_h_X-CID=${sip_call_id}"/>
         <!-- A REFER from the backend transfers this caller through the transfers context. -->
         <action application="set" data="force_transfer_context=transfers"/>
         <action application="set" data="force_transfer_dialplan=XML"/>

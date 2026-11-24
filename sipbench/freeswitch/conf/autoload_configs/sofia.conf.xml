@@ -2,6 +2,8 @@
   <global_settings>
     <param name="log-level" value="0"/>
     <param name="debug-presence" value="0"/>
+    <!-- Where profiles with sip-capture on send HEP copies (vars.xml). -->
+    <param name="capture-server" value="$${capture_server}"/>
   </global_settings>
   <profiles>
     <X-PRE-PROCESS cmd="include" data="../sip_profiles/*.xml"/>

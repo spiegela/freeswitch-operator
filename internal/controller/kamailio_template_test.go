@@ -20,6 +20,8 @@ var kamailioConfigCases = map[string]kamailioConfigData{
 			{Name: "carrier", Addresses: []string{"198.51.100.0/30", "203.0.113.8/29"}},
 			{Name: "bench", Addresses: []string{"10.244.0.0/16", "2001:db8::/32"}},
 		})},
+	"capture": {Name: "edge", SIPPort: 5060, RPCPort: 5070, MetricsPort: 5071, DispatcherList: kamailioDispatcher,
+		Sets: []int32{1}, Capture: &sipv1alpha1.SIPCaptureSpec{Address: "call-tracer.monitoring.svc.cluster.local:9060", CaptureID: 7}},
 }
 
 func TestKamailioConfigRenders(t *testing.T) {
@@ -112,5 +114,35 @@ func TestKamailioConfigTrustedPeers(t *testing.T) {
 		if strings.Contains(open, unwanted) {
 			t.Errorf("with no trusted peers the config has %q", unwanted)
 		}
+	}
+}
+
+func TestKamailioConfigCapture(t *testing.T) {
+	cfg, err := renderKamailioConfig(kamailioConfigCases["capture"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`loadmodule "siptrace.so"`,
+		`modparam("siptrace", "duplicate_uri", "sip:call-tracer.monitoring.svc.cluster.local:9060")`,
+		`modparam("siptrace", "hep_version", 3)`,
+		`modparam("siptrace", "hep_capture_id", 7)`,
+		`modparam("siptrace", "trace_mode", 1)`,
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("rendered config lacks %q", want)
+		}
+	}
+	d := kamailioConfigCases["capture"]
+	d.Capture = &sipv1alpha1.SIPCaptureSpec{Address: "10.0.0.5:9060"}
+	if cfg, _ = renderKamailioConfig(d); !strings.Contains(cfg, `modparam("siptrace", "hep_capture_id", 1)`) {
+		t.Error("an unset capture ID should be 1")
+	}
+	none, err := renderKamailioConfig(kamailioConfigCases["one-set"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(none, "siptrace") {
+		t.Error("without spec.capture the config loads siptrace")
 	}
 }
