@@ -28,6 +28,8 @@ type kamailioConfigData struct {
 	Sets []int32
 	// TrustedPeers are the sources that may send requests, besides the dispatched nodes. Empty trusts every source.
 	TrustedPeers []kamailioTrustedPeer
+	// Capture is spec.capture: where HEP copies of every SIP message go. Nil sends none.
+	Capture *sipv1alpha1.SIPCaptureSpec
 }
 
 // kamailioTrustedPeer is one spec.trustedPeers entry as the config uses it.
@@ -45,6 +47,14 @@ func kamailioTrustedPeers(peers []sipv1alpha1.TrustedPeer) []kamailioTrustedPeer
 		out = append(out, kamailioTrustedPeer{Name: p.Name, Subnets: strings.Join(p.Addresses, ",")})
 	}
 	return out
+}
+
+// CaptureID is the capture's HEP capture ID, 1 when unset.
+func (d kamailioConfigData) CaptureID() int64 {
+	if d.Capture == nil || d.Capture.CaptureID == 0 {
+		return 1
+	}
+	return d.Capture.CaptureID
 }
 
 // Rules is the ds_select_routes rule string: every set, in priority order, round-robin (algorithm 4) within each.

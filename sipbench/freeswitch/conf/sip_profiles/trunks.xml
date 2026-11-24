@@ -45,5 +45,7 @@
     <param name="user-agent-string" value="sipbench-edge"/>
     <!-- vars.xml. Both profiles track: a recovered call needs both of its legs. -->
     <param name="track-calls" value="$${track_calls}"/>
+    <!-- vars.xml: HEP copies of this profile's SIP, for per-call traces. -->
+    <param name="sip-capture" value="$${sip_capture}"/>
   </settings>
 </profile>

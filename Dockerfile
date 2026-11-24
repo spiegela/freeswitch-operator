@@ -18,14 +18,15 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 # Copy the Go source (relies on .dockerignore to filter)
 COPY . .
 
-# Build all three in one step, sharing the build cache: only the first compiles the dependencies. GOARCH has no
+# Build all four in one step, sharing the build cache: only the first compiles the dependencies. GOARCH has no
 # default, so the binaries are built for the target platform buildx passes (the build machine's own for a plain
 # docker build).
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     export CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
  && go build -o manager cmd/main.go \
  && go build -o freeswitch-exporter ./cmd/freeswitch-exporter \
- && go build -o address-agent ./cmd/address-agent
+ && go build -o address-agent ./cmd/address-agent \
+ && go build -o call-tracer ./cmd/call-tracer
 
 # The FreeSWITCH exporter, a separate image (docker build --target exporter) so that a new operator release
 # doesn't change the FreeSWITCH pod template, which would roll every fleet.
@@ -34,6 +35,14 @@ WORKDIR /
 COPY --from=builder /workspace/freeswitch-exporter .
 USER 65532:65532
 ENTRYPOINT ["/freeswitch-exporter"]
+
+# The call tracer, its own image (docker build --target call-tracer): it runs apart from the edge, wherever the
+# HEP copies and LiveKit's webhooks can reach it.
+FROM gcr.io/distroless/static:nonroot AS call-tracer
+WORKDIR /
+COPY --from=builder /workspace/call-tracer .
+USER 65532:65532
+ENTRYPOINT ["/call-tracer"]
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details

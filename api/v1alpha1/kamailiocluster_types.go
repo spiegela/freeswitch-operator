@@ -49,6 +49,24 @@ type KamailioMetricsSpec struct {
 	Port int32 `json:"port,omitempty"`
 }
 
+// SIPCaptureSpec sends a copy of every SIP message a pod sends or receives to a HEP collector (Homer, or the
+// call tracer in cmd/call-tracer), in HEPv3 over UDP.
+type SIPCaptureSpec struct {
+	// address of the collector, host:port. The host may be a DNS name (a Service in the cluster, say): Kamailio
+	// resolves it as it sends.
+	// +kubebuilder:validation:Pattern=`^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?):[0-9]{1,5}$`
+	// +kubebuilder:validation:MaxLength=255
+	Address string `json:"address"`
+
+	// captureID tells the collector which component sent a copy. Give each component its own, so a message
+	// that both ends of a hop capture can be told apart.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=4294967295
+	// +kubebuilder:default=1
+	// +optional
+	CaptureID int64 `json:"captureID,omitempty"`
+}
+
 // KamailioDrainSpec configures how a Kamailio pod stops.
 type KamailioDrainSpec struct {
 	// maxDrainSeconds is how long a stopping pod waits for its open transactions to finish, answering new
@@ -166,6 +184,12 @@ type KamailioClusterSpec struct {
 	// +kubebuilder:validation:MaxItems=32
 	// +optional
 	TrustedPeers []TrustedPeer `json:"trustedPeers,omitempty"`
+
+	// capture, when set, sends a HEPv3 copy of every SIP message to a collector, for per-call traces. Copies go
+	// over UDP and are never waited on, so a missing collector costs nothing but the copies. Setting or changing
+	// it rolls the Kamailio pods.
+	// +optional
+	Capture *SIPCaptureSpec `json:"capture,omitempty"`
 
 	// reloadDelaySeconds is how long after a dispatcher list change the operator asks Kamailio to reload it,
 	// to give the kubelet time to update the mounted file. It then checks the list was loaded, and reloads

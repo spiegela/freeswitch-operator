@@ -60,8 +60,8 @@ fleet that is missing, has no `spec.dispatcher`, or reuses another's `setID` is 
 ## What restarts
 
 Membership reloads live. Everything in the rendered config and the pod template restarts: listening ports, loaded
-modules and their parameters, the routing script, the order of `spec.dispatch` (the sets are in the routing) and
-`spec.trustedPeers`. A change to one of those makes a new config snapshot and a new template, and the fleet rolls
+modules and their parameters, the routing script, the order of `spec.dispatch` (the sets are in the routing),
+`spec.trustedPeers` and `spec.capture`. A change to one of those makes a new config snapshot and a new template, and the fleet rolls
 one pod at a time. That is cheap, because a Kamailio drain is short.
 
 ## JSON-RPC is authenticated
@@ -71,6 +71,14 @@ operator keeps a random token in a Secret (`<name>-jsonrpc`), the pods get it as
 HTTP route answers `401` to any request without it. The RPC listener binds to the pod's own address only (on the
 host network, the node's private address). Keep the port closed in the security group too. A `FreeswitchCluster`'s
 `jsonrpcURL` remains for a Kamailio you run yourself, without a token.
+
+## SIP capture
+
+With `spec.capture` set, every pod sends a HEPv3 copy of each SIP message it sends or receives to a collector over
+UDP (Kamailio's `siptrace`, mirroring at the network layer), for the [call tracer](call-tracing.md) or Homer. The
+address may be a name, resolved as Kamailio sends; copies are never waited on. Give Kamailio its own `captureID`.
+It is in the rendered config, so setting or changing it rolls the fleet. `make check-kamailio-capture` checks a
+collector gets the copies.
 
 ## Drains
 
