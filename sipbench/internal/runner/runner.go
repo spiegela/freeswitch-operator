@@ -575,7 +575,7 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 	eng, err := script.Start(med, dedupe(detect))
 	if err != nil {
 		cr.Error = "media: " + err.Error()
-		_ = d.Hangup(context.Background())
+		_ = uas.HangupClient(context.Background(), d)
 		return cr
 	}
 
@@ -586,7 +586,7 @@ func (r *Runner) call( //nolint:gocyclo // one call's linear lifecycle; splittin
 		endedAt = time.Now()
 		hctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return d.Hangup(hctx)
+		return uas.HangupClient(hctx, d)
 	}
 	stepCtx, cancelSteps := context.WithCancel(callCtx)
 	// An action may hang the call up (Action.Hangup): that ends the steps, and isn't the steps' error.

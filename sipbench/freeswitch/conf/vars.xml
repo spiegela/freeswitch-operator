@@ -8,9 +8,10 @@
        downward-API file /etc/freeswitch-operator/podinfo/external-address; without it, this host's address. -->
   <X-PRE-PROCESS cmd="exec-set" data="external_address=/bin/sh /usr/local/freeswitch/conf/bin/podinfo.sh external-address"/>
 
-  <!-- The address RTP is bound to (rtp-ip): FreeSWITCH's own, unless the pod's address pool gives it one of its own
-       on the node, which freeswitch-operator writes to /etc/freeswitch-operator/podinfo/bind-address. SIP stays on
-       local_ip_v4, where Kamailio dispatches to it. -->
+  <!-- The address RTP is bound to (rtp-ip), toward carriers and the backend alike: FreeSWITCH's own, unless the
+       pod's address pool gives it one of its own on the node, which freeswitch-operator writes to
+       /etc/freeswitch-operator/podinfo/bind-address. That one moves with the pod, so a call recovered on another
+       node can bind its legs' RTP there again. SIP stays on local_ip_v4, where Kamailio dispatches to it. -->
   <X-PRE-PROCESS cmd="exec-set" data="bind_address=/bin/sh /usr/local/freeswitch/conf/bin/podinfo.sh bind-address $${local_ip_v4}"/>
 
   <!-- The names the SIP profiles run under: trunks-<external address> and backend-<external address> on a cluster,

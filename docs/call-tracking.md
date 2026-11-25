@@ -194,12 +194,25 @@ exactly that node's legs and that every call on every node is still up with audi
 place is re-invited from the same node and address, so its in-dialog SIP needs nothing new. Recovery skips a row
 whose profile the recovering node doesn't run: on failover, the spare must come up holding the lost address.
 
+**In-dialog SIP follows a recovered call to its new node.** The re-INVITEs recovery sends carry the recovering
+node's Contact (its own address), so both far ends send their next requests there: the carrier's through Kamailio,
+the backend's directly (a far end that keeps sending to the Contact of the dialog's first INVITE loses its BYE:
+sipbench's runner had to put the refreshed Contact back before hanging up). Recovery binds each leg's RTP to the
+address the leg had, so both legs' RTP must be on an address that moves with the pod: sipbench binds the backend's to
+the pool's bind address as well as the carriers', and a leg bound to the node's own address fails on the new node
+("Bind Error", then `INCOMPATIBLE_DESTINATION`). FreeSWITCH's own requests follow the route it saved, through Kamailio. Where Kamailio has a
+bind address, that route names Kamailio's pod rather than its node ([Kamailio](kamailio.md#routing)), so it still
+reaches Kamailio when Kamailio was lost with the node and replaced elsewhere, as on a one-node cluster. sipbench's
+`moved-call-in-dialog` checks a move on kind: it cordons a call's node, crashes FreeSWITCH there, deletes the pod at
+once, and recovers on the replacement, which comes up on the spare node with the moved pod's address. Then every
+call's backend sends a REFER and every caller hangs up, and each of those requests must reach the node the call is
+on now. A pod replaced onto a spare keeps its address only when the spare holds none of its own (the pool's rule);
+one that kept an idle address from an earlier pod gives the moved pod that one, and its calls' rows stay put.
+
 Not built yet:
 
 - **Nothing runs `sofia recover`.** FreeSWITCH doesn't recover on startup. Until something does, the bench runs it
   by hand.
-- **In-dialog SIP has to reach the spare.** The far end's BYE and re-INVITE go to the Contact it was given. That is
-  the lost node's address unless it moved too.
 - **Nothing moves a lost node's address.** Dead-node detection, fencing and the address move are still to be
   built. A lost node's rows stay in `recovery` until something recovers them.
 

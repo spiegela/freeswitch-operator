@@ -106,8 +106,14 @@ func endpointURLs(rawURL string, svc *corev1.Service, servicePort int32, endpoin
 			}
 		}
 		for _, ep := range s.Endpoints {
-			// An unset Ready means ready (EndpointConditions); a terminating Kamailio needs no news.
-			if ep.Conditions.Ready != nil && !*ep.Conditions.Ready {
+			// An unset Ready means ready (EndpointConditions); a terminating Kamailio needs no news. A Service that
+			// publishes not-ready addresses (Kamailio's, for its pods' DNS names) marks every endpoint Ready: Serving
+			// is then the pod's own readiness.
+			ready := ep.Conditions.Ready
+			if ep.Conditions.Serving != nil {
+				ready = ep.Conditions.Serving
+			}
+			if ready != nil && !*ready {
 				continue
 			}
 			if ep.Conditions.Terminating != nil && *ep.Conditions.Terminating {

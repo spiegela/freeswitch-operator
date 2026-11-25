@@ -1,0 +1,83 @@
+name: moved-call-in-dialog
+area: fleet
+long: true
+description: >
+  A call's FreeSWITCH moves to a spare edge node mid-call, and the call's SIP follows it both ways. Four long calls
+  go through the fleet. Ten seconds in, the runner moves call a's pod to the spare node, as a lost node's pod would
+  move: it cordons the node, crashes FreeSWITCH (no drain, no BYE, the calls left in the recovery table) and
+  deletes the pod at once. The replacement comes up on the spare with the same address, so the same profile names,
+  and the runner runs `sofia recover` there, which must take exactly the legs of the calls that were on a's node.
+  Their re-INVITEs give both far ends the spare's Contact. Every call then exercises its dialog both ways: the
+  backend sends a REFER (it must reach the spare directly), the spare accepts it, releases the backend with a
+  NOTIFY and a BYE, and transfers the caller to the runner's target; then the caller hangs up (its BYE must reach the
+  spare through Kamailio, which ends the target's call). The calls on the node that stayed do the same with no
+  gap. Which calls share a's node varies from run to run, and the checks hold either way. Needs call tracking and
+  a spare edge node holding no address of its own (kind runs two FreeSWITCH nodes on three edge nodes; a fleet
+  scaled down in place leaves the freed node an idle address, which the pool gives the moved pod instead of its
+  own). Kamailio's part, a route back through its pod's name for a Kamailio lost with the node, is checked by
+  make check-kamailio-name: on kind, Kamailio runs on nodes of its own.
+requires: [mock, fleet, spare-node]
+timeoutMs: 300000
+backend:
+  routes:
+    # The REFER comes long after the move and recovery (half a minute on kind).
+    referLate:
+      steps:
+        - answer: {}
+        - tone: {hz: 1000, ms: 100000}
+        - refer: {to: target}
+target:
+  steps:
+    - answer: {}
+    - tone: {hz: 1800, ms: 30000}
+calls:
+  - id: a
+    to: referLate
+    steps: &talk
+      # Until the transfer, then a while on the target before hanging up.
+      - tone: {hz: 600, ms: 115000}
+      - hangup: {}
+    maxDurationMs: 130000
+    expect: &followed
+      status: 200
+      tonesHeard: [1000, 1800]
+      # A moved call is silent from the crash until the spare has recovered it and re-invited both ends: the
+      # replacement pod's scheduling, its address and FreeSWITCH's start. One whose audio never came back would
+      # show a gap from the crash to the transfer, about 90 s.
+      maxAudioGapMs: 60000
+      endedBy: local
+      backend:
+        answered: true
+        referAccepted: true
+        tonesHeard: [600]
+        maxAudioGapMs: 60000
+        endedBy: remote
+      target:
+        answered: true
+        tonesHeard: [600]
+        endedBy: remote
+  - id: b
+    to: referLate
+    startMs: 500
+    steps: *talk
+    maxDurationMs: 130000
+    expect: *followed
+  - id: c
+    to: referLate
+    startMs: 1000
+    steps: *talk
+    maxDurationMs: 130000
+    expect: *followed
+  - id: d
+    to: referLate
+    startMs: 1500
+    steps: *talk
+    maxDurationMs: 130000
+    expect: *followed
+actions:
+  - afterAnswered: d
+    afterMs: 10000
+    moveFreeswitchOf: a
+  - recoverOn: a
+  - uncordon: {}
+  - waitFleetCurrent: {timeoutMs: 120000}

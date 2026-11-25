@@ -1,10 +1,11 @@
-# Three FreeSWITCH nodes running sipbench's edge configuration, behind the KamailioCluster "proxy".
+# Two FreeSWITCH nodes running sipbench's edge configuration, behind the KamailioCluster "proxy". kind has three
+# edge nodes: the third is the spare a lost node's pod moves to (sipbench's moved-call-in-dialog).
 apiVersion: sip.instruments.com/v1alpha1
 kind: FreeswitchCluster
 metadata:
   name: edge
 spec:
-  replicas: 3
+  replicas: 2
   # images/freeswitch (drachtio's image plus mod_pgsql), built and loaded into kind by hack/kind.sh.
   image: freeswitch:dev
   imagePullPolicy: IfNotPresent

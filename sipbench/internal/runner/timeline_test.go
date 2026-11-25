@@ -36,6 +36,10 @@ type fakeFleet struct {
 	restarts   map[string]int32
 	execs      []string
 	recoverOut string
+	// spare is the node a pod deleted at once comes back on, Active; moveAddress, when set, is the external
+	// address it comes back with.
+	spare       string
+	moveAddress string
 }
 
 type fakeBlackout struct {
@@ -168,6 +172,21 @@ func (f *fakeFleet) DeletePod(_ context.Context, pod string) error {
 	return nil
 }
 
+func (f *fakeFleet) DeletePodNow(_ context.Context, pod string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted = append(f.deleted, pod+" (now)")
+	for i, m := range f.status.Members {
+		if m.Pod == pod && f.spare != "" {
+			f.status.Members[i].Node, f.status.Members[i].State, f.status.Members[i].Address = f.spare, "Active", "10.0.0.9"
+			if f.moveAddress != "" {
+				f.external[pod] = f.moveAddress
+			}
+		}
+	}
+	return nil
+}
+
 func (f *fakeFleet) Exec(_ context.Context, pod, container string, cmd ...string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -184,6 +203,8 @@ func (f *fakeFleet) Exec(_ context.Context, pod, container string, cmd ...string
 		return "", errors.New("command terminated with exit code 1")
 	case line == "fs_cli -x sofia recover":
 		return f.recoverOut, nil
+	case line == "fs_cli -x sofia recover flush":
+		return "Flushing recovery database.\n", nil
 	}
 	return "", fmt.Errorf("unexpected command %q", line)
 }
@@ -467,5 +488,89 @@ func TestTimelineRecoverTakingOtherNodesCallsFails(t *testing.T) {
 	res := r.Run(context.Background(), s)
 	if res.Status != statusFail || !strings.Contains(strings.Join(res.Failures, "\n"), "took 6 call legs, want 2") {
 		t.Errorf("got %s: %v", res.Status, res.Failures)
+	}
+}
+
+const moveScenario = `
+name: move
+requires: [mock, fleet, spare-node]
+calls:
+  - id: a
+    to: long
+    steps:
+      - tone: {hz: 600, ms: 20000}
+    expect: {status: 200}
+  - id: b
+    to: long
+    steps:
+      - tone: {hz: 600, ms: 20000}
+    expect: {status: 200}
+actions:
+  - {afterAnswered: b, afterMs: 300, moveFreeswitchOf: a}
+  - {recoverOn: a}
+  - {hangup: a}
+  - {hangup: b}
+`
+
+// A move cordons the call's node, crashes FreeSWITCH, deletes the pod at once, and waits for the replacement to
+// take calls on the spare node with the same address; the recover then runs in the replacement.
+func TestTimelineMovesToASpareAndRecovers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	f := newFakeFleet()
+	f.recoverOut = "Recovered 4 call(s)\n"
+	f.spare = "n3"
+	f.external = map[string]string{"edge-0": "192.0.2.10"}
+	r := withFleet(startMock(t, longRoute), f)
+	r.cfg.Caps[scenario.SpareNodeCapability] = true
+	res := runScenario(t, r, moveScenario)
+	want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: fs_cli -x sofia recover"}
+	if fmt.Sprint(f.execs) != fmt.Sprint(want) {
+		t.Errorf("ran %q, want %q", f.execs, want)
+	}
+	if fmt.Sprint(f.deleted) != "[edge-0 (now)]" {
+		t.Errorf("deleted %q, want edge-0 at once", f.deleted)
+	}
+	if f.cordoned["n0"] {
+		t.Error("n0 left cordoned")
+	}
+	tl := strings.Join(res.Timeline, "\n  ")
+	for _, s := range []string{"cordoned it, crashed FreeSWITCH and deleted the pod; its replacement takes calls on n3, with the same external address \"192.0.2.10\"",
+		"took 4 call legs: call(s) a, b"} {
+		if !strings.Contains(tl, s) {
+			t.Errorf("timeline lacks %q:\n  %s", s, tl)
+		}
+	}
+	if res.Status == statusFail {
+		t.Errorf("failed: %v", res.Failures)
+	}
+}
+
+// A replacement with another address would run other profiles and recover nothing of the moved pod's: the move
+// fails.
+func TestTimelineMoveToAnotherAddressFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	f := newFakeFleet()
+	f.spare, f.moveAddress = "n3", "192.0.2.11"
+	f.external = map[string]string{"edge-0": "192.0.2.10"}
+	r := withFleet(startMock(t, longRoute), f)
+	r.cfg.Caps[scenario.SpareNodeCapability] = true
+	s, err := scenario.Parse([]byte(moveScenario))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := r.Run(context.Background(), s)
+	if res.Status != statusFail || !strings.Contains(strings.Join(res.Failures, "\n"), `holds "192.0.2.11", not "192.0.2.10"`) {
+		t.Errorf("got %s: %v", res.Status, res.Failures)
+	}
+	// The crashed FreeSWITCH's calls are flushed from the table on the way out.
+	if want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: fs_cli -x sofia recover flush"}; fmt.Sprint(f.execs) != fmt.Sprint(want) {
+		t.Errorf("ran %q, want %q", f.execs, want)
+	}
+	if tl := strings.Join(res.Timeline, "\n"); !strings.Contains(tl, "cleanup: flushed edge-0's calls from the recovery table") {
+		t.Errorf("timeline:\n%s", tl)
 	}
 }

@@ -134,7 +134,7 @@ flowchart LR
 
 ## Getting started
 
-Try the whole edge on kind: two Kamailio and three FreeSWITCH nodes, an address pool, PostgreSQL, the mock backend
+Try the whole edge on kind: two Kamailio and two FreeSWITCH nodes with a spare, an address pool, PostgreSQL, the mock backend
 and monitoring. See [development](docs/development.md#the-edge-on-kind) for what each step sets up.
 
 ```sh
@@ -155,10 +155,9 @@ layout, and [`config/samples`](config/samples/) has a sample of each resource.
 Features still to come, each with the stories that make it up.
 
 **Failover with call recovery** ([design](docs/call-tracking.md#failover-what-tracking-is-for-and-whats-left))
-- Make in-dialog SIP reach the node that takes a call over.
 - Detect a dead node and fence it.
 - Move the lost node's address to a spare and recover its calls there.
-- Add a spare edge node on kind, and have `node-lost-mid-call` check the call survives.
+- Have `node-lost-mid-call` check the call survives (kind has a spare edge node).
 - Check call tracking against a managed PostgreSQL (Aurora), through a database failover.
 
 **Address pools on AWS**

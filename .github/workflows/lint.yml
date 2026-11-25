@@ -38,5 +38,7 @@ jobs:
         run: make check-kamailio-cfg
       - name: Check Kamailio's SIP capture (spec.capture) reaches a HEP collector
         run: make check-kamailio-capture
+      - name: Check Kamailio gives FreeSWITCH its pod's name, with a bind address
+        run: make check-kamailio-name
       - name: Check the alert rules and run their tests with promtool
         run: make check-alerts

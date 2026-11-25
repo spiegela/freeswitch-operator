@@ -130,7 +130,10 @@ func buildKamailioService(kc *sipv1alpha1.KamailioCluster) *corev1.Service {
 		ObjectMeta: metav1.ObjectMeta{Name: kamailioName(kc), Namespace: kc.Namespace, Labels: kamailioLabels(kc)},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: corev1.ClusterIPNone,
-			Selector:  kamailioSelectorLabels(kc),
+			// Each pod's DNS name (FreeSWITCH's route back through Kamailio) lasts while the pod drains, and is
+			// there as soon as a replacement has its address, not only once it is ready.
+			PublishNotReadyAddresses: true,
+			Selector:                 kamailioSelectorLabels(kc),
 			Ports: []corev1.ServicePort{
 				{Name: portSIPUDP, Protocol: corev1.ProtocolUDP, Port: cfg.sipPort, TargetPort: intstr.FromInt32(cfg.sipPort)},
 				{Name: portSIPTCP, Protocol: corev1.ProtocolTCP, Port: cfg.sipPort, TargetPort: intstr.FromInt32(cfg.sipPort)},
@@ -162,6 +165,9 @@ func buildKamailioStatefulSet(kc *sipv1alpha1.KamailioCluster, configName, confi
 	}
 	env := slices.Concat([]corev1.EnvVar{
 		{Name: "POD_NAME", ValueFrom: field("metadata.name")},
+		{Name: "POD_NAMESPACE", ValueFrom: field("metadata.namespace")},
+		// The governing Service: with it the pod's name in DNS is <pod>.<service>.<namespace>.svc.<cluster domain>.
+		{Name: "KAMAILIO_SERVICE", Value: kamailioName(kc)},
 		{Name: "NODE_NAME", ValueFrom: field("spec.nodeName")},
 		{Name: "HOST_IP", ValueFrom: field("status.hostIP")},
 		{Name: "POD_IP", ValueFrom: field("status.podIP")},

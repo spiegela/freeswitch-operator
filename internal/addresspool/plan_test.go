@@ -236,6 +236,31 @@ func TestDecideRecordsClaims(t *testing.T) {
 	}
 }
 
+// A pod that moved to a node holding an address of its own is no longer the last claimant of the address it left:
+// when it moves again it gets the address it holds now, not the older, free one first.
+func TestDecideForgetsAMovedPodsOlderAddress(t *testing.T) {
+	// edge-0 used eip1 on node a, then moved to node b, which kept its idle eip2; eip1 is free again.
+	prev := Decide(Input{Observed: []Address{addr("eip1", ""), addr("eip2", "i-b")}, Nodes: nodes("a", "b"),
+		Previous: []sipv1alpha1.PoolAddress{
+			{ID: "eip1", Address: "203.0.113.1", State: sipv1alpha1.PoolAddressFree, LastClaimedBy: []sipv1alpha1.AddressClaim{claim("edge-0")}},
+			{ID: "eip2", Address: "203.0.113.2", State: sipv1alpha1.PoolAddressIdle, Node: "b", NodeID: "i-b"},
+		},
+		Claimants: []Claimant{claimant("edge-0", "b")},
+	})
+	if got := prev.Status[0].LastClaimedBy; len(got) != 0 {
+		t.Fatalf("eip1 still remembers %v", got)
+	}
+	if got := prev.Status[1].LastClaimedBy; len(got) != 1 || got[0].Pod != "edge-0" {
+		t.Fatalf("eip2: %v", got)
+	}
+	// edge-0 moves on to node c: it takes eip2, which it held last, off idle node b.
+	p := Decide(Input{Observed: []Address{addr("eip1", ""), addr("eip2", "i-b")}, Nodes: nodes("a", "b", "c"),
+		Previous: prev.Status, Claimants: []Claimant{claimant("edge-0", "c")}})
+	if got, want := summary(p), "unbind eip2, bind eip2 c | eip1:Free eip2:Bound@c"; got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
 // A refused node gets no new address and waits, with why; one it already holds stays.
 func TestDecideRefused(t *testing.T) {
 	in := Input{

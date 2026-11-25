@@ -25,6 +25,15 @@ node is also silent when it discards a request it can't parse, and one malformed
 fleet. So a node that has stopped answering leaves rotation after two missed probes, 10 to 20 s. A `503` from the
 last node is passed on as `503`.
 
+**The route back from FreeSWITCH.** With a bind address of its own (an [address pool](address-pools.md) that gives
+it one), Kamailio advertises its pod's DNS name to FreeSWITCH instead of the node's address:
+`<pod>.<name>-kamailio.<namespace>.svc.<cluster domain>`, from the pod's headless Service, which publishes pods that
+aren't ready too, so the name lasts through a drain and comes back as soon as a replacement has its address. A call
+FreeSWITCH recovers on a spare after a node is lost, Kamailio with it (both on one node, as on a one-node cluster),
+sends its re-INVITE and BYE to the name, which reaches Kamailio's replacement. Without a bind address Kamailio has
+one listener and advertises its public address on both sides: a pool's address moves with the pod. The start script
+finds the cluster domain in the pod's DNS search list, and falls back to the address if it can't.
+
 ## What it refuses
 
 - **Untrusted sources,** with `spec.trustedPeers` set (each a named list of CIDRs). Only those sources and the
@@ -43,6 +52,8 @@ defaults stop at 32 KB). Every refusal and silent drop is counted and logged ([m
 
 `make check-kamailio-cfg` runs `kamailio -c` on rendered cases in the pinned image, in the lint workflow.
 `make check-kamailio-trust` checks that a trusted source gets an answer and an untrusted one gets none.
+`make check-kamailio-name` checks that, with a bind address, FreeSWITCH gets the pod's name in Record-Route and
+Kamailio takes requests routed to that name as its own (in the lint workflow too).
 
 ## Membership is live
 

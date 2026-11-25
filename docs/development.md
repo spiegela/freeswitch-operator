@@ -19,7 +19,7 @@ sipbench has its own instructions in [`sipbench/README.md`](../sipbench/README.m
 - A kind cluster with two proxy nodes and three tainted edge nodes.
 - The operator, built from this tree.
 - A two-node `KamailioCluster` on the proxy nodes.
-- A three-node `FreeswitchCluster` running sipbench's FreeSWITCH configuration on
+- A two-node `FreeswitchCluster` (the third edge node is its spare) running sipbench's FreeSWITCH configuration on
   [`images/freeswitch`](../images/freeswitch/Dockerfile), with the metrics exporter beside it. Its media addresses
   come from a MetalLB `SIPAddressPool` (`edge-media`: MetalLB in L2 mode and the address agent, four addresses at
   the top of kind's Docker network).

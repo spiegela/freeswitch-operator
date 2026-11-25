@@ -147,6 +147,9 @@ type Fleet interface {
 	PodLog(ctx context.Context, pod string) (string, error)
 	// DeletePod deletes a pod; one already gone is no error.
 	DeletePod(ctx context.Context, pod string) error
+	// DeletePodNow deletes a pod with no grace period, as for a lost node: the API server forgets it at once, so
+	// its StatefulSet replaces it without waiting for the kubelet. One already gone is no error.
+	DeletePodNow(ctx context.Context, pod string) error
 	// Exec runs a command in one of a pod's containers and returns what it printed (stdout, then stderr). A
 	// command that exits non-zero, or whose container dies under it, is an error, with the output so far.
 	Exec(ctx context.Context, pod, container string, cmd ...string) (string, error)
@@ -513,6 +516,15 @@ func (k *kube) PodLog(ctx context.Context, pod string) (string, error) {
 
 func (k *kube) DeletePod(ctx context.Context, pod string) error {
 	err := k.core.CoreV1().Pods(k.ns).Delete(ctx, pod, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func (k *kube) DeletePodNow(ctx context.Context, pod string) error {
+	now := int64(0)
+	err := k.core.CoreV1().Pods(k.ns).Delete(ctx, pod, metav1.DeleteOptions{GracePeriodSeconds: &now})
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
