@@ -42,3 +42,5 @@ jobs:
         run: make check-kamailio-name
       - name: Check the alert rules and run their tests with promtool
         run: make check-alerts
+      - name: Check the Grafana dashboards match their generator
+        run: make check-dashboards

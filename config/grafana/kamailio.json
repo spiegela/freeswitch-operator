@@ -1,0 +1,2821 @@
+{
+ "uid": "edge-kamailio",
+ "title": "Kamailio",
+ "description": "The edge's SIP proxy: requests and replies, INVITE outcomes, transactions, what it refuses or loses, memory, and its dispatcher list.",
+ "tags": [
+  "freeswitch-operator",
+  "kamailio",
+  "sip"
+ ],
+ "editable": true,
+ "graphTooltip": 1,
+ "refresh": "30s",
+ "schemaVersion": 41,
+ "version": 1,
+ "time": {
+  "from": "now-6h",
+  "to": "now"
+ },
+ "timepicker": {},
+ "timezone": "browser",
+ "templating": {
+  "list": [
+   {
+    "type": "datasource",
+    "name": "datasource",
+    "label": "Data source",
+    "query": "prometheus",
+    "current": {},
+    "hide": 0,
+    "refresh": 1,
+    "regex": "",
+    "options": []
+   },
+   {
+    "type": "query",
+    "name": "namespace",
+    "label": "Namespace",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${datasource}"
+    },
+    "query": {
+     "query": "label_values(up{job=\"kamailio\"}, namespace)",
+     "refId": "namespace-var",
+     "qryType": 1
+    },
+    "definition": "label_values(up{job=\"kamailio\"}, namespace)",
+    "refresh": 2,
+    "sort": 1,
+    "hide": 0,
+    "multi": true,
+    "includeAll": true,
+    "current": {},
+    "options": [],
+    "regex": ""
+   },
+   {
+    "type": "query",
+    "name": "fleet",
+    "label": "KamailioCluster",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${datasource}"
+    },
+    "query": {
+     "query": "label_values(up{job=\"kamailio\", namespace=~\"$namespace\"}, fleet)",
+     "refId": "fleet-var",
+     "qryType": 1
+    },
+    "definition": "label_values(up{job=\"kamailio\", namespace=~\"$namespace\"}, fleet)",
+    "refresh": 2,
+    "sort": 1,
+    "hide": 0,
+    "multi": true,
+    "includeAll": true,
+    "current": {},
+    "options": [],
+    "regex": "",
+    "allValue": ".*"
+   },
+   {
+    "type": "query",
+    "name": "pod",
+    "label": "Pod",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${datasource}"
+    },
+    "query": {
+     "query": "label_values(up{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\"}, pod)",
+     "refId": "pod-var",
+     "qryType": 1
+    },
+    "definition": "label_values(up{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\"}, pod)",
+    "refresh": 2,
+    "sort": 1,
+    "hide": 0,
+    "multi": true,
+    "includeAll": true,
+    "current": {},
+    "options": [],
+    "regex": ""
+   }
+  ]
+ },
+ "annotations": {
+  "list": []
+ },
+ "links": [
+  {
+   "type": "dashboards",
+   "tags": [
+    "freeswitch-operator"
+   ],
+   "title": "Edge",
+   "asDropdown": false,
+   "includeVars": true,
+   "keepTime": true,
+   "icon": "external link",
+   "targetBlank": false,
+   "tooltip": "",
+   "url": ""
+  }
+ ],
+ "panels": [
+  {
+   "type": "stat",
+   "title": "Pods scraped",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Kamailio pods whose metrics answered the last scrape.",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(up{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "auto",
+    "orientation": "auto",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 1
+  },
+  {
+   "type": "stat",
+   "title": "INVITEs",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "New INVITEs received per second, last 5 minutes.",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(rate(kamailio_core_rcv_requests_invite{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[5m]))",
+     "legendFormat": "",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "mappings": [],
+     "decimals": 2
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "auto",
+    "orientation": "auto",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 2
+  },
+  {
+   "type": "stat",
+   "title": "INVITEs answered (ASR)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Of the final replies to INVITE that Kamailio received from the nodes over the selected range, the share that were 2xx: the answer-seizure ratio as the proxy sees it. A 487 (caller cancelled) counts as unanswered, as it does for carriers. The 408s Kamailio sends itself when no node answers aren't replies it received: see Requests lost.",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(increase(kamailio_core_rcv_replies_2xx_invite{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) / sum(increase({__name__=~\"kamailio_core_rcv_replies_2xx_invite|kamailio_core_rcv_replies_3xx_invite|kamailio_core_rcv_replies_4xx_invite|kamailio_core_rcv_replies_5xx_invite|kamailio_core_rcv_replies_6xx_invite\", job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range]))",
+     "legendFormat": "",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.5
+       },
+       {
+        "color": "green",
+        "value": 0.8
+       }
+      ]
+     },
+     "mappings": [],
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "auto",
+    "orientation": "auto",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 3
+  },
+  {
+   "type": "stat",
+   "title": "Transactions in progress",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "tm transactions not yet completed, across the selected pods.",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(kamailio_tmx_active_transactions{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "auto",
+    "orientation": "auto",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 4
+  },
+  {
+   "type": "stat",
+   "title": "Shared memory used (worst pod)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Shared memory in use, fragmentation included, of what Kamailio was started with (-m). When it runs out Kamailio can't create transactions and starts refusing requests.",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "max(kamailio_shmem_real_used_size{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"} / kamailio_shmem_total_size{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.7
+       },
+       {
+        "color": "red",
+        "value": 0.85
+       }
+      ]
+     },
+     "mappings": [],
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "auto",
+    "orientation": "auto",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 5
+  },
+  {
+   "type": "stat",
+   "title": "Requests lost",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Requests the caller got a 408 for over the selected range, because every node tried stayed silent (the edge's kamailio_silent_drops_total).",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 20,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(increase(kamailio_silent_drops_total{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) or vector(0)",
+     "legendFormat": "",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": [],
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "auto",
+    "orientation": "auto",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 6
+  },
+  {
+   "type": "row",
+   "title": "Requests and replies",
+   "collapsed": false,
+   "id": 7,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 4
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Requests received by method",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Every request Kamailio received, from callers and from the nodes. OPTIONS include the dispatcher's own keepalive replies' counterparts from the nodes.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 5
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(rate(kamailio_core_rcv_requests_invite{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "INVITE"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum(rate(kamailio_core_rcv_requests_ack{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "ACK"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "sum(rate(kamailio_core_rcv_requests_bye{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "BYE"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "D",
+     "expr": "sum(rate(kamailio_core_rcv_requests_cancel{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "CANCEL"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "E",
+     "expr": "sum(rate(kamailio_core_rcv_requests_options{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "OPTIONS"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "F",
+     "expr": "sum(rate(kamailio_core_rcv_requests{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval])) - sum(rate(kamailio_core_rcv_requests_invite{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval])) - sum(rate(kamailio_core_rcv_requests_ack{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval])) - sum(rate(kamailio_core_rcv_requests_bye{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval])) - sum(rate(kamailio_core_rcv_requests_cancel{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval])) - sum(rate(kamailio_core_rcv_requests_options{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "other"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 25,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 8
+  },
+  {
+   "type": "timeseries",
+   "title": "Final replies to INVITE, by class",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Final replies Kamailio received for INVITEs, from the nodes: how calls set up through the proxy ended.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 5
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(rate(kamailio_core_rcv_replies_2xx_invite{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "2xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum(rate(kamailio_core_rcv_replies_3xx_invite{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "3xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "sum(rate(kamailio_core_rcv_replies_4xx_invite{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "4xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "D",
+     "expr": "sum(rate(kamailio_core_rcv_replies_5xx_invite{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "5xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "E",
+     "expr": "sum(rate(kamailio_core_rcv_replies_6xx_invite{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "6xx"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 25,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "2xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "green"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "3xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#8AB8FF"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "4xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "orange"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "5xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "6xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "purple"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 9
+  },
+  {
+   "type": "timeseries",
+   "title": "Replies received, by class",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "All replies, to every method, provisional included.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 5
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(rate(kamailio_core_rcv_replies_1xx{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "1xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum(rate(kamailio_core_rcv_replies_2xx{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "2xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "sum(rate(kamailio_core_rcv_replies_3xx{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "3xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "D",
+     "expr": "sum(rate(kamailio_core_rcv_replies_4xx{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "4xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "E",
+     "expr": "sum(rate(kamailio_core_rcv_replies_5xx{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "5xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "F",
+     "expr": "sum(rate(kamailio_core_rcv_replies_6xx{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "6xx"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 25,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 10
+  },
+  {
+   "type": "bargauge",
+   "title": "4xx replies by code (over the range)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Which 4xx the nodes answered with: all of them, then each code seen in the range. 486/487 are a callee busy and a caller who hung up first; 404/484 a number no route matches; 408 no answer in time; 488 no common codec; 401/407/403 authentication.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 13
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(increase(kamailio_core_rcv_replies_4xx{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range]))",
+     "legendFormat": "all 4xx",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum(increase(kamailio_core_rcv_replies_400{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "400",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "sum(increase(kamailio_core_rcv_replies_401{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "401",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "D",
+     "expr": "sum(increase(kamailio_core_rcv_replies_403{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "403",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "E",
+     "expr": "sum(increase(kamailio_core_rcv_replies_404{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "404",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "F",
+     "expr": "sum(increase(kamailio_core_rcv_replies_407{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "407",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "G",
+     "expr": "sum(increase(kamailio_core_rcv_replies_408{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "408",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "H",
+     "expr": "sum(increase(kamailio_core_rcv_replies_480{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "480",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "I",
+     "expr": "sum(increase(kamailio_core_rcv_replies_481{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "481",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "J",
+     "expr": "sum(increase(kamailio_core_rcv_replies_483{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "483",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "K",
+     "expr": "sum(increase(kamailio_core_rcv_replies_484{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "484",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "L",
+     "expr": "sum(increase(kamailio_core_rcv_replies_486{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "486",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "M",
+     "expr": "sum(increase(kamailio_core_rcv_replies_487{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "487",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "N",
+     "expr": "sum(increase(kamailio_core_rcv_replies_488{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "488",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "O",
+     "expr": "sum(increase(kamailio_core_rcv_replies_489{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "489",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "P",
+     "expr": "sum(increase(kamailio_core_rcv_replies_491{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) > 0",
+     "legendFormat": "491",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "decimals": 0,
+     "min": 0,
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#5794F2"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#5794F2",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "orientation": "horizontal",
+    "displayMode": "gradient",
+    "showUnfilled": true,
+    "valueMode": "color",
+    "namePlacement": "left",
+    "sizing": "manual",
+    "minVizHeight": 16,
+    "maxVizHeight": 24,
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 11
+  },
+  {
+   "type": "timeseries",
+   "title": "Forwarded and dropped",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Messages Kamailio sent on statelessly, and those its script dropped (drop or exit without a reply).",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 13
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(rate(kamailio_core_fwd_requests{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "requests forwarded"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum(rate(kamailio_core_fwd_replies{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "replies forwarded"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "sum(rate(kamailio_core_drop_requests{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "requests dropped"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "D",
+     "expr": "sum(rate(kamailio_core_drop_replies{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "replies dropped"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": ".*dropped"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 12
+  },
+  {
+   "type": "row",
+   "title": "Transactions",
+   "collapsed": false,
+   "id": 13,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 21
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Transactions in progress",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Active: not yet completed. In use: still in memory, completed ones waiting out their timers included. In use climbing while active stays flat is transactions not being freed.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 22
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (pod) (kamailio_tmx_active_transactions{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "{{pod}} active"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum by (pod) (kamailio_tmx_inuse_transactions{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "{{pod}} in use"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 14
+  },
+  {
+   "type": "timeseries",
+   "title": "New transactions",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Kamailio forwards statefully: each request it relays opens a server transaction toward the caller and a client transaction toward a node; failover to another node opens another client transaction.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 22
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(rate(kamailio_tmx_UAS_transactions{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "server (UAS): requests received"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum(rate(kamailio_tmx_UAC_transactions{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "client (UAC): requests sent to nodes"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 15
+  },
+  {
+   "type": "timeseries",
+   "title": "Completed transactions, by final reply",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 22
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(rate(kamailio_tmx_2xx_transactions{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "2xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum(rate(kamailio_tmx_3xx_transactions{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "3xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "sum(rate(kamailio_tmx_4xx_transactions{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "4xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "D",
+     "expr": "sum(rate(kamailio_tmx_5xx_transactions{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "5xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "E",
+     "expr": "sum(rate(kamailio_tmx_6xx_transactions{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "6xx"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 25,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "2xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "green"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "3xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#8AB8FF"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "4xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "orange"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "5xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "6xx"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "purple"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 16
+  },
+  {
+   "type": "timeseries",
+   "title": "Replies handled by tm",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Absorbed: replies tm kept back (retransmissions, and the losers of a failover). Generated: replies Kamailio created itself, such as the 408 when no node answered.",
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 0,
+    "y": 30
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(rate(kamailio_tmx_rpl_received{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "received"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum(rate(kamailio_tmx_rpl_relayed{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "relayed"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "sum(rate(kamailio_tmx_rpl_absorbed{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "absorbed"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "D",
+     "expr": "sum(rate(kamailio_tmx_rpl_generated{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "generated locally"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 17
+  },
+  {
+   "type": "timeseries",
+   "title": "Replies Kamailio sends itself (stateless)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Replies from the sl module: Kamailio's own answers outside a transaction (keepalive OPTIONS, a refusal before relaying).",
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 12,
+    "y": 30
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(rate(kamailio_sl_1xx_replies{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "1xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum(rate(kamailio_sl_2xx_replies{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "2xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "sum(rate(kamailio_sl_4xx_replies{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "4xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "D",
+     "expr": "sum(rate(kamailio_sl_5xx_replies{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "5xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "E",
+     "expr": "sum(rate(kamailio_sl_6xx_replies{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "6xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "F",
+     "expr": "sum(rate(kamailio_sl_failures{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "failed to send"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 25,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "failed to send"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       },
+       {
+        "id": "custom.stacking",
+        "value": {
+         "mode": "none"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 18
+  },
+  {
+   "type": "row",
+   "title": "Refused and lost",
+   "collapsed": false,
+   "id": 19,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 37
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Refused before any node saw it",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "The edge's kamailio_rejected_requests_total. untrusted_source: dropped unanswered, the source isn't in spec.trustedPeers (scanners, mostly). sanity: the sanity module's own 4xx. uri_scheme: 416. display_name: a From or To a node would discard.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 38
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (reason) (rate(kamailio_rejected_requests_total{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "{{reason}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 25,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      }
+     },
+     "noValue": "None"
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 20
+  },
+  {
+   "type": "timeseries",
+   "title": "Nodes that stayed silent",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "A node that doesn't answer in 5 s is tried no further for that request; the next node is. When every node tried stays silent the caller gets a 408. cause=nodes: no node answered anything (the fleet may be down); cause=request: the nodes are up and discarded this one request.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 38
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (cause) (rate(kamailio_silent_drops_total{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "408 to the caller: {{cause}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum by (pod) (rate(kamailio_node_silent_timeouts_total{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "a node timed out ({{pod}})"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "noValue": "None"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": ".*: nodes"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 21
+  },
+  {
+   "type": "timeseries",
+   "title": "Malformed and failed",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Messages Kamailio couldn't parse or route, and its DNS lookups that failed or took long.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 38
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(rate(kamailio_core_bad_URIs_rcvd{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "bad Request-URI"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum(rate(kamailio_core_bad_msg_hdr{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "bad header"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "sum(rate(kamailio_core_unsupported_methods{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "unsupported method"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "D",
+     "expr": "sum(rate(kamailio_core_err_requests{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "request errors"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "E",
+     "expr": "sum(rate(kamailio_core_err_replies{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "reply errors"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "F",
+     "expr": "sum(rate(kamailio_dns_failed_dns_request{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "DNS failed"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "G",
+     "expr": "sum(rate(kamailio_dns_slow_dns_request{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "DNS slow"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 22
+  },
+  {
+   "type": "row",
+   "title": "Memory and transport",
+   "collapsed": false,
+   "id": 23,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 46
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Shared memory used, by pod",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Shared memory holds transactions, the dispatcher list and the htable. Peak is the most used since start. Steady growth without traffic to match is a leak.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 47
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (pod) (kamailio_shmem_real_used_size{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}) / sum by (pod) (kamailio_shmem_total_size{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "{{pod}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum by (pod) (kamailio_shmem_max_used_size{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}) / sum by (pod) (kamailio_shmem_total_size{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "{{pod}} peak"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "min": 0,
+     "max": 1
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": ".* peak"
+      },
+      "properties": [
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "fill": "dash",
+         "dash": [
+          10,
+          10
+         ]
+        }
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 24
+  },
+  {
+   "type": "timeseries",
+   "title": "Shared memory fragments, by pod",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Free fragments. A rising count with flat usage is fragmentation: large allocations can fail with memory to spare.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 47
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (pod) (kamailio_shmem_fragments{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "{{pod}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 25
+  },
+  {
+   "type": "timeseries",
+   "title": "TCP",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "SIP over TCP, when callers or nodes use it (UDP is the default). Errors: connects that failed, resets, timeouts, a full send queue, connections refused locally.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 47
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(kamailio_tcp_current_opened_connections{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "connections open"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum(kamailio_tcp_current_write_queue_size{job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "bytes queued to send"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "sum(rate({__name__=~\"kamailio_tcp_(connect_failed|con_reset|con_timeout|send_timeout|sendq_full|local_reject)\", job=\"kamailio\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "errors/s"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "errors/s"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 26
+  },
+  {
+   "type": "row",
+   "title": "Dispatcher (from the operator)",
+   "collapsed": false,
+   "id": 27,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 55
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Destinations, by set",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Nodes in the dispatcher list the operator last wrote. Draining nodes leave it.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 56
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (name, set) (freeswitch_operator_dispatcher_destinations{kind=\"KamailioCluster\", namespace=~\"$namespace\", name=~\"$fleet\"})",
+     "legendFormat": "{{name}} set {{set}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 28
+  },
+  {
+   "type": "timeseries",
+   "title": "Dispatcher list updates and reloads",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Each change to the fleet rewrites the list and asks every Kamailio to reload it. not_loaded: a Kamailio answered but still held the old list; retried.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 56
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (name) (increase(freeswitch_operator_dispatcher_list_updates_total{kind=\"KamailioCluster\", namespace=~\"$namespace\", name=~\"$fleet\"}[$__rate_interval]))",
+     "legendFormat": "{{name}} list written"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum by (name, result) (increase(freeswitch_operator_dispatcher_reloads_total{kind=\"KamailioCluster\", namespace=~\"$namespace\", name=~\"$fleet\"}[$__rate_interval]))",
+     "legendFormat": "{{name}} reload {{result}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 0,
+      "fillOpacity": 70,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "drawStyle": "bars"
+     },
+     "decimals": 0
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": ".*reload error"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": ".*reload not_loaded"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "orange"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 29
+  },
+  {
+   "type": "state-timeline",
+   "title": "Reload pending",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Pending: the list changed and not every Kamailio is confirmed to hold it. Calls may go to a node that is leaving, or miss a new one.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 56
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "max by (name) (freeswitch_operator_dispatcher_pending_reload{kind=\"KamailioCluster\", namespace=~\"$namespace\", name=~\"$fleet\"})",
+     "legendFormat": "{{name}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#8e8e8e"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "Loaded",
+         "color": "green",
+         "index": 0
+        }
+       }
+      },
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "Pending",
+         "color": "orange",
+         "index": 1
+        }
+       }
+      }
+     ],
+     "custom": {
+      "fillOpacity": 80,
+      "lineWidth": 0
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "showValue": "never",
+    "mergeValues": true,
+    "rowHeight": 0.8,
+    "alignValue": "left",
+    "legend": {
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "single"
+    }
+   },
+   "id": 30
+  },
+  {
+   "type": "row",
+   "title": "Pods",
+   "collapsed": false,
+   "id": 31,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 64
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "CPU by pod",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Cores the kamailio container uses, against its request and limit (when set).",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 65
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\", pod=~\"$pod\", container=\"kamailio\"}[$__rate_interval]))",
+     "legendFormat": "{{pod}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "max(kube_pod_container_resource_limits{namespace=~\"$namespace\", pod=~\"$pod\", container=\"kamailio\", resource=\"cpu\"})",
+     "legendFormat": "limit"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "max(kube_pod_container_resource_requests{namespace=~\"$namespace\", pod=~\"$pod\", container=\"kamailio\", resource=\"cpu\"})",
+     "legendFormat": "request"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "decimals": 2
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "limit"
+      },
+      "properties": [
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "fill": "dash",
+         "dash": [
+          10,
+          10
+         ]
+        }
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "request"
+      },
+      "properties": [
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "fill": "dash",
+         "dash": [
+          10,
+          10
+         ]
+        }
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#8e8e8e"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 32
+  },
+  {
+   "type": "timeseries",
+   "title": "Memory by pod (working set)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "The working set is what the kernel counts against the limit: at the limit, the container is OOM-killed.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 65
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=~\"$namespace\", pod=~\"$pod\", container=\"kamailio\"})",
+     "legendFormat": "{{pod}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "max(kube_pod_container_resource_limits{namespace=~\"$namespace\", pod=~\"$pod\", container=\"kamailio\", resource=\"memory\"})",
+     "legendFormat": "limit"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "max(kube_pod_container_resource_requests{namespace=~\"$namespace\", pod=~\"$pod\", container=\"kamailio\", resource=\"memory\"})",
+     "legendFormat": "request"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "limit"
+      },
+      "properties": [
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "fill": "dash",
+         "dash": [
+          10,
+          10
+         ]
+        }
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "request"
+      },
+      "properties": [
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "fill": "dash",
+         "dash": [
+          10,
+          10
+         ]
+        }
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#8e8e8e"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 33
+  },
+  {
+   "type": "timeseries",
+   "title": "Container restarts",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Restarts of every container in the selected pods.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 65
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (pod, container) (increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "{{pod}} {{container}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 0,
+      "fillOpacity": 70,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "drawStyle": "bars"
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 34
+  }
+ ]
+}
