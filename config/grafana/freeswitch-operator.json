@@ -1423,7 +1423,7 @@
     "type": "prometheus",
     "uid": "${datasource}"
    },
-   "description": "Drains that finished in the selected range and how long they took. A Kamailio drain takes seconds; a FreeSWITCH drain waits for its calls. (The count is shown in seconds' units; read it as a number.)",
+   "description": "Drains that finished in the selected range and how long they took. A Kamailio drain takes seconds; a FreeSWITCH drain waits for its calls.",
    "gridPos": {
     "h": 8,
     "w": 8,
@@ -1484,7 +1484,20 @@
       ]
      }
     },
-    "overrides": []
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": ".* drains"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "none"
+       }
+      ]
+     }
+    ]
    },
    "options": {
     "orientation": "horizontal",

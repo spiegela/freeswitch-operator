@@ -118,12 +118,12 @@ def stat(title, qs, unit="short", w=4, h=4, desc="", th=None, mappings=(), decim
                         "textMode": text, "orientation": "auto", "wideLayout": True, "showPercentChange": False}}
 
 
-def bargauge(title, qs, unit="short", w=8, h=8, desc="", decimals=0, th=None):
+def bargauge(title, qs, unit="short", w=8, h=8, desc="", decimals=0, th=None, overrides=()):
     return {"type": "bargauge", "title": title, "datasource": DS, "description": desc,
             "gridPos": {"h": h, "w": w}, "targets": targets(qs, instant=True),
             "fieldConfig": {"defaults": {"unit": unit, "decimals": decimals, "min": 0,
                                          "color": {"mode": "thresholds"} if th else {"mode": "fixed", "fixedColor": "#5794F2"},
-                                         "thresholds": th or steps("#5794F2")}, "overrides": []},
+                                         "thresholds": th or steps("#5794F2")}, "overrides": list(overrides)},
             "options": {"orientation": "horizontal", "displayMode": "gradient", "showUnfilled": True,
                         "valueMode": "color", "namePlacement": "left", "sizing": "manual", "minVizHeight": 16,
                         "maxVizHeight": 24, "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False}}}
@@ -223,7 +223,7 @@ def pod_resources(d, container, sel):
         ts("CPU by pod", [(f'sum by (pod) (rate(container_cpu_usage_seconds_total{{{c}}}[$__rate_interval]))', "{{pod}}"),
                           (f'max(kube_pod_container_resource_limits{{{c}, resource="cpu"}})', "limit"),
                           (f'max(kube_pod_container_resource_requests{{{c}, resource="cpu"}})', "request")],
-           unit="none", decimals=2, desc=f"Cores the {container} container uses, against its request and limit (when set).",
+           unit="none", desc=f"Cores the {container} container uses, against its request and limit (when set).",
            overrides=[by_name("limit", *dashed(), fixed(BAD)), by_name("request", *dashed(), fixed("#8e8e8e"))]),
         ts("Memory by pod (working set)",
            [(f'sum by (pod) (container_memory_working_set_bytes{{{c}}})', "{{pod}}"),
@@ -627,9 +627,9 @@ def operator(out):
             (f'sum by (name) (increase({o("freeswitch_operator_fleet_drain_duration_seconds_count")}[$__range]))', "{{name}} drains"),
             (f'histogram_quantile(0.5, sum by (name, le) (increase({o("freeswitch_operator_fleet_drain_duration_seconds_bucket")}[$__range])))', "{{name}} p50"),
             (f'histogram_quantile(0.95, sum by (name, le) (increase({o("freeswitch_operator_fleet_drain_duration_seconds_bucket")}[$__range])))', "{{name}} p95"),
-        ], unit="s", decimals=0, desc="Drains that finished in the selected range and how long they took. A "
-                                      "Kamailio drain takes seconds; a FreeSWITCH drain waits for its calls. (The "
-                                      "count is shown in seconds' units; read it as a number.)"),
+        ], unit="s", decimals=0, overrides=[by_regex(".* drains", {"id": "unit", "value": "none"})],
+           desc="Drains that finished in the selected range and how long they took. A Kamailio drain takes seconds; "
+                "a FreeSWITCH drain waits for its calls."),
     )
 
     d.row("Dispatcher")
