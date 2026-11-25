@@ -1,0 +1,1809 @@
+{
+ "uid": "edge-freeswitch",
+ "title": "FreeSWITCH",
+ "description": "The edge's FreeSWITCH fleet: load against its limits, calls and failures by SIP profile, and each node's state.",
+ "tags": [
+  "freeswitch-operator",
+  "freeswitch",
+  "sip"
+ ],
+ "editable": true,
+ "graphTooltip": 1,
+ "refresh": "30s",
+ "schemaVersion": 41,
+ "version": 1,
+ "time": {
+  "from": "now-6h",
+  "to": "now"
+ },
+ "timepicker": {},
+ "timezone": "browser",
+ "templating": {
+  "list": [
+   {
+    "type": "datasource",
+    "name": "datasource",
+    "label": "Data source",
+    "query": "prometheus",
+    "current": {},
+    "hide": 0,
+    "refresh": 1,
+    "regex": "",
+    "options": []
+   },
+   {
+    "type": "query",
+    "name": "namespace",
+    "label": "Namespace",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${datasource}"
+    },
+    "query": {
+     "query": "label_values(up{job=\"freeswitch\"}, namespace)",
+     "refId": "namespace-var",
+     "qryType": 1
+    },
+    "definition": "label_values(up{job=\"freeswitch\"}, namespace)",
+    "refresh": 2,
+    "sort": 1,
+    "hide": 0,
+    "multi": true,
+    "includeAll": true,
+    "current": {},
+    "options": [],
+    "regex": ""
+   },
+   {
+    "type": "query",
+    "name": "fleet",
+    "label": "FreeswitchCluster",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${datasource}"
+    },
+    "query": {
+     "query": "label_values(up{job=\"freeswitch\", namespace=~\"$namespace\"}, fleet)",
+     "refId": "fleet-var",
+     "qryType": 1
+    },
+    "definition": "label_values(up{job=\"freeswitch\", namespace=~\"$namespace\"}, fleet)",
+    "refresh": 2,
+    "sort": 1,
+    "hide": 0,
+    "multi": true,
+    "includeAll": true,
+    "current": {},
+    "options": [],
+    "regex": "",
+    "allValue": ".*"
+   },
+   {
+    "type": "query",
+    "name": "pod",
+    "label": "Pod",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${datasource}"
+    },
+    "query": {
+     "query": "label_values(up{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\"}, pod)",
+     "refId": "pod-var",
+     "qryType": 1
+    },
+    "definition": "label_values(up{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\"}, pod)",
+    "refresh": 2,
+    "sort": 1,
+    "hide": 0,
+    "multi": true,
+    "includeAll": true,
+    "current": {},
+    "options": [],
+    "regex": ""
+   }
+  ]
+ },
+ "annotations": {
+  "list": []
+ },
+ "links": [
+  {
+   "type": "dashboards",
+   "tags": [
+    "freeswitch-operator"
+   ],
+   "title": "Edge",
+   "asDropdown": false,
+   "includeVars": true,
+   "keepTime": true,
+   "icon": "external link",
+   "targetBlank": false,
+   "tooltip": "",
+   "url": ""
+  }
+ ],
+ "panels": [
+  {
+   "type": "stat",
+   "title": "Nodes taking calls",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Nodes up and ready with inbound calls not paused (a draining node pauses them), of the nodes scraped.",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "count((freeswitch_ready{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"} == 1) unless on (pod) (freeswitch_inbound_paused{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"} == 1)) or vector(0)",
+     "legendFormat": "taking calls",
+     "instant": true,
+     "range": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "count(freeswitch_up{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "scraped",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "value_and_name",
+    "orientation": "auto",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 1
+  },
+  {
+   "type": "stat",
+   "title": "Sessions",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Call legs up now. A call bridged through the edge is two sessions.",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(freeswitch_sessions_active{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "mappings": [],
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "auto",
+    "orientation": "auto",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 2
+  },
+  {
+   "type": "stat",
+   "title": "Busiest node, of max-sessions",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Sessions on the busiest node against its max-sessions. Beyond the limit FreeSWITCH refuses new calls.",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "max(freeswitch_sessions_active{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"} / freeswitch_sessions_limit{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.6
+       },
+       {
+        "color": "red",
+        "value": 0.8
+       }
+      ]
+     },
+     "mappings": [],
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "auto",
+    "orientation": "auto",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 3
+  },
+  {
+   "type": "stat",
+   "title": "New sessions",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "New sessions per second across the fleet, last 5 minutes. Each node refuses sessions beyond its sessions-per-second.",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(rate(freeswitch_sessions_total{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[5m]))",
+     "legendFormat": "",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "text",
+        "value": null
+       }
+      ]
+     },
+     "mappings": [],
+     "decimals": 2
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "auto",
+    "orientation": "auto",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 4
+  },
+  {
+   "type": "stat",
+   "title": "Calls failed",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Of the calls through every SIP profile over the selected range, the share that failed. A failure is any call that ended before it was answered for a reason other than the caller hanging up (FreeSWITCH's own failed-calls count).",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(increase(freeswitch_sofia_failed_calls_total{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range])) / sum(increase(freeswitch_sofia_calls_total{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__range]))",
+     "legendFormat": "",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.05
+       },
+       {
+        "color": "red",
+        "value": 0.2
+       }
+      ]
+     },
+     "mappings": [],
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "auto",
+    "orientation": "auto",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 5
+  },
+  {
+   "type": "stat",
+   "title": "SIP profiles down",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "SIP profiles listed in a state other than RUNNING, across the nodes.",
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 20,
+    "y": 0
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "count(freeswitch_sofia_profile_up{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"} == 0) or vector(0)",
+     "legendFormat": "",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": [],
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto",
+    "textMode": "auto",
+    "orientation": "auto",
+    "wideLayout": true,
+    "showPercentChange": false
+   },
+   "id": 6
+  },
+  {
+   "type": "row",
+   "title": "Load",
+   "collapsed": false,
+   "id": 7,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 4
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Sessions by node",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Call legs up on each node. Its max-sessions is in the Nodes table; the busiest node's share of it is at the top.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 5
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (pod) (freeswitch_sessions_active{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "{{pod}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 8
+  },
+  {
+   "type": "timeseries",
+   "title": "New sessions per second by node",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Session creation rate (calls per second, counting each leg). A burst over the node's sessions-per-second (in the Nodes table) is refused even with sessions to spare.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 5
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (pod) (rate(freeswitch_sessions_total{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "{{pod}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "decimals": 2
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 9
+  },
+  {
+   "type": "timeseries",
+   "title": "Calls and channels",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Channels are legs, bridged or not; a bridged call is two. Channels well above twice the bridged calls are legs ringing, in early media or not yet bridged.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 5
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum(freeswitch_calls{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "bridged calls"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "sum(freeswitch_channels{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "channels"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 10
+  },
+  {
+   "type": "row",
+   "title": "SIP profiles",
+   "collapsed": false,
+   "id": 11,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 13
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Calls by profile and direction",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "On the edge, trunks carries calls from Kamailio (in) and backend the bridged leg (out).",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 14
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (profile, direction) (rate(freeswitch_sofia_calls_total{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval])) * 60",
+     "legendFormat": "{{profile}} {{direction}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "cpm",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 12
+  },
+  {
+   "type": "timeseries",
+   "title": "Failed share by profile and direction",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Failures out on the backend profile mean the backend refused or didn't answer; failures in on trunks are calls the node refused itself (no route, over a limit, paused).",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 14
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (profile, direction) (rate(freeswitch_sofia_failed_calls_total{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval])) / sum by (profile, direction) (rate(freeswitch_sofia_calls_total{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "{{profile}} {{direction}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "min": 0,
+     "max": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 13
+  },
+  {
+   "type": "state-timeline",
+   "title": "Profiles running",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "A SIP profile that isn't RUNNING takes no calls on its port, though the node may be up.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 14
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "min by (pod, profile) (freeswitch_sofia_profile_up{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "{{pod}} {{profile}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#8e8e8e"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "Not running",
+         "color": "red",
+         "index": 0
+        }
+       }
+      },
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "Running",
+         "color": "green",
+         "index": 1
+        }
+       }
+      }
+     ],
+     "custom": {
+      "fillOpacity": 80,
+      "lineWidth": 0
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "showValue": "never",
+    "mergeValues": true,
+    "rowHeight": 0.8,
+    "alignValue": "left",
+    "legend": {
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "single"
+    }
+   },
+   "id": 14
+  },
+  {
+   "type": "row",
+   "title": "Nodes",
+   "collapsed": false,
+   "id": 15,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 22
+   }
+  },
+  {
+   "type": "table",
+   "title": "Nodes",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Each node now: its FreeSWITCH version, how long it has run, whether it takes calls, and its limits.",
+   "gridPos": {
+    "h": 5,
+    "w": 24,
+    "x": 0,
+    "y": 23
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "max by (pod, version) (freeswitch_info{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "max by (pod) (freeswitch_uptime_seconds{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "max by (pod) (freeswitch_ready{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"} * (1 - freeswitch_inbound_paused{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}))",
+     "legendFormat": "",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "D",
+     "expr": "max by (pod) (freeswitch_sessions_active{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "E",
+     "expr": "max by (pod) (freeswitch_sessions_peak{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "F",
+     "expr": "max by (pod) (freeswitch_sessions_limit{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "G",
+     "expr": "max by (pod) (freeswitch_session_rate_limit{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "merge",
+     "options": {}
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      },
+      "renameByName": {
+       "Value #A": "info",
+       "Value #B": "Uptime",
+       "Value #C": "Taking calls",
+       "Value #D": "Sessions",
+       "Value #E": "Peak",
+       "Value #F": "max-sessions",
+       "Value #G": "sessions-per-second"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "info"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Uptime"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "s"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Taking calls"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "No",
+            "color": "red",
+            "index": 0
+           }
+          }
+         },
+         {
+          "type": "value",
+          "options": {
+           "1": {
+            "text": "Yes",
+            "color": "green",
+            "index": 1
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background",
+         "mode": "basic"
+        }
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "red",
+           "value": null
+          },
+          {
+           "color": "green",
+           "value": 1
+          }
+         ]
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "thresholds"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false
+    }
+   },
+   "id": 16
+  },
+  {
+   "type": "state-timeline",
+   "title": "Node state",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Event socket: the exporter reached FreeSWITCH. Ready: FreeSWITCH says it is (before any SIP profile runs). Inbound paused: the operator is draining the node, so it finishes its calls and takes no new ones.",
+   "gridPos": {
+    "h": 7,
+    "w": 24,
+    "x": 0,
+    "y": 28
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "min by (pod) (freeswitch_up{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "{{pod}} event socket"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "min by (pod) (freeswitch_ready{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "{{pod}} ready"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "max by (pod) (freeswitch_inbound_paused{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+     "legendFormat": "{{pod}} inbound"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#8e8e8e"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "No",
+         "color": "red",
+         "index": 0
+        }
+       }
+      },
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "Yes",
+         "color": "green",
+         "index": 1
+        }
+       }
+      }
+     ],
+     "custom": {
+      "fillOpacity": 80,
+      "lineWidth": 0
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": ".* inbound"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "Open",
+            "color": "green",
+            "index": 0
+           }
+          }
+         },
+         {
+          "type": "value",
+          "options": {
+           "1": {
+            "text": "Paused (draining)",
+            "color": "orange",
+            "index": 1
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showValue": "never",
+    "mergeValues": true,
+    "rowHeight": 0.8,
+    "alignValue": "left",
+    "legend": {
+     "showLegend": false
+    },
+    "tooltip": {
+     "mode": "single"
+    }
+   },
+   "id": 17
+  },
+  {
+   "type": "row",
+   "title": "Barge-in relay",
+   "collapsed": true,
+   "id": 18,
+   "panels": [
+    {
+     "type": "state-timeline",
+     "title": "Relay subscribed",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "description": "The exporter's barge-in relay is subscribed to FreeSWITCH's voice-detector events (docs/barge-in.md). Only with barge-in at the edge.",
+     "gridPos": {
+      "h": 8,
+      "w": 8,
+      "x": 0,
+      "y": 36
+     },
+     "targets": [
+      {
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "refId": "A",
+       "expr": "min by (pod) (freeswitch_barge_in_relay_connected{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"})",
+       "legendFormat": "{{pod}}"
+      }
+     ],
+     "fieldConfig": {
+      "defaults": {
+       "color": {
+        "mode": "fixed",
+        "fixedColor": "#8e8e8e"
+       },
+       "mappings": [
+        {
+         "type": "value",
+         "options": {
+          "0": {
+           "text": "Not subscribed",
+           "color": "red",
+           "index": 0
+          }
+         }
+        },
+        {
+         "type": "value",
+         "options": {
+          "1": {
+           "text": "Subscribed",
+           "color": "green",
+           "index": 1
+          }
+         }
+        }
+       ],
+       "custom": {
+        "fillOpacity": 80,
+        "lineWidth": 0
+       }
+      },
+      "overrides": []
+     },
+     "options": {
+      "showValue": "never",
+      "mergeValues": true,
+      "rowHeight": 0.8,
+      "alignValue": "left",
+      "legend": {
+       "showLegend": false
+      },
+      "tooltip": {
+       "mode": "single"
+      }
+     },
+     "id": 19
+    },
+    {
+     "type": "timeseries",
+     "title": "Voice detections",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "description": "Speech started and stopped, by party. relayed: sent to the agent as SIP INFO. no_target: no agent leg to send it on. failed: the INFO couldn't be sent.",
+     "gridPos": {
+      "h": 8,
+      "w": 16,
+      "x": 8,
+      "y": 36
+     },
+     "targets": [
+      {
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "refId": "A",
+       "expr": "sum by (party, event, result) (rate(freeswitch_barge_in_detections_total{job=\"freeswitch\", namespace=~\"$namespace\", fleet=~\"$fleet\", pod=~\"$pod\"}[$__rate_interval]))",
+       "legendFormat": "{{party}} {{event}} {{result}}"
+      }
+     ],
+     "fieldConfig": {
+      "defaults": {
+       "unit": "none",
+       "custom": {
+        "lineWidth": 1,
+        "fillOpacity": 10,
+        "showPoints": "never",
+        "spanNulls": false,
+        "stacking": {
+         "mode": "none",
+         "group": "A"
+        }
+       }
+      },
+      "overrides": [
+       {
+        "matcher": {
+         "id": "byRegexp",
+         "options": ".* failed"
+        },
+        "properties": [
+         {
+          "id": "color",
+          "value": {
+           "mode": "fixed",
+           "fixedColor": "red"
+          }
+         }
+        ]
+       },
+       {
+        "matcher": {
+         "id": "byRegexp",
+         "options": ".* no_target"
+        },
+        "properties": [
+         {
+          "id": "color",
+          "value": {
+           "mode": "fixed",
+           "fixedColor": "orange"
+          }
+         }
+        ]
+       }
+      ]
+     },
+     "options": {
+      "legend": {
+       "displayMode": "list",
+       "placement": "bottom",
+       "showLegend": true
+      },
+      "tooltip": {
+       "mode": "multi",
+       "sort": "desc"
+      }
+     },
+     "id": 20
+    }
+   ],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 35
+   }
+  },
+  {
+   "type": "row",
+   "title": "Pods",
+   "collapsed": false,
+   "id": 21,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 44
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "CPU by pod",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Cores the freeswitch container uses, against its request and limit (when set).",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 45
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\", pod=~\"$pod\", container=\"freeswitch\"}[$__rate_interval]))",
+     "legendFormat": "{{pod}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "max(kube_pod_container_resource_limits{namespace=~\"$namespace\", pod=~\"$pod\", container=\"freeswitch\", resource=\"cpu\"})",
+     "legendFormat": "limit"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "max(kube_pod_container_resource_requests{namespace=~\"$namespace\", pod=~\"$pod\", container=\"freeswitch\", resource=\"cpu\"})",
+     "legendFormat": "request"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "decimals": 2
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "limit"
+      },
+      "properties": [
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "fill": "dash",
+         "dash": [
+          10,
+          10
+         ]
+        }
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "request"
+      },
+      "properties": [
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "fill": "dash",
+         "dash": [
+          10,
+          10
+         ]
+        }
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#8e8e8e"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 22
+  },
+  {
+   "type": "timeseries",
+   "title": "Memory by pod (working set)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "The working set is what the kernel counts against the limit: at the limit, the container is OOM-killed.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 45
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=~\"$namespace\", pod=~\"$pod\", container=\"freeswitch\"})",
+     "legendFormat": "{{pod}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "B",
+     "expr": "max(kube_pod_container_resource_limits{namespace=~\"$namespace\", pod=~\"$pod\", container=\"freeswitch\", resource=\"memory\"})",
+     "legendFormat": "limit"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "C",
+     "expr": "max(kube_pod_container_resource_requests{namespace=~\"$namespace\", pod=~\"$pod\", container=\"freeswitch\", resource=\"memory\"})",
+     "legendFormat": "request"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bytes",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "limit"
+      },
+      "properties": [
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "fill": "dash",
+         "dash": [
+          10,
+          10
+         ]
+        }
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "request"
+      },
+      "properties": [
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "fill": "dash",
+         "dash": [
+          10,
+          10
+         ]
+        }
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#8e8e8e"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 23
+  },
+  {
+   "type": "timeseries",
+   "title": "Container restarts",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "description": "Restarts of every container in the selected pods.",
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 45
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "refId": "A",
+     "expr": "sum by (pod, container) (increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\", pod=~\"$pod\"}[$__rate_interval]))",
+     "legendFormat": "{{pod}} {{container}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 0,
+      "fillOpacity": 70,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "drawStyle": "bars"
+     },
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 24
+  }
+ ]
+}

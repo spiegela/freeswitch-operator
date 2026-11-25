@@ -71,6 +71,7 @@ the same pieces by hand:
 - Prometheus metrics from Kamailio, FreeSWITCH (an exporter in each pod) and the operator, for an OpenTelemetry
   Collector to scrape.
 - Alert rules with promtool tests: silent drops, nodes not answering, stalled rolls and drains, address pool trouble.
+- Grafana dashboards for Kamailio, the FreeSWITCH fleet and the operator.
 
 **Call tracing** ([details](docs/call-tracing.md))
 - One OpenTelemetry trace per call, from HEP copies of the SIP that Kamailio (`spec.capture`) and FreeSWITCH capture,
@@ -125,7 +126,7 @@ flowchart LR
 | [Address pools](docs/address-pools.md) | Fixed public addresses, the `SIPAddressPool` resource, the AWS and MetalLB providers, the address agent |
 | [Call tracking and failover](docs/call-tracking.md) | Setting up call tracking in PostgreSQL, and what failover still needs |
 | [Barge-in voice detection](docs/barge-in.md) | The edge-or-agent switch, the SIP INFO signal, LiveKit SIP's patch, measurements |
-| [Metrics and alerts](docs/metrics.md) | Every metric, the alert rules, scraping |
+| [Metrics and alerts](docs/metrics.md) | Every metric, the alert rules, the Grafana dashboards, scraping |
 | [Call tracing](docs/call-tracing.md) | One trace per call from HEP captures and LiveKit webhooks: setup, nesting, running the tracer |
 | [Peers (planned)](docs/peers.md) | Design for per-peer behaviour, outbound registrations and inside-network peers |
 | [Development](docs/development.md) | Building, testing, the edge on kind, the report card |
