@@ -58,6 +58,9 @@ type Member struct {
 	Revision string `json:"revision,omitempty"`
 }
 
+// MemberActive is the State of a member that is ready and taking calls.
+const MemberActive = "Active"
+
 // Status is what the scenarios need of a FreeswitchCluster.
 type Status struct {
 	Generation         int64
@@ -90,7 +93,7 @@ func (s Status) Current() bool {
 		return false
 	}
 	for _, m := range s.Members {
-		if m.State != "Active" || m.Revision != s.UpdateRevision {
+		if m.State != MemberActive || m.Revision != s.UpdateRevision {
 			return false
 		}
 	}

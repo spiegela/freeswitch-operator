@@ -365,7 +365,7 @@ func (t *timeline) moveFreeswitch(ctx context.Context, call string) (string, err
 		if ok {
 			now = cur
 		}
-		return ok && cur.Node != "" && cur.Node != m.Node && cur.State == "Active", nil
+		return ok && cur.Node != "" && cur.Node != m.Node && cur.State == fleet.MemberActive, nil
 	})
 	if err != nil {
 		return "", fmt.Errorf("%s (call %s) not taking calls on another node than %s (now %+v): %w", m.Pod, call, m.Node, now, err)
@@ -695,7 +695,7 @@ func (t *timeline) waitFailover(ctx context.Context, w *scenario.WaitFailoverOf)
 	var ok bool
 	err = t.poll(ctx, msOr(w.TimeoutMs, defaultFleetWait), func(s fleet.Status) (bool, error) {
 		cur, ok = s.Member(m.Pod)
-		return ok && cur.State == "Active" && cur.Node != "" && cur.Node != m.Node, nil
+		return ok && cur.State == fleet.MemberActive && cur.Node != "" && cur.Node != m.Node, nil
 	})
 	if err != nil {
 		where := "gone"
@@ -739,7 +739,7 @@ func (t *timeline) rollStuck(ctx context.Context, rs *scenario.RollStuck) (strin
 			return "", fmt.Errorf("more than one pod stopped taking calls: %s", describe(s))
 		}
 		for _, m := range s.Members {
-			if m.Revision == s.UpdateRevision && m.State == "Active" {
+			if m.Revision == s.UpdateRevision && m.State == fleet.MemberActive {
 				return "", fmt.Errorf("the replacement %s takes calls: the change did not break it", m.Pod)
 			}
 		}
@@ -810,7 +810,7 @@ func (t *timeline) restore(ctx context.Context) ([]string, error) {
 // cleanup undoes what the actions left behind, however the scenario ended. A node taken dark comes back on its own;
 // cleanup waits for that first, so the next scenario finds the fleet whole.
 func (t *timeline) cleanup() {
-	var dark []string
+	dark := make([]string, 0, len(t.blackouts))
 	for _, b := range t.blackouts {
 		dark = append(dark, b.node)
 	}
