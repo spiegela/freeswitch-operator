@@ -53,6 +53,14 @@ spec:
           spec:
             description: spec defines the desired state of SIPAddressPool
             properties:
+              allowAdvisoryFencing:
+                description: |-
+                  allowAdvisoryFencing lets the pool take its addresses off a fenced node (one carrying the
+                  sip.instruments.com/fenced taint, after a failover) when its provider's fencing is Advisory, as MetalLB's is:
+                  a node cut off from the cluster but not from the network may go on answering for the address until it is
+                  stopped. Authoritative pools always take their addresses off a fenced node. Without it, an Advisory pool leaves
+                  the address on the fenced node, unused, until the taint is removed or the node leaves the cluster.
+                type: boolean
               awsElasticIP:
                 description: awsElasticIP draws the pool from AWS Elastic IPs, associated
                   with each node's instance (1:1 NAT).

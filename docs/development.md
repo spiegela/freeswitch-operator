@@ -19,10 +19,10 @@ sipbench has its own instructions in [`sipbench/README.md`](../sipbench/README.m
 - A kind cluster with two proxy nodes and three tainted edge nodes.
 - The operator, built from this tree.
 - A two-node `KamailioCluster` on the proxy nodes.
-- A two-node `FreeswitchCluster` (the third edge node is its spare) running sipbench's FreeSWITCH configuration on
+- A two-node `FreeswitchCluster` (the third edge node is its spare, with failover `Automatic`) running sipbench's FreeSWITCH configuration on
   [`images/freeswitch`](../images/freeswitch/Dockerfile), with the metrics exporter beside it. Its media addresses
   come from a MetalLB `SIPAddressPool` (`edge-media`: MetalLB in L2 mode and the address agent, four addresses at
-  the top of kind's Docker network).
+  the top of kind's Docker network; the pool sets `allowAdvisoryFencing`, so a failover takes a fenced node's address back).
 - sipbench's mock backend behind it.
 - A PostgreSQL holding the edge's core db and call tracking ([`deploy/kind/postgres`](../deploy/kind/postgres/postgres.yaml),
   set up as [call tracking](call-tracking.md) describes). `hack/kind.sh` brings it up before the edge, since
@@ -65,8 +65,9 @@ fleet drills run as scenarios:
 - **`bad-config-stops-roll`:** move the SIP profile off the SIP port in a referenced ConfigMap. The first replacement
   never becomes ready and the roll stays there for 90 s while the rest of the fleet takes calls; putting the config
   back lets it finish.
-- **`node-lost-mid-call`:** take a call's node off the network for two minutes and check the rest of the fleet keeps
-  taking calls.
+- **`node-lost-mid-call`:** take a call's node off the network for two minutes, check the rest of the fleet keeps
+  taking calls, and wait for the operator to fence the node and start the member on the spare (the runner unfences
+  the node once it is back).
 
 These take a few minutes and leave the fleet as they found it (nodes uncordoned, config restored), apart from the
 `SIPBENCH_ROLL` variable `rollFleet` sets.

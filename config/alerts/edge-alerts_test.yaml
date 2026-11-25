@@ -238,3 +238,105 @@ tests:
                 Their node holds the address, but its address agent doesn't report the bind address on the node's
                 interface, so the node's pods get no address. Check that the address agent runs on the nodes the pool's
                 status names (its Ready condition says which) and its logs.
+
+  # Member health: a Suspect member warns after 2 minutes; a Failed one held back pages after 1.
+  - interval: 1m
+    input_series:
+      - series: 'freeswitch_operator_member_health{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge",pod="edge-1",state="Suspect"}'
+        values: '0 1 1 1 1 0 0 0'
+      - series: 'freeswitch_operator_member_failover_held{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge",pod="edge-1"}'
+        values: '_ _ _ _ _ 1 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FreeswitchMemberSuspect
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: FreeswitchMemberSuspect
+        exp_alerts:
+          - exp_labels: {severity: warning, kind: FreeswitchCluster, namespace: telephony, name: edge, pod: edge-1}
+            exp_annotations:
+              summary: "edge-1 of telephony/edge has been Suspect for 2 minutes"
+              description: >
+                A health signal is failing (freeswitch_operator_member_signal says which: NodeLost, NotReady or
+                SIPUnreachable), but not enough of them to call it Failed. The member's status.members[].health has
+                the detail.
+      - eval_time: 5m
+        alertname: FreeswitchMemberFailedNotFailedOver
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: FreeswitchMemberFailedNotFailedOver
+        exp_alerts:
+          - exp_labels: {severity: critical, kind: FreeswitchCluster, namespace: telephony, name: edge, pod: edge-1}
+            exp_annotations:
+              summary: "edge-1 of telephony/edge has Failed and is not being failed over"
+              description: >
+                Its signals agree it has failed, and the operator is holding back: failover mode Detect, a pod that
+                has never been ready, or another failover still under way (status.members[].health.message says
+                which). Calls it had are lost; new calls go to the rest of the fleet. To fail it over by hand,
+                annotate the pod sip.instruments.com/fail-over=true.
+
+  # A failover: it warns at once, and pages when its replacement isn't ready 5 minutes later.
+  - interval: 1m
+    input_series:
+      - series: 'freeswitch_operator_failovers_total{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge",trigger="Automatic",result="ok"}'
+        values: '0 1 1 1 1 1 1 1 1'
+      - series: 'freeswitch_operator_failover_in_progress{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge"}'
+        values: '0 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FreeswitchFailedOver
+        exp_alerts:
+          - exp_labels: {severity: warning, kind: FreeswitchCluster, namespace: telephony, name: edge, trigger: Automatic}
+            exp_annotations:
+              summary: "telephony/edge failed a member over (Automatic)"
+              description: >
+                The operator fenced the member's node (taint sip.instruments.com/fenced; the node's annotation
+                sip.instruments.com/fenced-by says why) and started the pod on another node. Find out what happened
+                to the node. Once it is sound, remove the taint so it can serve as a spare again.
+      - eval_time: 5m
+        alertname: FreeswitchFailoverStuck
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: FreeswitchFailoverStuck
+        exp_alerts:
+          - exp_labels: {severity: critical, job: freeswitch-operator, kind: FreeswitchCluster, namespace: telephony, name: edge}
+            exp_annotations:
+              summary: "The failover in telephony/edge has not brought its member back"
+              description: >
+                The replacement pod hasn't become ready 5 minutes after the failover: often there is no spare node
+                to run it on (every other edge node runs a member or is fenced). The fleet is a member short until it
+                does.
+
+  # SIP probes failing for every member: not counted, and a warning that failover is blind to them.
+  - interval: 1m
+    input_series:
+      - series: 'freeswitch_operator_member_signal{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge",pod="edge-0",signal="SIPUnreachable",counted="false"}'
+        values: '1x8'
+      - series: 'freeswitch_operator_member_signal{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge",pod="edge-1",signal="SIPUnreachable",counted="false"}'
+        values: '1x8'
+      - series: 'freeswitch_operator_failovers_total{job="freeswitch-operator",kind="FreeswitchCluster",namespace="telephony",name="edge",trigger="Automatic",result="error"}'
+        values: '0 0 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: FreeswitchHealthSignalBlind
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: FreeswitchHealthSignalBlind
+        exp_alerts:
+          - exp_labels: {severity: warning, kind: FreeswitchCluster, namespace: telephony, name: edge, signal: SIPUnreachable}
+            exp_annotations:
+              summary: "The SIPUnreachable signal fails for every member of telephony/edge"
+              description: >
+                A signal failing everywhere at once is taken to be the observer's problem and doesn't count, so
+                failover can't use it. For SIPUnreachable, the operator's pods probably can't reach the edge nodes'
+                SIP port (a security group or network policy); for NodeLost, the control plane can't hear from any
+                edge node.
+      - eval_time: 3m
+        alertname: FreeswitchFailoverErrors
+        exp_alerts:
+          - exp_labels: {severity: warning, kind: FreeswitchCluster, namespace: telephony, name: edge}
+            exp_annotations:
+              summary: "The operator could not fail over a member of telephony/edge"
+              description: >
+                Fencing the node or deleting the pod failed (2 times in 10 minutes); it retries. See the operator's
+                logs and the fleet's FailoverFailed events.

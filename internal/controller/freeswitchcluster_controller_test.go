@@ -455,6 +455,110 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(gone("edge-0")).To(BeTrue())
 	})
 
+	It("watches each member's health and fails a Failed one over to another node, fencing its node", func() {
+		ns := newNamespace(ctx)
+		Expect(k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
+			f.Spec.Replicas = ptr.To[int32](2)
+			f.Spec.ExternalAddress.Source = sipv1alpha1.ExternalAddressNone
+			f.Spec.Failover = &sipv1alpha1.FailoverSpec{Mode: sipv1alpha1.FailoverDetect, FailAfterSeconds: ptr.To[int32](0)}
+		}))).To(Succeed())
+		probes := fakeProbes{}
+		r := &FreeswitchClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), SIPProbes: probes}
+		reconcileOnce(r, ns)
+
+		node := func(name string) *corev1.Node {
+			n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: ns + "-" + name}}
+			Expect(k8sClient.Create(ctx, n)).To(Succeed())
+			n.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.Now()}}
+			Expect(k8sClient.Status().Update(ctx, n)).To(Succeed())
+			return n
+		}
+		nodeA, nodeB, spare := node("a"), node("b"), node("spare")
+		p0, p1 := fsPod(ns, "edge-0", nodeA.Name, "r1"), fsPod(ns, "edge-1", nodeB.Name, "r1")
+		for _, p := range []*corev1.Pod{p0, p1} {
+			Expect(k8sClient.Create(ctx, p)).To(Succeed())
+			setPodReady(ctx, p, true)
+		}
+		fleet := func() *sipv1alpha1.FreeswitchCluster {
+			var fsc sipv1alpha1.FreeswitchCluster
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
+			return &fsc
+		}
+		member := func(name string) sipv1alpha1.Member {
+			for _, m := range fleet().Status.Members {
+				if m.Pod == name {
+					return m
+				}
+			}
+			Fail("no member " + name)
+			return sipv1alpha1.Member{}
+		}
+
+		reconcileOnce(r, ns)
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(p1), p1)).To(Succeed())
+		Expect(p1.Annotations).To(HaveKey(sipv1alpha1.FirstReadyAnnotation), "a ready pod is marked as having worked")
+		Expect(member("edge-1").Health.State).To(Equal(sipv1alpha1.HealthHealthy))
+		Expect(meta.IsStatusConditionTrue(fleet().Status.Conditions, conditionMembersHealthy)).To(BeTrue())
+
+		By("node b is lost and edge-1 stops answering SIP: Failed, but mode Detect only reports it")
+		nodeB.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown, Reason: "NodeStatusUnknown",
+			Message: "Kubelet stopped posting node status.", LastTransitionTime: metav1.NewTime(time.Now().Add(-time.Minute))}}
+		Expect(k8sClient.Status().Update(ctx, nodeB)).To(Succeed())
+		probes[p1.UID] = sipProbeResult{Failing: true, Since: time.Now().Add(-30 * time.Second), Message: "no answer"}
+		res := reconcileOnce(r, ns)
+		Expect(res.RequeueAfter).To(BeNumerically(">", 0), "a fleet with a Failed member is looked at again")
+		h := member("edge-1").Health
+		Expect(h.State).To(Equal(sipv1alpha1.HealthFailed))
+		Expect(h.Signals).To(HaveLen(2))
+		Expect(h.Message).To(ContainSubstring("mode is Detect"))
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(p1), p1)).To(Succeed())
+		cond := meta.FindStatusCondition(fleet().Status.Conditions, conditionMembersHealthy)
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal("MemberFailed"))
+
+		By("in mode Automatic, the node is fenced and the pod deleted at once")
+		fsc := fleet()
+		fsc.Spec.Failover.Mode = sipv1alpha1.FailoverAutomatic
+		Expect(k8sClient.Update(ctx, fsc)).To(Succeed())
+		reconcileOnce(r, ns)
+		err := k8sClient.Get(ctx, client.ObjectKeyFromObject(p1), &corev1.Pod{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "deleted with no grace period, so gone at once")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(nodeB), nodeB)).To(Succeed())
+		Expect(nodeFenced(nodeB)).To(BeTrue())
+		Expect(nodeB.Annotations[sipv1alpha1.FencedByAnnotation]).To(ContainSubstring("pod edge-1"))
+		last := fleet().Status.LastFailover
+		Expect(last).NotTo(BeNil())
+		Expect(last.Pod).To(Equal("edge-1"))
+		Expect(last.Node).To(Equal(nodeB.Name))
+		Expect(last.Trigger).To(Equal(sipv1alpha1.FailoverTriggerAutomatic))
+		Expect(last.Reason).To(ContainSubstring("NodeLost"))
+		Expect(last.CompletedAt).To(BeNil())
+
+		By("the StatefulSet starts edge-1 on the spare; once it is ready the failover is complete")
+		p1 = fsPod(ns, "edge-1", spare.Name, "r1")
+		Expect(k8sClient.Create(ctx, p1)).To(Succeed())
+		reconcileOnce(r, ns)
+		Expect(fleet().Status.LastFailover.CompletedAt).To(BeNil(), "not before it is ready")
+		cond = meta.FindStatusCondition(fleet().Status.Conditions, conditionMembersHealthy)
+		Expect(cond.Reason).To(Equal("FailingOver"))
+		setPodReady(ctx, p1, true)
+		reconcileOnce(r, ns)
+		last = fleet().Status.LastFailover
+		Expect(last.CompletedAt).NotTo(BeNil())
+		Expect(last.ReplacementNode).To(Equal(spare.Name))
+		Expect(meta.IsStatusConditionTrue(fleet().Status.Conditions, conditionMembersHealthy)).To(BeTrue())
+
+		By("a person can fail over a healthy member with the annotation")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(p0), p0)).To(Succeed())
+		p0.Annotations[sipv1alpha1.FailOverAnnotation] = "true"
+		Expect(k8sClient.Update(ctx, p0)).To(Succeed())
+		reconcileOnce(r, ns)
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(p0), &corev1.Pod{}))).To(BeTrue())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(nodeA), nodeA)).To(Succeed())
+		Expect(nodeFenced(nodeA)).To(BeTrue())
+		Expect(fleet().Status.LastFailover.Trigger).To(Equal(sipv1alpha1.FailoverTriggerManual))
+	})
+
 	It("waits for its ConfigMaps, lays them out as a tree, and rolls when their contents change", func() {
 		ns := newNamespace(ctx)
 		Expect(k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {

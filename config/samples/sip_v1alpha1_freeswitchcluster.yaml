@@ -53,3 +53,8 @@ spec:
   #   port: 9282
   #   eventSocket:
   #     passwordSecretRef: {name: edge-event-socket, key: password}
+  # Health monitoring and failover to a spare node (docs/freeswitch-fleet.md). Health is reported either way; Automatic
+  # also fences a Failed member's node and starts its pod on the spare. Keep a spare edge node, and let the
+  # operator's pods reach the edge nodes' SIP port for its OPTIONS probes.
+  failover:
+    mode: Detect

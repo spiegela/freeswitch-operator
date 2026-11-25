@@ -58,6 +58,7 @@ type settings struct {
 	reloadDelaySecs int32
 	liveness        *sipv1alpha1.LivenessSpec          // nil: no liveness probe
 	metrics         *sipv1alpha1.FreeswitchMetricsSpec // nil: no exporter; otherwise with defaults applied
+	failover        failoverSettings
 }
 
 func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
@@ -117,6 +118,7 @@ func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
 			out.metrics.EventSocket.Port = 8021
 		}
 	}
+	out.failover = resolveFailover(s.Failover)
 	if l := s.Liveness; l != nil {
 		out.liveness = &sipv1alpha1.LivenessSpec{PeriodSeconds: 30, TimeoutSeconds: 15, FailureThreshold: 10}
 		if l.PeriodSeconds != 0 {

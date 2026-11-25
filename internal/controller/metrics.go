@@ -99,6 +99,34 @@ var (
 		Name: "freeswitch_operator_dispatcher_pending_reload",
 		Help: "1 while the dispatcher list has changed and not every Kamailio is confirmed to hold it, 0 otherwise.",
 	}, fleetLabels)
+	memberHealth = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "freeswitch_operator_member_health",
+		Help: "1 for each FreeSWITCH member's health state (Healthy, Suspect or Failed), as of the last reconcile.",
+	}, withLabels("pod", "state"))
+	memberSignal = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "freeswitch_operator_member_signal",
+		Help: "1 while a health signal (NodeLost, NotReady or SIPUnreachable) fails for a FreeSWITCH member, by " +
+			"whether it counts toward Failed (counted=false when it fails for every member at once).",
+	}, withLabels("pod", "signal", "counted"))
+	memberFailoverHeld = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "freeswitch_operator_member_failover_held",
+		Help: "1 while a FreeSWITCH member is Failed but not being failed over: failover mode Detect, a pod that has " +
+			"never been ready, or another failover under way.",
+	}, withLabels("pod"))
+	failovers = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "freeswitch_operator_failovers_total",
+		Help: "Failovers started, by trigger (Automatic or Manual) and result: ok, or error (the node or the pod " +
+			"couldn't be changed; retried).",
+	}, withLabels("trigger", "result"))
+	failoverInProgressGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "freeswitch_operator_failover_in_progress",
+		Help: "1 while the fleet's latest failover waits for its replacement pod to be ready (up to 10 minutes).",
+	}, fleetLabels)
+	sipProbes = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "freeswitch_operator_sip_probes_total",
+		Help: "SIP OPTIONS health probes the operator sent to FreeSWITCH members, by result: ok (any SIP answer) or error.",
+	}, withLabels("result"))
+
 	// A pool's series name it with pool (pools are cluster-scoped) and go away with it.
 	poolAddresses = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "freeswitch_operator_address_pool_addresses",
@@ -128,6 +156,7 @@ func init() {
 		fleetDesiredReplicas, fleetMembersGauge, fleetOutdatedMembers, fleetCondition, fleetPodReplacements,
 		fleetMaxDrainSeconds, fleetDrainStarted, fleetDrainDuration,
 		dispatcherListUpdates, dispatcherDestinations, dispatcherReloads, dispatcherSetInactive, dispatcherPendingReload,
+		memberHealth, memberSignal, memberFailoverHeld, failovers, failoverInProgressGauge, sipProbes,
 		poolAddresses, poolNodesWaiting, poolAwaitingAgent, poolProviderCalls, poolLastObserved,
 	)
 }
@@ -299,10 +328,48 @@ func forgetFleet(f fleetRef) {
 		fleetDesiredReplicas, fleetMembersGauge, fleetOutdatedMembers, fleetCondition, fleetPodReplacements,
 		fleetMaxDrainSeconds, fleetDrainStarted, dispatcherListUpdates, dispatcherDestinations, dispatcherReloads,
 		fleetDrainDuration, dispatcherSetInactive, dispatcherPendingReload,
+		memberHealth, memberSignal, memberFailoverHeld, failovers, failoverInProgressGauge, sipProbes,
 	} {
 		v.DeletePartialMatch(f.partial())
 	}
 	drains.forget(f)
+}
+
+// recordHealth replaces a fleet's member health series from one reconcile. Pod names are reused by replacements,
+// so the series are rebuilt rather than deleted by name.
+func recordHealth(f fleetRef, verdicts []verdict, held map[string]string, inProgress bool) {
+	memberHealth.DeletePartialMatch(f.partial())
+	memberSignal.DeletePartialMatch(f.partial())
+	memberFailoverHeld.DeletePartialMatch(f.partial())
+	for i := range verdicts {
+		v := &verdicts[i]
+		for _, st := range []sipv1alpha1.HealthState{sipv1alpha1.HealthHealthy, sipv1alpha1.HealthSuspect, sipv1alpha1.HealthFailed} {
+			val := 0.0
+			if v.health.State == st {
+				val = 1
+			}
+			memberHealth.WithLabelValues(f.labels(v.pod.Name, string(st))...).Set(val)
+		}
+		for _, s := range v.health.Signals {
+			memberSignal.WithLabelValues(f.labels(v.pod.Name, string(s.Type), strconv.FormatBool(s.Counted))...).Set(1)
+		}
+		if _, ok := held[v.pod.Name]; ok {
+			memberFailoverHeld.WithLabelValues(f.labels(v.pod.Name)...).Set(1)
+		}
+	}
+	v := 0.0
+	if inProgress {
+		v = 1
+	}
+	failoverInProgressGauge.WithLabelValues(f.labels()...).Set(v)
+}
+
+func recordFailover(f fleetRef, trigger sipv1alpha1.FailoverTrigger, err error) {
+	failovers.WithLabelValues(f.labels(string(trigger), resultLabel(err))...).Inc()
+}
+
+func recordSIPProbe(f fleetRef, err error) {
+	sipProbes.WithLabelValues(f.labels(resultLabel(err))...).Inc()
 }
 
 // recordPoolCall counts one provider call.

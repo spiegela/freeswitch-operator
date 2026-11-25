@@ -358,6 +358,82 @@ spec:
                 x-kubernetes-validations:
                 - message: addressPoolRef is set exactly when source is AddressPool
                   rule: (has(self.source) && self.source == 'AddressPool') == has(self.addressPoolRef)
+              failover:
+                description: |-
+                  failover configures health monitoring of each member and failover to a spare node. Unset means mode Detect
+                  with the defaults: health is reported, and only pods annotated sip.instruments.com/fail-over are failed over.
+                properties:
+                  failAfterSeconds:
+                    default: 15
+                    description: failAfterSeconds is how long that many signals must
+                      keep failing before the member is Failed.
+                    format: int32
+                    maximum: 3600
+                    minimum: 0
+                    type: integer
+                  mode:
+                    default: Detect
+                    description: |-
+                      mode is Detect (report health; fail over only pods a person annotates sip.instruments.com/fail-over) or
+                      Automatic (also fail over a member found Failed, one at a time, and only one that has been ready).
+                    enum:
+                    - Detect
+                    - Automatic
+                    type: string
+                  notReadySeconds:
+                    default: 20
+                    description: |-
+                      notReadySeconds is how long a pod that has been ready must stay unready before readiness counts as a failing
+                      signal, so a brief blip doesn't make a member Suspect.
+                    format: int32
+                    maximum: 3600
+                    minimum: 0
+                    type: integer
+                  signalsRequired:
+                    default: 2
+                    description: |-
+                      signalsRequired is how many independent signals must fail together before a member is Failed. With 2, a node
+                      whose kubelet is lost but whose FreeSWITCH still answers SIP stays Suspect; with 1, any one signal is enough.
+                      The readiness signal doesn't count while the node is lost (the node's loss is what makes the pod unready), so
+                      2 is the most there can be.
+                    format: int32
+                    maximum: 2
+                    minimum: 1
+                    type: integer
+                  sipProbe:
+                    description: |-
+                      sipProbe configures the operator's SIP OPTIONS probes. Any SIP response counts as an answer (a 403 from an ACL
+                      or a 503 while busy too): the probe asks whether FreeSWITCH's SIP stack is alive and reachable, not whether it
+                      would take a call.
+                    properties:
+                      failureThreshold:
+                        default: 3
+                        description: failureThreshold is how many probes in a row
+                          must go unanswered before the signal fails.
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                      periodSeconds:
+                        default: 5
+                        description: periodSeconds between probes of each member.
+                        format: int32
+                        maximum: 300
+                        minimum: 1
+                        type: integer
+                      timeoutSeconds:
+                        default: 2
+                        description: timeoutSeconds each probe waits for an answer,
+                          retransmitting over UDP as a SIP client would.
+                        format: int32
+                        maximum: 60
+                        minimum: 1
+                        type: integer
+                    type: object
+                    x-kubernetes-validations:
+                    - message: timeoutSeconds must not exceed periodSeconds
+                      rule: self.timeoutSeconds <= self.periodSeconds
+                type: object
               image:
                 description: image is the FreeSWITCH image. It must contain freeswitch,
                   fs_cli and /bin/sh.
@@ -696,8 +772,8 @@ spec:
               conditions:
                 description: |-
                   conditions: Ready (every member ready and current), Available (at least one member takes calls),
-                  Progressing (a rolling update is under way)
-                  and Degraded (fewer ready members than replicas).
+                  Progressing (a rolling update is under way), Degraded (fewer ready members than replicas) and MembersHealthy
+                  (no member Suspect or Failed).
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -773,6 +849,46 @@ spec:
                   changed.
                 format: date-time
                 type: string
+              lastFailover:
+                description: |-
+                  lastFailover is the fleet's latest failover. Another automatic failover waits until its replacement is ready,
+                  or 10 minutes have passed.
+                properties:
+                  completedAt:
+                    description: completedAt is when the replacement pod became ready.
+                    format: date-time
+                    type: string
+                  node:
+                    description: node the pod ran on, which the operator fenced.
+                    type: string
+                  pod:
+                    description: pod failed over.
+                    type: string
+                  podUID:
+                    description: podUID of the pod that was deleted, so its replacement
+                      can be told apart.
+                    type: string
+                  reason:
+                    description: reason gives the signals or the request behind the
+                      failover.
+                    type: string
+                  replacementNode:
+                    description: replacementNode is where the replacement pod runs.
+                    type: string
+                  startedAt:
+                    description: startedAt is when the operator fenced the node and
+                      deleted the pod.
+                    format: date-time
+                    type: string
+                  trigger:
+                    description: trigger is Automatic or Manual.
+                    type: string
+                required:
+                - pod
+                - podUID
+                - startedAt
+                - trigger
+                type: object
               members:
                 description: members, one per pod, in name order.
                 items:
@@ -785,6 +901,54 @@ spec:
                     externalAddress:
                       description: externalAddress the pod advertises to peers.
                       type: string
+                    health:
+                      description: health is the operator's verdict on the member,
+                        from its signals.
+                      properties:
+                        message:
+                          description: message says why the member is in its state,
+                            and what the operator will or won't do about it.
+                          type: string
+                        signals:
+                          description: |-
+                            signals failing now. A signal still within its grace period (notReadySeconds, the probe's failureThreshold)
+                            isn't listed yet.
+                          items:
+                            description: HealthSignal is one failing view of a member.
+                            properties:
+                              counted:
+                                description: |-
+                                  counted is false when the signal fails for every member of the fleet at once and so doesn't count toward
+                                  Failed.
+                                type: boolean
+                              message:
+                                description: 'message gives the detail: the node''s
+                                  condition, the last probe''s error.'
+                                type: string
+                              since:
+                                description: since is when the problem the signal
+                                  reports began.
+                                format: date-time
+                                type: string
+                              type:
+                                description: 'type of signal: NodeLost, NotReady or
+                                  SIPUnreachable.'
+                                type: string
+                            required:
+                            - counted
+                            - since
+                            - type
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - type
+                          x-kubernetes-list-type: map
+                        state:
+                          description: state is Healthy, Suspect or Failed.
+                          type: string
+                      required:
+                      - state
+                      type: object
                     node:
                       description: node the pod runs on.
                       type: string

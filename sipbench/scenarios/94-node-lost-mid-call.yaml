@@ -6,11 +6,15 @@ description: >
   two minutes (no packet in or out, ARP included, as if it had lost power), longer than FreeSWITCH's media
   timeout and long enough for Kubernetes to mark the node NotReady. The rest of the fleet keeps taking calls: one
   placed as the node goes dark is set up within Kamailio's 5 s failover, and one placed 30 s later, once the
-  dispatcher's probes have taken the node out, without any. When the node comes back the fleet is whole again.
-  The call on the dark node is not checked past its first audio: until failover (M4) it is lost, and the report
-  records its audio gap and how it ended as the baseline M4 has to beat.
+  dispatcher's probes have taken the node out, without any. The operator finds the member Failed (its node lost
+  and its SIP unanswered), fences the node and starts the pod on the spare edge node, where it takes calls again
+  while the node is still dark; when the node comes back the runner unfences it. The call on the dark node is not
+  checked past its first audio: until call recovery it is lost, and the report records its audio gap and how it
+  ended as the baseline call recovery has to beat.
 requires: [mock, fleet, node-blackout]
 timeoutMs: 600000
+metrics:
+  - {query: 'sum(freeswitch_operator_failovers_total{result="ok"})', increase: 1}
 backend:
   routes:
     throughout:
@@ -65,6 +69,9 @@ actions:
     afterMs: 10000
     blackoutNodeOf: {of: a, forMs: 120000}
   - waitNode: {of: a, state: NotReady, timeoutMs: 120000}
+  # NotReady takes the node lifecycle controller up to 50 s; then failAfterSeconds (15 s), then a pod start on the
+  # spare. All within the two minutes the node is dark.
+  - waitFailover: {of: a, timeoutMs: 110000}
   - waitNode: {of: a, state: Ready, timeoutMs: 240000}
   - afterMs: 5000
     hangup: a

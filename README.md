@@ -40,6 +40,8 @@ the same pieces by hand:
   of the fleet still serving.
 - Configuration from ConfigMaps, snapshotted per revision, so an edit rolls through the fleet instead of landing in
   running pods.
+- Health monitoring from three independent signals (the node, readiness, the operator's own SIP OPTIONS probes), and
+  failover that fences a Failed member's node and starts its pod on a spare: on its own (`Automatic`) or when asked.
 
 **Kamailio proxy** (`KamailioCluster`, [details](docs/kamailio.md))
 - Kamailio config rendered by the operator, dispatching to one or more FreeSWITCH fleets in priority order, with
@@ -111,9 +113,9 @@ flowchart LR
   node runs on the host network, one per node, with its RTP range open in the node's security group, and advertises
   its own fixed public address for media. No media relay sits in front of it (see [decisions](#decisions)).
 - **PostgreSQL** holds the fleet's shared core db and call tracking, so a spare can take over a lost node's calls
-  once failover exists: a small in-cluster instance, or a managed service such as Aurora PostgreSQL.
+  once call recovery exists: a small in-cluster instance, or a managed service such as Aurora PostgreSQL.
 - **The operator** owns both fleets and everything around them: the headless Services, the dispatcher list, each
-  node's public address, drains and rolling updates.
+  node's public address, drains and rolling updates, member health and failover.
 - **Behind the edge**, FreeSWITCH bridges calls to a SIP target. In the bench that is sipbench's mock backend; in
   production, LiveKit SIP and through it the agent runtime.
 
@@ -121,10 +123,10 @@ flowchart LR
 
 | | |
 | --- | --- |
-| [The FreeSWITCH fleet](docs/freeswitch-fleet.md) | The `FreeswitchCluster` resource: pods, probes, dispatcher membership, drains, rolling updates, configuration |
+| [The FreeSWITCH fleet](docs/freeswitch-fleet.md) | The `FreeswitchCluster` resource: pods, probes, dispatcher membership, drains, rolling updates, health and failover, configuration |
 | [Kamailio](docs/kamailio.md) | The `KamailioCluster` resource: routing, refusals, live membership, JSON-RPC, drains |
 | [Address pools](docs/address-pools.md) | Fixed public addresses, the `SIPAddressPool` resource, the AWS and MetalLB providers, the address agent |
-| [Call tracking and failover](docs/call-tracking.md) | Setting up call tracking in PostgreSQL, and what failover still needs |
+| [Call tracking and failover](docs/call-tracking.md) | Setting up call tracking in PostgreSQL, and what call recovery still needs |
 | [Barge-in voice detection](docs/barge-in.md) | The edge-or-agent switch, the SIP INFO signal, LiveKit SIP's patch, measurements |
 | [Metrics and alerts](docs/metrics.md) | Every metric, the alert rules, scraping |
 | [Dashboards](docs/dashboards.md) | The Grafana dashboards for Kamailio, FreeSWITCH and the operator, with screenshots |
@@ -157,9 +159,8 @@ layout, and [`config/samples`](config/samples/) has a sample of each resource.
 Features still to come, each with the stories that make it up.
 
 **Failover with call recovery** ([design](docs/call-tracking.md#failover-what-tracking-is-for-and-whats-left))
-- Detect a dead node and fence it.
-- Move the lost node's address to a spare and recover its calls there.
-- Have `node-lost-mid-call` check the call survives (kind has a spare edge node).
+- Recover a failed member's calls on the spare it moved to (dead-node detection, fencing and the move are in).
+- Have `node-lost-mid-call` check the call survives.
 - Check call tracking against a managed PostgreSQL (Aurora), through a database failover.
 
 **Address pools on AWS**

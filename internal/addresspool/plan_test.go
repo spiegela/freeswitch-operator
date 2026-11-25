@@ -461,3 +461,50 @@ func TestDecideBindAddressReady(t *testing.T) {
 		t.Fatal("readiness on another node carried over")
 	}
 }
+
+func TestDecideFenced(t *testing.T) {
+	// edge-1 failed over: its node b is fenced, and the StatefulSet has started edge-1 again on the spare, which holds
+	// an idle address. A terminating edge-1 still on b (force deletion pending) claims nothing there.
+	base := Input{
+		Observed:  []Address{addr("eip1", "i-a"), addr("eip2", "i-b"), addr("eip3", "i-spare")},
+		Nodes:     nodes("a", "b", "spare"),
+		Claimants: []Claimant{claimant("edge-0", "a"), claimant("edge-1", "b"), claimant("edge-1", "spare")},
+		Fenced:    map[string]bool{"b": true},
+	}
+	t.Run("may fence: the fenced node's address is taken off", func(t *testing.T) {
+		in := base
+		in.MayFence = true
+		p := Decide(in)
+		if got := summary(p); got != "unbind eip2 | eip1:Bound@a eip2:Free eip3:Bound@spare" {
+			t.Errorf("plan: %s", got)
+		}
+		if len(p.Waiting) != 0 {
+			t.Errorf("waiting: %v", p.Waiting)
+		}
+	})
+	t.Run("advisory without the opt-in: held on the fenced node, never moved", func(t *testing.T) {
+		in := base
+		// A second needy node with no free address must not take the held one.
+		in.Nodes = nodes("a", "b", "spare", "c")
+		in.Claimants = append(in.Claimants, claimant("edge-2", "c"))
+		p := Decide(in)
+		if got := summary(p); got != " | eip1:Bound@a eip2:Idle@b eip3:Bound@spare" {
+			t.Errorf("plan: %s", got)
+		}
+		if !strings.Contains(p.Status[1].Message, "fenced") {
+			t.Errorf("held address message: %q", p.Status[1].Message)
+		}
+		if p.Waiting["c"] == "" {
+			t.Errorf("c should wait: %v", p.Waiting)
+		}
+	})
+	t.Run("a fenced node gets no address", func(t *testing.T) {
+		in := Input{
+			Observed: []Address{addr("eip1", "")}, Nodes: nodes("b"), MayFence: true,
+			Claimants: []Claimant{claimant("edge-1", "b")}, Fenced: map[string]bool{"b": true},
+		}
+		if got := summary(Decide(in)); got != " | eip1:Free" {
+			t.Errorf("plan: %s", got)
+		}
+	})
+}

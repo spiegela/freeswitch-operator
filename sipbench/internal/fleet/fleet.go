@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -140,6 +141,9 @@ type Fleet interface {
 	ExternalAddresses(ctx context.Context) (map[string]string, error)
 	// NodeReady reports whether a node's Ready condition is True.
 	NodeReady(ctx context.Context, node string) (bool, error)
+	// Unfence removes the operator's FencedTaint (and its record, FencedByAnnotation) from a node a failover
+	// fenced, and reports whether it had one.
+	Unfence(ctx context.Context, node string) (bool, error)
 	// StartBlackout starts a pod on node that takes the node off the network for d, BlackoutDelay after it
 	// starts (sipbench blackout, from image), and returns the pod's name.
 	StartBlackout(ctx context.Context, node string, d time.Duration, image string) (string, error)
@@ -336,6 +340,32 @@ func (k *kube) Cordon(ctx context.Context, node string, unschedulable bool) erro
 	patch := fmt.Sprintf(`{"spec":{"unschedulable":%t}}`, unschedulable)
 	_, err := k.core.CoreV1().Nodes().Patch(ctx, node, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 	return err
+}
+
+// FencedTaint is the taint the operator puts on a node when it fails over a member there; FencedByAnnotation is its
+// record of why.
+const (
+	FencedTaint        = "sip.instruments.com/fenced"
+	FencedByAnnotation = "sip.instruments.com/fenced-by"
+)
+
+func (k *kube) Unfence(ctx context.Context, node string) (bool, error) {
+	n, err := k.core.CoreV1().Nodes().Get(ctx, node, metav1.GetOptions{})
+	if err != nil {
+		return false, err
+	}
+	keep := slices.DeleteFunc(slices.Clone(n.Spec.Taints), func(t corev1.Taint) bool { return t.Key == FencedTaint })
+	if len(keep) == len(n.Spec.Taints) {
+		return false, nil
+	}
+	n.Spec.Taints = keep
+	delete(n.Annotations, FencedByAnnotation)
+	// An update, not a patch: the resourceVersion makes it fail rather than drop a taint the node lifecycle
+	// controller changed meanwhile.
+	if _, err := k.core.CoreV1().Nodes().Update(ctx, n, metav1.UpdateOptions{}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (k *kube) Evict(ctx context.Context, pod string) error {

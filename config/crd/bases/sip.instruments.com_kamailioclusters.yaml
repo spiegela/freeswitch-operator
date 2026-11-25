@@ -639,6 +639,54 @@ spec:
                     externalAddress:
                       description: externalAddress the pod advertises to peers.
                       type: string
+                    health:
+                      description: health is the operator's verdict on the member,
+                        from its signals.
+                      properties:
+                        message:
+                          description: message says why the member is in its state,
+                            and what the operator will or won't do about it.
+                          type: string
+                        signals:
+                          description: |-
+                            signals failing now. A signal still within its grace period (notReadySeconds, the probe's failureThreshold)
+                            isn't listed yet.
+                          items:
+                            description: HealthSignal is one failing view of a member.
+                            properties:
+                              counted:
+                                description: |-
+                                  counted is false when the signal fails for every member of the fleet at once and so doesn't count toward
+                                  Failed.
+                                type: boolean
+                              message:
+                                description: 'message gives the detail: the node''s
+                                  condition, the last probe''s error.'
+                                type: string
+                              since:
+                                description: since is when the problem the signal
+                                  reports began.
+                                format: date-time
+                                type: string
+                              type:
+                                description: 'type of signal: NodeLost, NotReady or
+                                  SIPUnreachable.'
+                                type: string
+                            required:
+                            - counted
+                            - since
+                            - type
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - type
+                          x-kubernetes-list-type: map
+                        state:
+                          description: state is Healthy, Suspect or Failed.
+                          type: string
+                      required:
+                      - state
+                      type: object
                     node:
                       description: node the pod runs on.
                       type: string

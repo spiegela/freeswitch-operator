@@ -38,13 +38,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
 	"github.com/spiegela/freeswitch-operator/internal/addresspool"
@@ -70,6 +73,12 @@ type FreeswitchClusterReconciler struct {
 	NewNotifier NotifierFactory
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+	// SIPProbes reads the SIP prober's results; nil means no SIP signal.
+	SIPProbes SIPProbeResults
+	// ProbeEvents, when set, delivers fleets whose SIP signal changed (the SIP prober's Events).
+	ProbeEvents <-chan event.GenericEvent
+	// Recorder records events on the fleet; nil records none.
+	Recorder events.EventRecorder
 
 	configHashes configHasher
 }
@@ -80,7 +89,8 @@ type FreeswitchClusterReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;patch;delete
-// +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=sip.instruments.com,resources=sipaddresspools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch
@@ -149,6 +159,9 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := markFirstReady(ctx, r.Client, pods, r.now()); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	if confErr == nil {
 		if err := r.pruneConfigSnapshots(ctx, &fsc, conf, sts, pods); err != nil {
@@ -188,6 +201,11 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	r.fillStatus(&fsc, cfg, sts, pods, decision, status)
+	healthAfter, err := r.syncHealth(ctx, &fsc, fleet, cfg, pods, status)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	requeue = minPositive(requeue, healthAfter)
 	if confErr != nil {
 		gen := fsc.Generation
 		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionDegraded, Status: metav1.ConditionTrue, Reason: "ConfigInvalid", Message: confErr.Error(), ObservedGeneration: gen})
@@ -716,7 +734,11 @@ func (r *FreeswitchClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return out
 	})
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr)
+	if r.ProbeEvents != nil {
+		b = b.WatchesRawSource(source.Channel(r.ProbeEvents, &handler.EnqueueRequestForObject{}))
+	}
+	return b.
 		For(&sipv1alpha1.FreeswitchCluster{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).

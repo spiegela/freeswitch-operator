@@ -108,6 +108,7 @@ func (r *SIPAddressPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	in.MayFence = caps.Fencing == sipv1alpha1.AddressFencingAuthoritative || pool.Spec.AllowAdvisoryFencing
 	in.Observed, err = provider.Observe(ctx)
 	recordPoolCall(pool.Name, "observe", err)
 	if err != nil {
@@ -213,6 +214,12 @@ func (r *SIPAddressPoolReconciler) planInput(
 		in.Nodes = append(in.Nodes, addresspool.Node{Name: n.Name, ID: id})
 		if id != "" {
 			nodeNames[id] = n.Name
+		}
+		if nodeFenced(n) {
+			if in.Fenced == nil {
+				in.Fenced = map[string]bool{}
+			}
+			in.Fenced[n.Name] = true
 		}
 	}
 	var err error
@@ -395,10 +402,11 @@ func (r *SIPAddressPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	agentPod := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetLabels()[sipv1alpha1.AppNameLabel] == sipv1alpha1.AddressAgentName
 	})
-	// Nodes matter when they come and go, or when their provider ID appears.
+	// Nodes matter when they come and go, when their provider ID appears, or when a failover fences one.
 	nodeChanges := predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			return e.ObjectOld.(*corev1.Node).Spec.ProviderID != e.ObjectNew.(*corev1.Node).Spec.ProviderID
+			o, n := e.ObjectOld.(*corev1.Node), e.ObjectNew.(*corev1.Node)
+			return o.Spec.ProviderID != n.Spec.ProviderID || nodeFenced(o) != nodeFenced(n)
 		},
 	}
 	return ctrl.NewControllerManagedBy(mgr).

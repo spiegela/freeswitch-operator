@@ -52,6 +52,9 @@ names a fleet by `kind`, `namespace` and `name`:
   `_fleet_pod_replacements_total`.
 - Drains: `_fleet_drain_started_timestamp_seconds{pod}` and `_fleet_max_drain_seconds` (a drain's age against its
   limit), `_fleet_drain_duration_seconds` (how long each drain took).
+- Health and failover ([failover](freeswitch-fleet.md#health-and-failover)): `_member_health{pod,state}`,
+  `_member_signal{pod,signal,counted}`, `_member_failover_held{pod}` (Failed but not failed over),
+  `_failovers_total{trigger,result}`, `_failover_in_progress`, `_sip_probes_total{result}`.
 - Dispatcher: `_dispatcher_destinations{set}`, `_dispatcher_list_updates_total`, `_dispatcher_reloads_total{result}`,
   `_dispatcher_set_inactive_total{result}`, `_dispatcher_pending_reload` (a changed list not every Kamailio is
   confirmed to hold).
@@ -67,7 +70,8 @@ format, for Prometheus, Grafana Mimir or Amazon Managed Service for Prometheus. 
 runs their unit tests with promtool.
 
 - **Critical:** silent drops with the whole fleet silent; FreeSWITCH not answering; a fleet with no member taking
-  calls.
+  calls; a member Failed but held back (mode `Detect`, or never ready); a failover whose replacement isn't ready in
+  5 minutes.
 - **Warning:**
   - silent drops of single requests (malformed traffic or an attack), repeated silent node timeouts;
   - a SIP profile down, sessions near the limit;
@@ -75,6 +79,8 @@ runs their unit tests with promtool.
     limit;
   - a dispatcher reload pending for 5 minutes, a dispatch set conflict;
   - the operator gone;
+  - a member Suspect for 2 minutes, a failover (find out about the node, then unfence it), a failover that couldn't
+    fence or delete, a health signal failing for every member (failover can't use it);
   - a node using an address pool with none of its addresses, a pool address in `Conflict` or `Error`, a pool that
     hasn't read its provider for 15 minutes, a pool address waiting on its node's address agent.
 - **Info:** a pool with no spare address.

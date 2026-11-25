@@ -33,6 +33,14 @@ type SIPAddressPoolSpec struct {
 	// metalLB draws the pool from addresses MetalLB announces, from each node they are bound to (Local).
 	// +optional
 	MetalLB *MetalLBPool `json:"metalLB,omitempty"`
+
+	// allowAdvisoryFencing lets the pool take its addresses off a fenced node (one carrying the
+	// sip.instruments.com/fenced taint, after a failover) when its provider's fencing is Advisory, as MetalLB's is:
+	// a node cut off from the cluster but not from the network may go on answering for the address until it is
+	// stopped. Authoritative pools always take their addresses off a fenced node. Without it, an Advisory pool leaves
+	// the address on the fenced node, unused, until the taint is removed or the node leaves the cluster.
+	// +optional
+	AllowAdvisoryFencing bool `json:"allowAdvisoryFencing,omitempty"`
 }
 
 // MetalLBPool is a pool of addresses MetalLB announces (L2 or BGP). For each binding the operator makes a

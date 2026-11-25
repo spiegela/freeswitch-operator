@@ -42,6 +42,12 @@ spec:
   metrics:                          # optional: a Prometheus exporter beside FreeSWITCH in each pod (metrics.md)
     exporterImage: ghcr.io/spiegela/freeswitch-exporter@sha256:…
     port: 9282
+  failover:                         # optional: health monitoring and failover to a spare node (below)
+    mode: Detect                    # Detect (report only) | Automatic
+    signalsRequired: 2              # independent signals that must fail together: 1 or 2
+    failAfterSeconds: 15            # ...for this long before a member is Failed
+    notReadySeconds: 20             # how long unready counts as a blip
+    sipProbe: {periodSeconds: 5, timeoutSeconds: 2, failureThreshold: 3}
 status:
   readyReplicas: 2
   members:                          # one entry per pod
@@ -50,6 +56,9 @@ status:
       address: 10.0.1.23            # what Kamailio dispatches to (the node's private address)
       externalAddress: 203.0.113.10 # what peers see
       state: Active                 # Starting | Active | Draining
+      health:                       # Healthy | Suspect | Failed, and the signals failing now
+        state: Healthy
+  lastFailover: {}                  # pod, node, trigger, reason, startedAt, completedAt, replacementNode
   currentRevision: edge-7c9d…
   updateRevision: edge-7c9d…
   conditions: []
@@ -126,6 +135,61 @@ while paused, so the dispatcher fails over on a `503` in the gap between "not re
 - **Node drain, autoscaler consolidation or node expiry:** eviction respects the PodDisruptionBudget, and the same
   `preStop` drain runs under the same long grace period.
 - **Keep a spare.** With one pod per node, an update without a spare runs a node short for its whole length.
+
+## Health and failover
+
+**The operator watches every member through three independent signals, and can fence a Failed member's node and
+start its pod on a spare.** Every fleet gets the health report, with `spec.failover` or without; acting on it is
+`spec.failover.mode`.
+
+| Signal | Fails when | Observer |
+| --- | --- | --- |
+| `NodeLost` | the node's Ready condition isn't True (the node lifecycle controller sets it Unknown once the kubelet stops renewing its lease, about 40 to 50 s), or the Node is gone | the control plane |
+| `NotReady` | a pod that has been ready is unready for `notReadySeconds` (20) on a node that isn't lost: FreeSWITCH fails the kubelet's own checks, or keeps restarting | the kubelet |
+| `SIPUnreachable` | `failureThreshold` (3) SIP OPTIONS in a row go unanswered, sent every `periodSeconds` (5) to the member's SIP port over the dispatcher transport | the operator |
+
+- **Any SIP response counts as an answer.** A 403 from an ACL or a 503 while paused still shows a live SIP stack.
+  The operator probes itself rather than reading Kamailio's dispatcher state, since a member that goes unready
+  leaves the dispatcher list and Kamailio stops probing it. So the operator's pods must reach the edge nodes' SIP
+  port, as Kamailio's do.
+- **Only a pod that has been ready counts as `NotReady`** (the operator marks it `sip.instruments.com/first-ready`),
+  and readiness doesn't count while the node is lost (that would be the node's loss twice).
+- **A signal failing for every member of a fleet of two or more is the observer's problem** (the operator's
+  network, the control plane), not every member's at once: it is listed but not counted, and
+  `FreeswitchHealthSignalBlind` warns.
+
+A member with no failing signal is `Healthy`; one with any is `Suspect`; one with `signalsRequired` (2) counted
+signals failing together for `failAfterSeconds` (15) is `Failed`. With 2, a node whose kubelet is lost but whose
+FreeSWITCH still answers SIP stays Suspect, as does a member Kamailio still reaches but the operator can't. Each
+member's verdict and signals are in `status.members[].health`, the fleet's `MembersHealthy` condition sums them up,
+transitions are events on the fleet, and [metrics and alerts](metrics.md) follow them.
+
+**Failover.** `spec.failover.mode` is `Detect` (the default: report, and act only when asked) or `Automatic`. A
+person can fail over any member in either mode by annotating its pod `sip.instruments.com/fail-over=true`. In
+`Automatic`, the operator fails over a `Failed` member on its own, with three limits: one member at a time (the next
+waits until the last failover's replacement is ready, or 10 minutes); never a pod that has never been ready (a
+configuration or image that never worked fails the same way on any node); and the earliest Failed first. A failover:
+
+1. Fences the member's node: the taint `sip.instruments.com/fenced:NoSchedule`, and the annotation
+   `sip.instruments.com/fenced-by` saying which member's failover, when, and why.
+2. Deletes the pod at once (no grace period, no drain: its calls are lost anyway). Its endpoint goes, so the
+   dispatcher list drops it and Kamailio takes it out of rotation at once, as for a drain.
+3. The StatefulSet starts the pod again; the taint keeps it off the fenced node, so it lands on the spare.
+4. Every `SIPAddressPool` that may fence takes its addresses off the fenced node and treats the node as failed
+   ([address pools](address-pools.md)). The replacement gets an address on the spare as any replaced pod does: the
+   failed member's own, freed by the fence, unless the spare holds an idle address of its own.
+
+`status.lastFailover` records the failover until the replacement is ready. **The operator never unfences:** once
+someone has found out what happened to the node and it is sound, `kubectl taint node <node>
+sip.instruments.com/fenced-` makes it a spare again. The operator needs `patch` on nodes for the taint.
+
+Fencing a node takes every pool address off it, whatever fleet uses it: a Kamailio pod on a fenced node loses its
+address too.
+
+**Still to come: recovering the failed member's calls.** Nothing runs `sofia recover` on the replacement yet, so a
+failed member's calls are lost (FreeSWITCH ends them at its media timeout, and nothing tells the backend); new calls
+go elsewhere, within Kamailio's 5 s failover at first. [Call tracking](call-tracking.md#failover-what-tracking-is-for-and-whats-left)
+has what recovery needs.
 
 ## Configuration from ConfigMaps
 
