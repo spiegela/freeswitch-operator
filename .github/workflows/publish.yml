@@ -5,7 +5,8 @@ name: Publish images
 #   ghcr.io/spiegela/freeswitch-operator   the manager, and the address agent (Dockerfile, target manager)
 #   ghcr.io/spiegela/freeswitch-exporter   the FreeSWITCH metrics exporter (Dockerfile, target exporter)
 #   ghcr.io/spiegela/call-tracer           per-call traces from HEP and LiveKit webhooks (Dockerfile, target call-tracer)
-#   ghcr.io/spiegela/freeswitch            drachtio's FreeSWITCH plus mod_pgsql, cut down (images/freeswitch)
+#   ghcr.io/spiegela/freeswitch-base       FreeSWITCH 1.11.4 built from source, to build on (images/freeswitch-base)
+#   ghcr.io/spiegela/freeswitch            the edge's FreeSWITCH on that base, cut down (images/freeswitch)
 #   ghcr.io/spiegela/sipbench              the bench: sipbench, mockbackend, lkagent (sipbench/Dockerfile)
 #
 # Each is built for linux/amd64 and linux/arm64. A release (a push to main) is tagged `latest` and
@@ -24,8 +25,90 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # FreeSWITCH's base compiles FreeSWITCH, far too slow emulated, so each platform builds on a runner of its own and
+  # pushes a per-platform tag; base-merge joins them. Unchanged, each comes straight from the GitHub Actions cache.
+  base:
+    if: github.repository == 'spiegela/freeswitch-operator'
+    name: freeswitch-base (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io/spiegela
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: images/freeswitch-base
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: ghcr.io/spiegela/freeswitch-base:sha-${{ github.sha }}-${{ matrix.arch }}
+          provenance: false
+          cache-from: type=gha,scope=freeswitch-base-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=freeswitch-base-${{ matrix.arch }}
+
+  base-merge:
+    name: freeswitch-base
+    needs: base
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      packages: write # push to ghcr.io/spiegela
+    outputs:
+      image: ${{ steps.merge.outputs.image }}
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tagged with FreeSWITCH's version (on main), and sha-<short commit>. The edge image builds on its digest.
+      - name: Join the platforms
+        id: merge
+        env:
+          REPO: ghcr.io/spiegela/freeswitch-base
+          SHA: ${{ github.sha }}
+          MAIN: ${{ github.ref == 'refs/heads/main' }}
+        run: |
+          tags=(-t "$REPO:sha-${SHA::7}")
+          if [ "$MAIN" = true ]; then tags+=(-t "$REPO:1.11.4"); fi
+          docker buildx imagetools create "${tags[@]}" \
+            --annotation "index:org.opencontainers.image.description=FreeSWITCH 1.11.4 built from source, to build on" \
+            "$REPO:sha-$SHA-amd64" "$REPO:sha-$SHA-arm64"
+          digest=$(docker buildx imagetools inspect "$REPO:sha-${SHA::7}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          echo "image=$REPO@$digest" >> "$GITHUB_OUTPUT"
+
   publish:
     if: github.repository == 'spiegela/freeswitch-operator'
+    needs: base-merge
     name: ${{ matrix.image }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -51,7 +134,7 @@ jobs:
           - image: freeswitch
             context: images/freeswitch
             target: ""
-            description: FreeSWITCH 1.10.10 (drachtio's build) plus mod_pgsql, cut down for a SIP edge
+            description: FreeSWITCH 1.11.4 with mod_pgsql and barge-in voice detection, cut down for a SIP edge
           - image: sipbench
             context: sipbench
             target: ""
@@ -62,7 +145,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # images/freeswitch compiles mod_pgsql against the target's own headers, so its arm64 build runs emulated.
+      # images/freeswitch compiles mod_speech_detect against the target's own headers, so its arm64 build runs
+      # emulated (one module; the base it builds on is native).
       # The Go images cross-compile on the runner's own platform.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -108,6 +192,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
+          build-args: |
+            BASE=${{ needs.base-merge.outputs.image }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha,scope=${{ matrix.image }}

@@ -73,7 +73,7 @@ uuid_speech_detect <uuid> stop <name>
   start takes `min_speech_ms` of windows at or above `threshold`; a stop, `min_silence_ms` of windows below
   `threshold` - 0.15. One model, loaded with the module, serves every call; each detector keeps only its own state,
   and its inference runs on the call's media thread.
-- **`webrtc`** is FreeSWITCH's own detector, WebRTC's when FreeSWITCH is built with libfvad (drachtio's is).
+- **`webrtc`** is FreeSWITCH's own detector, WebRTC's when FreeSWITCH is built with libfvad (the project's image is).
 - **No telemetry.** ONNX Runtime's Linux build carries Microsoft's telemetry client, which would upload to
   `mobile.events.data.microsoft.com`. The image sets `ORT_DISABLE_TELEMETRY=1`, which keeps it from starting, and the
   module sets it too and turns telemetry events off.

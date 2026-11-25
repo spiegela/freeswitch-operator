@@ -6,7 +6,7 @@ metadata:
   name: edge
 spec:
   replicas: 2
-  # images/freeswitch (drachtio's image plus mod_pgsql), built and loaded into kind by hack/kind.sh.
+  # images/freeswitch (FreeSWITCH 1.11.4, the project's own build), built and loaded into kind by hack/kind.sh.
   image: freeswitch:dev
   imagePullPolicy: IfNotPresent
   # The image's entrypoint rewrites its own config; run the binary against the assembled one instead.

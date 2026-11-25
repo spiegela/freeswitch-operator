@@ -126,7 +126,10 @@ kind-down: ## Delete the local edge cluster
 REPORT_CARD_DIR ?= sipbench/report-card
 
 .PHONY: compose-bench
-compose-bench: ## Run sipbench against one FreeSWITCH in docker compose (SIPBENCH_REPORT=<file> saves the JSON report)
+compose-bench: ## Run sipbench against one FreeSWITCH in docker compose (SIPBENCH_REPORT=<file> saves the JSON report; FREESWITCH_BASE=build builds FreeSWITCH's base too)
+	if [ "$$FREESWITCH_BASE" = build ]; then \
+	  docker build -q -t freeswitch-base:dev images/freeswitch-base || exit 1; export FREESWITCH_BASE=freeswitch-base:dev; \
+	fi; \
 	cd sipbench && { \
 	  docker compose up -d --build || exit 1; \
 	  status=0; \

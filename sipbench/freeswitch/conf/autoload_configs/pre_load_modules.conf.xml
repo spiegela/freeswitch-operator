@@ -1,8 +1,8 @@
 <configuration name="pre_load_modules.conf" description="Modules loaded before the core db">
   <modules>
     <!-- PostgreSQL for the core db, when vars.xml's core_db_dsn names one (pgsql://...). The core db opens before
-         modules.conf loads, so its driver loads here. images/freeswitch has it; drachtio's image (compose) doesn't,
-         and there it logs a load error and the core db stays in SQLite. -->
+         modules.conf loads, so its driver loads here. An image without it logs a load error and the core db
+         stays in SQLite. -->
     <load module="mod_pgsql"/>
   </modules>
 </configuration>

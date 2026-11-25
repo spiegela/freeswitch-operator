@@ -9,11 +9,14 @@ name: sipbench
 
 services:
   freeswitch:
-    # FreeSWITCH 1.10.10, multi-arch (native arm64 and amd64). Pinned by tag and digest.
-    image: drachtio/drachtio-freeswitch-mrf:0.9.6@sha256:cb81acc1112990ca33693374f1de7443d44cf9c95e6ae6c02ba1edcee4b68bba
-    # The image's entrypoint rewrites its own config; run the binary directly against ours.
-    entrypoint: ["/usr/local/freeswitch/bin/freeswitch"]
-    command: ["-nonat", "-nf", "-nc", "-conf", "/usr/local/freeswitch/conf", "-log", "/tmp", "-db", "/tmp"]
+    # The project's FreeSWITCH 1.11.4 image (images/freeswitch), built here on its published base unless
+    # FREESWITCH_BASE names another (freeswitch-base:dev, built from images/freeswitch-base).
+    image: ${FREESWITCH_IMAGE:-freeswitch:dev}
+    build:
+      context: ../images/freeswitch
+      args:
+        BASE: ${FREESWITCH_BASE:-ghcr.io/spiegela/freeswitch-base:1.11.4}
+    command: ["freeswitch", "-nonat", "-nf", "-nc", "-conf", "/usr/local/freeswitch/conf", "-log", "/tmp", "-db", "/tmp"]
     volumes:
       - ./freeswitch/conf:/usr/local/freeswitch/conf:ro
       # On a cluster the operator projects the node's external address here (downward API); without it the

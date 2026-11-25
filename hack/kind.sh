@@ -3,7 +3,8 @@
 # behind and in front.
 #
 #   hack/kind.sh up        create the cluster (deploy/kind/kind-config.yaml)
-#   hack/kind.sh images    build the images (deploy does too; run it beside up to have them ready sooner)
+#   hack/kind.sh images    build the images (deploy does too; run it beside up to have them ready sooner);
+#                          FREESWITCH_BASE=build builds FreeSWITCH's base image too (images/freeswitch-base)
 #   hack/kind.sh deploy    build and load the images, install MetalLB, the operator and the address agent, the
 #                          edge's SIPAddressPool, apply deploy/kind/monitoring and deploy/kind, wait for both
 #                          fleets and for every Kamailio to load the dispatcher list
@@ -108,8 +109,20 @@ images() {
   together <<EOT
 freeswitch-operator:dev, freeswitch-exporter:dev	docker build -q -t freeswitch-operator:dev "$ROOT" && docker build -q --target exporter -t freeswitch-exporter:dev "$ROOT"
 sipbench:dev	docker build -q -t sipbench:dev "$ROOT/sipbench"
-freeswitch:dev	docker build -q -t freeswitch:dev "$ROOT/images/freeswitch"
+freeswitch:dev	$(freeswitch_build)
 EOT
+}
+
+# The FreeSWITCH image builds on the published base (images/freeswitch-base), or on FREESWITCH_BASE. With
+# FREESWITCH_BASE=build it builds the base here first, as freeswitch-base:dev: for a change to the base itself, which
+# compiles FreeSWITCH (several minutes; the build cache keeps it after).
+freeswitch_build() {
+  local base="${FREESWITCH_BASE:-}"
+  if [ "$base" = build ]; then
+    printf 'docker build -q -t freeswitch-base:dev "%s" && ' "$ROOT/images/freeswitch-base"
+    base=freeswitch-base:dev
+  fi
+  printf 'docker build -q %s -t freeswitch:dev "%s"' "${base:+--build-arg BASE=$base}" "$ROOT/images/freeswitch"
 }
 
 # Load each image only onto the nodes that run it, side by side: FreeSWITCH (by far the largest) onto the sip-edge

@@ -50,6 +50,21 @@ jobs:
       - name: Raise inotify limits for a six-node cluster
         run: sudo sysctl -w fs.inotify.max_user_instances=512 fs.inotify.max_user_watches=524288
 
+      # FreeSWITCH's image builds on the published base (images/freeswitch-base) unless a pull request changes the
+      # base, or none is published yet: then kind.sh builds it here too (FreeSWITCH from source, several minutes).
+      - name: Pick FreeSWITCH's base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          changed=false
+          if [ -n "$BASE_REF" ]; then
+            git fetch --quiet --depth=1 origin "$BASE_REF"
+            git diff --quiet FETCH_HEAD HEAD -- images/freeswitch-base || changed=true
+          fi
+          if [ "$changed" = true ] || ! docker manifest inspect ghcr.io/spiegela/freeswitch-base:1.11.4 >/dev/null 2>&1; then
+            echo "FREESWITCH_BASE=build" >> "$GITHUB_ENV"
+          fi
+
       # The images build while kind starts the nodes; deploy then finds them in the build cache.
       - name: Create the cluster and build the images
         run: |
