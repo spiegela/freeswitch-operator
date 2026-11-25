@@ -1,6 +1,9 @@
 <!--
   backend: the profile facing what sits behind the edge. The mock backend in the bench; LiveKit SIP later.
-  It stays on the private network, so it advertises its local address.
+  It stays on the private network, so it advertises its local address. Its RTP binds the same address as trunks'
+  (bind_address, vars.xml): the pool's address on the node where there is one, which moves with the pod. Recovery
+  binds each leg's RTP to the address the leg had, so a call another node takes over needs both legs' to be there.
+  SIP needs nothing of the kind: the recovered re-INVITE gives the far end the new node's Contact.
   It runs as backend-<external address>, like trunks (sip_profiles/trunks.xml): a recovered call needs both of its
   legs, so both profiles' names must say whose calls they are. "backend" is its alias.
 -->
@@ -14,7 +17,7 @@
     <param name="context" value="backend"/>
     <param name="dialplan" value="XML"/>
     <param name="sip-ip" value="$${local_ip_v4}"/>
-    <param name="rtp-ip" value="$${local_ip_v4}"/>
+    <param name="rtp-ip" value="$${bind_address}"/>
     <param name="sip-port" value="5080"/>
     <param name="apply-inbound-acl" value="bench"/>
     <param name="auth-calls" value="false"/>

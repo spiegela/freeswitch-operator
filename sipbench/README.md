@@ -187,7 +187,9 @@ edge and runner both support, `proxy` when the edge address is Kamailio rather t
 can act on the FreeswitchCluster under test, `netem` when the runner may impair its own traffic with tc (it
 needs `NET_ADMIN`; compose and the kind Job provide both), `sip-trace` when the edge address is a SIP node's
 own address, not a Service VIP, so a call can keep all its SIP on one socket (see Impairments below), and
-`address-pool` when the FreeswitchCluster under test draws its external address from a SIPAddressPool, and
+`address-pool` when the FreeswitchCluster under test draws its external address from a SIPAddressPool,
+`spare-node` when the fleet has an edge node it doesn't use, holding no pool address of its own (see
+`moveFreeswitchOf` below; the kind Job offers it: two FreeSWITCH nodes on three edge nodes), and
 `node-blackout`, added by `-blackout-image` (`SIPBENCH_BLACKOUT_IMAGE`) with `-fleet`, when the runner may take an
 edge node off the network (see `blackoutNodeOf` below), and `livekit`, added by `-lkagent <url>`
 (`SIPBENCH_LKAGENT`), when calls to `lk<number>` reach LiveKit SIP and the stand-in agent below can be asked what
@@ -256,6 +258,9 @@ the RFC 4475 or ETSI texts.
 | Action | Effect |
 |---|---|
 | `drainNodeOf: <call>` | what `kubectl drain` does to the call's edge node: cordon it, evict the FreeSWITCH pod |
+| `crashFreeswitchOf: <call>` | crash FreeSWITCH in the call's pod (`fsctl crash`: no drain, its calls left in the recovery table); done once the kubelet has restarted it and it is ready |
+| `recoverOn: <call>` | run `sofia recover` in the call's pod; fails unless it took exactly the legs of the scenario's live calls on that pod |
+| `moveFreeswitchOf: <call>` | move the call's pod to a spare edge node, as a lost node's would move: cordon its node, crash FreeSWITCH, delete the pod at once; done once the replacement takes calls on another node, and fails unless it holds the same external address. Needs `spare-node` |
 | `uncordon: {}` | uncordon every node this scenario cordoned |
 | `rollFleet: {}` | set `SIPBENCH_ROLL` on the fleet's pod template, so the operator rolls every pod |
 | `breakConfig: {configMap, key, replace or match, with}` | edit a ConfigMap the fleet reads: the first `replace` (literal text) or the first match of `match` (a Go regular expression; `with` may use `$1`) |
@@ -270,7 +275,7 @@ the RFC 4475 or ETSI texts.
 A call's pod is found from where the mock received the INVITE: the fleet runs on the host network, so that is a
 member's address. Whatever happens, a scenario ends with its cordoned nodes uncordoned and its edited ConfigMaps
 put back. Every action but `hangup` needs the `fleet` capability, and a scenario using them must say
-`requires: [fleet]`; `blackoutNodeOf` also needs `node-blackout`. The runner's access is in `k8s/runner-rbac.yaml`.
+`requires: [fleet]`; `blackoutNodeOf` also needs `node-blackout`, and `moveFreeswitchOf` `spare-node`. The runner's access is in `k8s/runner-rbac.yaml`.
 Results carry a `timeline` of what each action did and when.
 
 `blackoutNodeOf` can't reach a node from the runner's pod, so it runs `sipbench blackout` on the node: a pod placed
@@ -326,7 +331,8 @@ Two mechanisms, chosen by the knobs:
   VIP (`kamailio-sip` on kind) the ACK and BYE go to the Kamailio pod's own address (its Record-Route), and from
   the INVITE's socket they collide in conntrack with the VIP's NAT entry and are dropped. So the kind Job's edge
   address is `proxy-kamailio:5060`, the headless Service, which resolves to each Kamailio node's own address, and
-  it offers `sip-trace`.
+  it offers `sip-trace`. The Service lists Kamailio pods that aren't ready too (it keeps each pod's DNS name), so a
+  run during a Kamailio roll may reach one that is draining or starting.
 
 tc needs the `netem` capability and `NET_ADMIN`: compose's runner has `cap_add: [NET_ADMIN]`, and the Job in
 `k8s/runner-job.yaml` adds it to the container (it changes the runner pod's network namespace only). The image
@@ -439,7 +445,8 @@ A minimal SBC, deliberately small enough to read in one sitting:
 - **External address.** `ext-rtp-ip` on `trunks` comes from
   `/etc/freeswitch-operator/podinfo/external-address` (override the path with `FS_EXTERNAL_ADDRESS_FILE`), or this
   host's first IPv4 address when the file is absent (`bin/podinfo.sh`; dual-stack hosts may list IPv6 first). With a
-  `bind-address` file (`FS_BIND_ADDRESS_FILE`) RTP binds that address (`rtp-ip`). `ext-sip-ip` is always
+  `bind-address` file (`FS_BIND_ADDRESS_FILE`) RTP binds that address (`rtp-ip`), on `backend` as on `trunks`: a call
+  another node recovers binds both legs' RTP where they were, so both must be on the address that moves. `ext-sip-ip` is always
   `local_ip_v4`, where SIP listens and Kamailio reaches it. FreeSWITCH uses the `ext-` addresses only for peers outside the profile's
   `local-network-acl`, and every call on a cluster comes from Kamailio's private address, so `trunks` sets it to
   `nowhere`, an ACL that matches nothing (`acl.conf.xml`): every caller, sipbench inside the cluster too, is offered

@@ -84,6 +84,10 @@ func Decide(in Input) Plan {
 			st.ClaimedBy = pl.claims[st.Node]
 			st.LastClaimedBy = pl.claims[st.Node]
 		}
+	}
+	pl.forgetOlderClaims()
+	for i := range pl.status {
+		st := &pl.status[i]
 		pl.bindAddressReady(st)
 		if msg := pl.notReady[i]; msg != "" {
 			// Bound, but not to be handed out: the provider says it can't carry traffic yet, or this pass bound
@@ -98,6 +102,32 @@ func Decide(in Input) Plan {
 		}
 	}
 	return plan
+}
+
+// forgetOlderClaims keeps each pod the last claimant of one address only, the one bound to its node: a pod that
+// moved to a node with an address of its own would otherwise still be the last to have used its old one, and, when
+// it next needs an address, could be given that instead of the one it holds now (a free address comes before an
+// idle one).
+func (pl *planner) forgetOlderClaims() {
+	holds := map[sipv1alpha1.AddressClaim]bool{}
+	for _, st := range pl.status {
+		if st.State == sipv1alpha1.PoolAddressBound {
+			for _, c := range st.ClaimedBy {
+				holds[c] = true
+			}
+		}
+	}
+	for i := range pl.status {
+		st := &pl.status[i]
+		if st.State == sipv1alpha1.PoolAddressBound || len(st.LastClaimedBy) == 0 {
+			continue
+		}
+		last := slices.DeleteFunc(slices.Clone(st.LastClaimedBy), func(c sipv1alpha1.AddressClaim) bool { return holds[c] })
+		if len(last) == 0 {
+			last = nil
+		}
+		st.LastClaimedBy = last
+	}
 }
 
 // bindAddressReady records whether the node's address agent has an address's bind address on its interface.

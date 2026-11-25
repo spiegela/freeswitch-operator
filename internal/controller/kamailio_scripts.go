@@ -38,7 +38,16 @@ bind=""
 set -- -A "PUBLIC_ADDR=$addr" -A "PRIVATE_ADDR=$POD_IP"
 if [ -n "$bind" ] && [ "$bind" != "$POD_IP" ]; then
   set -- "$@" -A "BIND_ADDR=$bind"
-  echo "freeswitch-operator: advertising $addr, peers on $bind, nodes and JSON-RPC on $POD_IP"
+  # FreeSWITCH gets this pod's DNS name in Record-Route, not the node's address: a call another node recovers
+  # routes back through this pod's replacement, wherever it runs. The cluster domain is the one in our search list.
+  domain=$(awk -v ns="${POD_NAMESPACE}.svc." '$1 == "search" { for (i = 2; i <= NF; i++) if (index($i, ns) == 1) { print $i; exit } }' /etc/resolv.conf 2>/dev/null || true)
+  if [ -n "$domain" ] && [ -n "${KAMAILIO_SERVICE:-}" ]; then
+    name="$POD_NAME.$KAMAILIO_SERVICE.$domain"
+    set -- "$@" -A "PRIVATE_NAME=$name"
+    echo "freeswitch-operator: advertising $addr, peers on $bind, nodes on $POD_IP as $name, JSON-RPC on $POD_IP"
+  else
+    echo "freeswitch-operator: advertising $addr, peers on $bind, nodes and JSON-RPC on $POD_IP (no cluster domain in /etc/resolv.conf)"
+  fi
 else
   echo "freeswitch-operator: advertising $addr, JSON-RPC on $POD_IP:$KAMAILIO_RPC_PORT"
 fi

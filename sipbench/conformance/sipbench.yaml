@@ -228,6 +228,20 @@ cases:
     status: covered
     scenarios: [crash-recovers-own-calls]
 
+  - id: sb-moved-call-in-dialog
+    ref: moved-call-in-dialog
+    title: A call's FreeSWITCH moves to a spare node mid-call, and the call's SIP follows it both ways
+    area: resilience
+    component: freeswitch
+    expect: >
+      After a call's pod is moved to a spare edge node (its FreeSWITCH crashed, the pod deleted at once, the
+      replacement on the spare with the same address), `sofia recover` there takes exactly that node's calls, and
+      their re-INVITEs move both far ends to the spare. A BYE from the caller (through Kamailio) and one from the
+      backend (directly) each reach the spare, which ends the other leg. The other node's calls run on without a
+      gap.
+    status: covered
+    scenarios: [moved-call-in-dialog]
+
   - id: sb-barge-in-vad-mode
     ref: barge-in-vad-mode
     title: Barge-in detection is switchable per call between the edge and the agent

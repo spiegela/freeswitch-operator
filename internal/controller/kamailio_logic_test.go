@@ -64,6 +64,16 @@ func TestBuildKamailioStatefulSet(t *testing.T) {
 	if token == nil || token.Name != "proxy-jsonrpc" || token.Key != kamailioTokenKey {
 		t.Fatalf("token from the Secret, got %+v", token)
 	}
+	env := map[string]corev1.EnvVar{}
+	for _, e := range c.Env {
+		env[e.Name] = e
+	}
+	if env["KAMAILIO_SERVICE"].Value != sts.Spec.ServiceName || env["POD_NAMESPACE"].ValueFrom == nil {
+		t.Fatalf("the pod's DNS name needs its Service (%q) and namespace: %+v %+v", sts.Spec.ServiceName, env["KAMAILIO_SERVICE"], env["POD_NAMESPACE"])
+	}
+	if svc := buildKamailioService(testKamailioCluster()); svc.Name != sts.Spec.ServiceName || !svc.Spec.PublishNotReadyAddresses {
+		t.Fatalf("the governing Service %q publishes not-ready pods: %+v", svc.Name, svc.Spec)
+	}
 }
 
 func TestKamailioPodMountsAndPorts(t *testing.T) {

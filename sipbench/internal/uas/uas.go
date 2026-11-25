@@ -208,7 +208,7 @@ func Handle( //nolint:gocyclo // one dispatch over every script step; splitting 
 		defer cancel()
 		l.update(func(c *Call) { c.EndedBy = "local" })
 		finished = true
-		return d.Hangup(hctx)
+		return hangupServer(hctx, d)
 	}
 	startMedia := func() error {
 		if eng != nil {

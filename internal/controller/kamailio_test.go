@@ -66,6 +66,9 @@ func TestEndpointURLsMapsTheServicePortAndSkipsUnready(t *testing.T) {
 			{Addresses: []string{"10.0.0.1"}}, // Ready unset counts as ready
 			{Addresses: []string{"10.0.0.3"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(false)}},
 			{Addresses: []string{"10.0.0.4"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true), Terminating: ptr.To(true)}},
+			// Published while not ready (publishNotReadyAddresses): Ready is always true, Serving is the pod's.
+			{Addresses: []string{"10.0.0.5"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true), Serving: ptr.To(false)}},
+			{Addresses: []string{"10.0.0.6"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true), Serving: ptr.To(true)}},
 		},
 	}, {
 		// A slice without the port (mid-update) contributes nothing.
@@ -80,7 +83,7 @@ func TestEndpointURLsMapsTheServicePortAndSkipsUnready(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"http://10.0.0.1:5070/RPC?x=1", "http://10.0.0.2:5070/RPC?x=1"}
+	want := []string{"http://10.0.0.1:5070/RPC?x=1", "http://10.0.0.2:5070/RPC?x=1", "http://10.0.0.6:5070/RPC?x=1"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

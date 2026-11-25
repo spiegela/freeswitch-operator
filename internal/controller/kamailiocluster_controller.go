@@ -267,6 +267,7 @@ func (r *KamailioClusterReconciler) ensureService(ctx context.Context, kc *sipv1
 		}
 		svc.Spec.Selector = want.Spec.Selector
 		svc.Spec.Ports = want.Spec.Ports
+		svc.Spec.PublishNotReadyAddresses = want.Spec.PublishNotReadyAddresses
 		return controllerutil.SetControllerReference(kc, svc, r.Scheme)
 	})
 	return err

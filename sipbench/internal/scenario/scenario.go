@@ -403,7 +403,16 @@ type Action struct {
 	// RecoverOn runs `sofia recover` on the pod that carries the named call, and checks it took over exactly that
 	// pod's calls (two legs each) among the scenario's calls that are up: none of another node's.
 	RecoverOn string `yaml:"recoverOn,omitempty"`
+	// MoveFreeswitchOf moves the pod that carries the named call to a spare edge node, as a lost node's would be:
+	// it cordons the call's node, crashes FreeSWITCH there (no drain, the calls left in the recovery table) and
+	// deletes the pod at once. The action ends once the replacement is up on another node, and fails unless it
+	// holds the same external address. It needs the "spare-node" capability.
+	MoveFreeswitchOf string `yaml:"moveFreeswitchOf,omitempty"`
 }
+
+// SpareNodeCapability is what a run must provide for MoveFreeswitchOf: an edge node the fleet doesn't use, which
+// a moved pod can go to.
+const SpareNodeCapability = "spare-node"
 
 // LiveKitCapability is what a run must provide for expect.livekit: the edge sends calls to lk numbers to LiveKit
 // SIP, which takes them into the room of the bench's stand-in agent (cmd/lkagent), and the runner can ask the agent
@@ -563,6 +572,7 @@ func (a *Action) Kind() string {
 	add(a.Hangup != "", "hangup")
 	add(a.CrashFreeswitchOf != "", "crashFreeswitchOf")
 	add(a.RecoverOn != "", "recoverOn")
+	add(a.MoveFreeswitchOf != "", "moveFreeswitchOf")
 	if len(kinds) != 1 {
 		return ""
 	}
@@ -811,9 +821,10 @@ func (s *Scenario) validateRepeats() error {
 		if b := c.Expect.Backend; b != nil && repeated[b.OtherNodeThan] {
 			return fmt.Errorf("call %q: otherNodeThan names a repeated call", c.ID)
 		}
+
 	}
 	for i, a := range s.Actions {
-		refs := []string{a.AfterAnswered, a.AfterEnded, a.DrainNodeOf, a.Hangup}
+		refs := []string{a.AfterAnswered, a.AfterEnded, a.DrainNodeOf, a.Hangup, a.CrashFreeswitchOf, a.RecoverOn, a.MoveFreeswitchOf}
 		if a.WaitMember != nil {
 			refs = append(refs, a.WaitMember.Of)
 		}
@@ -911,12 +922,12 @@ func (s *Scenario) validateActions(calls map[string]bool) error { //nolint:gocyc
 		if kind == "" {
 			return fmt.Errorf("%s: needs exactly one of drainNodeOf, uncordon, rollFleet, breakConfig, "+
 				"restoreConfig, waitMember, waitFleetCurrent, expectRollStuck, blackoutNodeOf, waitNode, hangup, "+
-				"crashFreeswitchOf, recoverOn", label)
+				"crashFreeswitchOf, recoverOn, moveFreeswitchOf", label)
 		}
 		fleet = fleet || a.OnFleet()
 		for field, call := range map[string]string{
 			"afterAnswered": a.AfterAnswered, "afterEnded": a.AfterEnded, "drainNodeOf": a.DrainNodeOf, "hangup": a.Hangup,
-			"crashFreeswitchOf": a.CrashFreeswitchOf, "recoverOn": a.RecoverOn,
+			"crashFreeswitchOf": a.CrashFreeswitchOf, "recoverOn": a.RecoverOn, "moveFreeswitchOf": a.MoveFreeswitchOf,
 		} {
 			if call != "" && !calls[call] {
 				return fmt.Errorf("%s: %s names no call %q", label, field, call)
@@ -959,6 +970,10 @@ func (s *Scenario) validateActions(calls map[string]bool) error { //nolint:gocyc
 			}
 			if !slices.Contains(s.Requires, BlackoutCapability) {
 				return fmt.Errorf("%s: blackoutNodeOf needs requires: [%s]", label, BlackoutCapability)
+			}
+		case a.MoveFreeswitchOf != "":
+			if !slices.Contains(s.Requires, SpareNodeCapability) {
+				return fmt.Errorf("%s: moveFreeswitchOf needs requires: [%s]", label, SpareNodeCapability)
 			}
 		case a.WaitNode != nil:
 			if !calls[a.WaitNode.Of] {

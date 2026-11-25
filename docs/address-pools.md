@@ -76,7 +76,8 @@ The planner's rules, the same for every provider:
 - A node that needs an address gets, in order: a free or idle address one of its pods used last (`lastClaimedBy`),
   so a StatefulSet pod replaced onto a new node keeps its address; any free address; then an idle one, moved off its
   node. With none left, the pool is `Degraded` and the node's pods wait without an address (unready, when
-  `required`).
+  `required`). A pod is the last claimant of one address only, the one it holds: a pod moved to a node that kept an
+  idle address of its own takes that one, and forgets the one it left.
 - An address the pool bound to a node that has left the cluster is unbound and reused. One bound outside the cluster
   that the pool didn't put there is a `Conflict`, left alone.
 - An address the provider can't report on is an `Error`, and its node keeps it, so a provider outage doesn't make
@@ -109,8 +110,9 @@ their node's own address, as they always have. FreeSWITCH's SIP profile stays on
 Kamailio dispatches to it there, and peers only ever signal through Kamailio.
 
 - **FreeSWITCH** gets a `bind-address` downward-API file (`FS_BIND_ADDRESS_FILE`) in a fleet that draws from a pool;
-  sipbench's config ([`bin/podinfo.sh`](../sipbench/freeswitch/conf/bin/podinfo.sh)) sets `rtp-ip` from it,
-  falling back to `local_ip_v4`, and then advertises the external address for RTP only (`ext-rtp-ip`). `ext-sip-ip`
+  sipbench's config ([`bin/podinfo.sh`](../sipbench/freeswitch/conf/bin/podinfo.sh)) sets `rtp-ip` from it on both
+  profiles (toward the backend too: recovery binds each leg's RTP to the address it had, and only the bind address
+  moves with the pod), falling back to `local_ip_v4`, and then advertises the external address for RTP only (`ext-rtp-ip`). `ext-sip-ip`
   is always `local_ip_v4`, with a pool or without: the external address may reach only the bind address, where SIP
   doesn't listen, or reach the node only through the cloud's translation, and a Contact naming it strands the
   dialog's ACK and BYE or sends them the long way round. FreeSWITCH uses the `ext-` addresses only for peers outside
@@ -124,7 +126,11 @@ Kamailio dispatches to it there, and peers only ever signal through Kamailio.
 - **Kamailio** with a bind address listens on it, advertising the public address, and separately on the pod's own
   address for FreeSWITCH, instead of on `0.0.0.0`, so replies leave from the address the request came to. A new
   request leaves from the side it is going to (`force_send_socket`: toward a node from the pod's address, toward a
-  peer from the bind address); requests in a dialog follow the double Record-Route that leaves.
+  peer from the bind address); requests in a dialog follow the double Record-Route that leaves. On the FreeSWITCH
+  side it advertises its pod's DNS name (`<pod>.<service>.<namespace>.svc.<cluster domain>`, which its headless
+  Service keeps while the pod drains or starts) rather than the node's address: FreeSWITCH's requests in a dialog
+  then reach whichever pod has that name, so a call recovered on another node after Kamailio was lost with its node
+  routes back through Kamailio's replacement. `make check-kamailio-name` checks it.
 - **The address agent** ([`config/components/address-agent`](../config/components/address-agent/kustomization.yaml)), a
   DaemonSet in the manager's image with host networking and `NET_ADMIN`, puts each bind address its node is given on
   the interface that holds the node's own address (a /32 labelled `<interface>:sip`) and reports what its node has on

@@ -167,11 +167,19 @@ check-kamailio-cfg: ## Render the KamailioCluster config template's test cases a
 	  docker run --rm -v "$(KAMAILIO_CFG_DIR):/cfg:ro" $(KAMAILIO_IMAGE) -c -f "/cfg/$$name.cfg" \
 	    -A PUBLIC_ADDR=192.0.2.10 -A PRIVATE_ADDR=127.0.0.1 -A BIND_ADDR=127.0.0.2 >/dev/null || exit 1; \
 	  echo "kamailio -c $$name.cfg with a bind address: ok"; \
+	  docker run --rm -v "$(KAMAILIO_CFG_DIR):/cfg:ro" $(KAMAILIO_IMAGE) -c -f "/cfg/$$name.cfg" \
+	    -A PUBLIC_ADDR=192.0.2.10 -A PRIVATE_ADDR=127.0.0.1 -A BIND_ADDR=127.0.0.2 \
+	    -A PRIVATE_NAME=proxy-kamailio-0.proxy-kamailio.telephony.svc.cluster.local >/dev/null || exit 1; \
+	  echo "kamailio -c $$name.cfg with a bind address and a pod name: ok"; \
 	done
 
 .PHONY: check-kamailio-capture
 check-kamailio-capture: check-kamailio-cfg ## Run Kamailio with spec.capture and check a HEPv3 copy of a request reaches a collector (needs docker)
 	hack/check-kamailio-capture.sh "$(KAMAILIO_CFG_DIR)" "$(KAMAILIO_IMAGE)"
+
+.PHONY: check-kamailio-name
+check-kamailio-name: check-kamailio-cfg ## Run Kamailio with a bind address and its pod's name, and check FreeSWITCH's route back uses the name (needs docker)
+	hack/check-kamailio-name.sh "$(KAMAILIO_CFG_DIR)" "$(KAMAILIO_IMAGE)"
 
 .PHONY: check-kamailio-trust
 check-kamailio-trust: check-kamailio-cfg ## Run Kamailio with spec.trustedPeers and check who gets an answer (needs docker)

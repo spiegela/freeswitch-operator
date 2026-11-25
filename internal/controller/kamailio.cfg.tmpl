@@ -11,6 +11,7 @@
 #   BIND_ADDR      only when the pod's address pool gives it an address of its own on the node (a secondary
 #                  private address, or the public address itself): peers are served there and FreeSWITCH on
 #                  PRIVATE_ADDR, and each request leaves from the side it is going to
+#   PRIVATE_NAME   with BIND_ADDR: the pod's DNS name, advertised on PRIVATE_ADDR in place of the address
 #
 # Dispatcher sets, in priority order:{{range .Sets}} {{.}}{{else}} none{{end}}
 {{- if .TrustedPeers}}
@@ -51,8 +52,15 @@ auto_aliases=no
 # from the address the request came to, and the cloud translates only the pool's.
 listen=udp:BIND_ADDR:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
 listen=tcp:BIND_ADDR:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
+#!ifdef PRIVATE_NAME
+# FreeSWITCH reaches this pod by its name: a call another node recovers after this one is lost routes back
+# through the replacement pod, wherever it runs.
+listen=udp:PRIVATE_ADDR:SIP_PORT advertise PRIVATE_NAME:SIP_PORT
+listen=tcp:PRIVATE_ADDR:SIP_PORT advertise PRIVATE_NAME:SIP_PORT
+#!else
 listen=udp:PRIVATE_ADDR:SIP_PORT
 listen=tcp:PRIVATE_ADDR:SIP_PORT
+#!endif
 #!else
 listen=udp:0.0.0.0:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
 listen=tcp:0.0.0.0:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
