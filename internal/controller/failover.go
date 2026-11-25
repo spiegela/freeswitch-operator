@@ -53,39 +53,16 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 	log := logf.FromContext(ctx)
 	now := r.now()
 
-	nodes := map[string]*corev1.Node{}
-	for i := range pods {
-		name := pods[i].Spec.NodeName
-		if name == "" || nodes[name] != nil {
-			continue
-		}
-		var n corev1.Node
-		if err := r.Get(ctx, types.NamespacedName{Name: name}, &n); err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-			return 0, err
-		}
-		nodes[name] = &n
+	nodes, err := r.podNodes(ctx, pods)
+	if err != nil {
+		return 0, err
 	}
 	in := healthInput{pods: pods, nodes: nodes, cfg: cfg.failover, now: now}
 	if r.SIPProbes != nil {
 		in.sip = r.SIPProbes
 	}
 	verdicts := evaluateHealth(in)
-
-	// The latest failover is done once a new pod of the same name is ready.
-	if last := status.LastFailover; last != nil && last.CompletedAt == nil {
-		for i := range pods {
-			p := &pods[i]
-			if p.Name == last.Pod && string(p.UID) != last.PodUID && memberState(p) == sipv1alpha1.MemberActive {
-				at := metav1.NewTime(now)
-				last.CompletedAt, last.ReplacementNode = &at, p.Spec.NodeName
-				r.event(fsc, corev1.EventTypeNormal, "FailoverCompleted", "Failover",
-					"%s is ready again on node %s, %s after its failover", p.Name, p.Spec.NodeName, now.Sub(last.StartedAt.Time).Round(time.Second))
-			}
-		}
-	}
+	r.completeFailover(fsc, pods, status.LastFailover, now)
 
 	decision := decideFailover(verdicts, cfg.failover.mode, status.LastFailover, now)
 	if t := decision.target; t != nil {
@@ -105,7 +82,56 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 			decision.trigger, t.Name, t.Spec.NodeName, truncate(decision.reason, 512))
 	}
 
-	// Attach each verdict to its member, and say what is being done about it.
+	suspect, failed, recheck := r.attachHealth(fsc, verdicts, decision, status)
+	inProgress := failoverInProgress(status.LastFailover, now)
+	meta.SetStatusCondition(&status.Conditions, membersHealthyCondition(fsc.Generation, suspect, failed, inProgress, status.LastFailover))
+	recordHealth(fleet, verdicts, decision.held, inProgress)
+
+	if len(suspect) > 0 || len(failed) > 0 || inProgress || decision.target != nil {
+		recheck = minPositive(recheck, healthRecheck)
+	}
+	return recheck, nil
+}
+
+// podNodes fetches the nodes the pods run on, by name. A node that is gone is left out.
+func (r *FreeswitchClusterReconciler) podNodes(ctx context.Context, pods []corev1.Pod) (map[string]*corev1.Node, error) {
+	nodes := map[string]*corev1.Node{}
+	for i := range pods {
+		name := pods[i].Spec.NodeName
+		if name == "" || nodes[name] != nil {
+			continue
+		}
+		var n corev1.Node
+		if err := r.Get(ctx, types.NamespacedName{Name: name}, &n); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, err
+		}
+		nodes[name] = &n
+	}
+	return nodes, nil
+}
+
+// completeFailover marks the latest failover done once a new pod of the same name is ready.
+func (r *FreeswitchClusterReconciler) completeFailover(fsc *sipv1alpha1.FreeswitchCluster, pods []corev1.Pod, last *sipv1alpha1.FailoverRecord, now time.Time) {
+	if last == nil || last.CompletedAt != nil {
+		return
+	}
+	for i := range pods {
+		p := &pods[i]
+		if p.Name == last.Pod && string(p.UID) != last.PodUID && memberState(p) == sipv1alpha1.MemberActive {
+			at := metav1.NewTime(now)
+			last.CompletedAt, last.ReplacementNode = &at, p.Spec.NodeName
+			r.event(fsc, corev1.EventTypeNormal, "FailoverCompleted", "Failover",
+				"%s is ready again on node %s, %s after its failover", p.Name, p.Spec.NodeName, now.Sub(last.StartedAt.Time).Round(time.Second))
+		}
+	}
+}
+
+// attachHealth attaches each verdict to its member, says what is being done about it, and records each change of
+// state as an event. It returns the Suspect and Failed members, and the soonest recheck the verdicts ask for.
+func (r *FreeswitchClusterReconciler) attachHealth(fsc *sipv1alpha1.FreeswitchCluster, verdicts []verdict, decision failoverDecision, status *sipv1alpha1.FreeswitchClusterStatus) (suspect, failed []string, recheck time.Duration) {
 	previous := map[string]*sipv1alpha1.MemberHealth{}
 	for _, m := range fsc.Status.Members {
 		previous[m.Pod] = m.Health
@@ -114,8 +140,6 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 	for i := range verdicts {
 		byPod[verdicts[i].pod.Name] = &verdicts[i]
 	}
-	var suspect, failed []string
-	var recheck time.Duration
 	for i := range status.Members {
 		m := &status.Members[i]
 		v := byPod[m.Pod]
@@ -137,21 +161,28 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 		}
 		recheck = minPositive(recheck, v.recheck)
 		if prev := previous[m.Pod]; prev == nil || prev.State != h.State {
-			switch h.State {
-			case sipv1alpha1.HealthSuspect:
-				r.event(fsc, corev1.EventTypeWarning, "MemberSuspect", "HealthCheck", "%s is Suspect: %s", m.Pod, signalList(h.Signals))
-			case sipv1alpha1.HealthFailed:
-				r.event(fsc, corev1.EventTypeWarning, "MemberFailed", "HealthCheck", "%s has Failed: %s. %s", m.Pod, signalList(h.Signals), h.Message)
-			case sipv1alpha1.HealthHealthy:
-				if prev != nil {
-					r.event(fsc, corev1.EventTypeNormal, "MemberHealthy", "HealthCheck", "%s is Healthy again", m.Pod)
-				}
-			}
+			r.healthEvent(fsc, m.Pod, prev, h)
 		}
 	}
+	return suspect, failed, recheck
+}
 
-	inProgress := failoverInProgress(status.LastFailover, now)
-	gen := fsc.Generation
+// healthEvent records a member's change of health state.
+func (r *FreeswitchClusterReconciler) healthEvent(fsc *sipv1alpha1.FreeswitchCluster, pod string, prev *sipv1alpha1.MemberHealth, h sipv1alpha1.MemberHealth) {
+	switch h.State {
+	case sipv1alpha1.HealthSuspect:
+		r.event(fsc, corev1.EventTypeWarning, "MemberSuspect", "HealthCheck", "%s is Suspect: %s", pod, signalList(h.Signals))
+	case sipv1alpha1.HealthFailed:
+		r.event(fsc, corev1.EventTypeWarning, "MemberFailed", "HealthCheck", "%s has Failed: %s. %s", pod, signalList(h.Signals), h.Message)
+	case sipv1alpha1.HealthHealthy:
+		if prev != nil {
+			r.event(fsc, corev1.EventTypeNormal, "MemberHealthy", "HealthCheck", "%s is Healthy again", pod)
+		}
+	}
+}
+
+// membersHealthyCondition sums up the members' health, and a failover still waiting for its replacement.
+func membersHealthyCondition(gen int64, suspect, failed []string, inProgress bool, last *sipv1alpha1.FailoverRecord) metav1.Condition {
 	cond := metav1.Condition{Type: conditionMembersHealthy, ObservedGeneration: gen}
 	switch {
 	case len(failed) > 0:
@@ -162,20 +193,14 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 		cond.Message = "Suspect: " + strings.Join(suspect, ", ")
 	case inProgress:
 		cond.Status, cond.Reason = metav1.ConditionFalse, "FailingOver"
-		cond.Message = "waiting for " + status.LastFailover.Pod + " to be ready again after its failover"
+		cond.Message = "waiting for " + last.Pod + " to be ready again after its failover"
 	default:
 		cond.Status, cond.Reason, cond.Message = metav1.ConditionTrue, "AllHealthy", "no member is Suspect or Failed"
 	}
 	if inProgress && cond.Reason != "FailingOver" {
-		cond.Message += "; waiting for " + status.LastFailover.Pod + " to be ready again after its failover"
+		cond.Message += "; waiting for " + last.Pod + " to be ready again after its failover"
 	}
-	meta.SetStatusCondition(&status.Conditions, cond)
-	recordHealth(fleet, verdicts, decision.held, inProgress)
-
-	if len(suspect) > 0 || len(failed) > 0 || inProgress || decision.target != nil {
-		recheck = minPositive(recheck, healthRecheck)
-	}
-	return recheck, nil
+	return cond
 }
 
 // failOver fences the pod's node, then deletes the pod at once (no drain: its calls are lost anyway). The

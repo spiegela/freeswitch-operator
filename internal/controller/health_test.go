@@ -65,7 +65,7 @@ func healthyNodes(names ...string) map[string]*corev1.Node {
 }
 
 func states(vs []verdict) string {
-	var parts []string
+	parts := make([]string, 0, len(vs))
 	for _, v := range vs {
 		s := v.pod.Name + "=" + string(v.health.State)
 		for _, sig := range v.health.Signals {
@@ -354,7 +354,7 @@ func sipResponder(t *testing.T, resp func(req string) string) (string, int32) {
 }
 
 func headerOf(req, name string) string {
-	for _, l := range strings.Split(req, "\r\n") {
+	for l := range strings.SplitSeq(req, "\r\n") {
 		if k, v, ok := strings.Cut(l, ":"); ok && strings.EqualFold(strings.TrimSpace(k), name) {
 			return strings.TrimSpace(v)
 		}

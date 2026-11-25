@@ -122,12 +122,8 @@ func fsPod(ns, name, node, rev string) *corev1.Pod {
 	}
 }
 
-func setPodReady(ctx context.Context, p *corev1.Pod, ready bool) {
-	status := corev1.ConditionFalse
-	if ready {
-		status = corev1.ConditionTrue
-	}
-	p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: status, LastTransitionTime: metav1.Now()}}
+func setPodReady(ctx context.Context, p *corev1.Pod) {
+	p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.Now()}}
 	Expect(k8sClient.Status().Update(ctx, p)).To(Succeed())
 }
 
@@ -419,7 +415,7 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		pods := []*corev1.Pod{fsPod(ns, "edge-0", "", "edge-old"), fsPod(ns, "edge-1", "", "edge-old"), fsPod(ns, "edge-2", "", "edge-new")}
 		for _, p := range pods {
 			Expect(k8sClient.Create(ctx, p)).To(Succeed())
-			setPodReady(ctx, p, true)
+			setPodReady(ctx, p)
 		}
 
 		reconcileOnce(r, ns)
@@ -450,7 +446,7 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		By("the replacement comes back on the new revision and ready; the next outdated pod goes")
 		p := fsPod(ns, "edge-1", "", "edge-new")
 		Expect(k8sClient.Create(ctx, p)).To(Succeed())
-		setPodReady(ctx, p, true)
+		setPodReady(ctx, p)
 		reconcileOnce(r, ns)
 		Expect(gone("edge-0")).To(BeTrue())
 	})
@@ -477,7 +473,7 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		p0, p1 := fsPod(ns, "edge-0", nodeA.Name, "r1"), fsPod(ns, "edge-1", nodeB.Name, "r1")
 		for _, p := range []*corev1.Pod{p0, p1} {
 			Expect(k8sClient.Create(ctx, p)).To(Succeed())
-			setPodReady(ctx, p, true)
+			setPodReady(ctx, p)
 		}
 		fleet := func() *sipv1alpha1.FreeswitchCluster {
 			var fsc sipv1alpha1.FreeswitchCluster
@@ -541,7 +537,7 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(fleet().Status.LastFailover.CompletedAt).To(BeNil(), "not before it is ready")
 		cond = meta.FindStatusCondition(fleet().Status.Conditions, conditionMembersHealthy)
 		Expect(cond.Reason).To(Equal("FailingOver"))
-		setPodReady(ctx, p1, true)
+		setPodReady(ctx, p1)
 		reconcileOnce(r, ns)
 		last = fleet().Status.LastFailover
 		Expect(last.CompletedAt).NotTo(BeNil())
@@ -699,7 +695,7 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(k8sClient.Status().Update(ctx, &sts)).To(Succeed())
 		for _, p := range []*corev1.Pod{fsPod(ns, "edge-0", "", "edge-new"), fsPod(ns, "edge-1", "", "edge-old")} {
 			Expect(k8sClient.Create(ctx, p)).To(Succeed())
-			setPodReady(ctx, p, true)
+			setPodReady(ctx, p)
 		}
 		gone := func(name string) bool {
 			var p corev1.Pod

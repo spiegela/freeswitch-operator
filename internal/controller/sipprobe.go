@@ -30,6 +30,9 @@ const sipProbeTick = time.Second
 // sipProbeConcurrency bounds the probes in flight at once.
 const sipProbeConcurrency = 64
 
+// transportTCP is the network SIPOptions dials for a TCP dispatcher transport.
+const transportTCP = "tcp"
+
 // ProbeFunc sends one SIP OPTIONS to host:port over transport (udp or tcp) and reports whether any SIP response
 // came back within timeout.
 type ProbeFunc func(ctx context.Context, host string, port int32, transport string, timeout time.Duration) error
@@ -179,9 +182,7 @@ func (p *SIPProber) tick(ctx context.Context, sem chan struct{}, wg *sync.WaitGr
 			p.release(due)
 			return
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-sem }()
 			start := p.now()
 			err := probe(ctx, t.host, t.port, t.transport, t.cfg.probeTimeout)
@@ -191,7 +192,7 @@ func (p *SIPProber) tick(ctx context.Context, sem chan struct{}, wg *sync.WaitGr
 			}
 			recordSIPProbe(t.fleet, err)
 			p.record(t, start, err)
-		}()
+		})
 	}
 }
 
@@ -243,7 +244,7 @@ func (p *SIPProber) record(t probeTarget, at time.Time, err error) {
 func SIPOptions(ctx context.Context, host string, port int32, transport string, timeout time.Duration) error {
 	network := "udp"
 	if transport == string(sipv1alpha1.DispatcherTransportTCP) {
-		network = "tcp"
+		network = transportTCP
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -260,7 +261,7 @@ func SIPOptions(ctx context.Context, host string, port int32, transport string, 
 	callID := randomToken(12) + "@freeswitch-operator"
 	req := optionsRequest(conn.LocalAddr(), host, port, network, callID)
 
-	if network == "tcp" {
+	if network == transportTCP {
 		_ = conn.SetDeadline(deadline)
 		if _, err := conn.Write(req); err != nil {
 			return err
@@ -302,7 +303,7 @@ func SIPOptions(ctx context.Context, host string, port int32, transport string, 
 func optionsRequest(local net.Addr, host string, port int32, network, callID string) []byte {
 	target := net.JoinHostPort(host, strconv.Itoa(int(port)))
 	uri := "sip:" + target
-	if network == "tcp" {
+	if network == transportTCP {
 		uri += ";transport=tcp"
 	}
 	var b strings.Builder

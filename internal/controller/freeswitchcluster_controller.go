@@ -404,9 +404,9 @@ func templateHash(t *corev1.PodTemplateSpec) (string, error) {
 // syncExternalAddresses writes each pod's external address annotation: its node's ExternalIP, or the address the
 // fleet's SIPAddressPool has bound to its node, with the bind address when it has one. FreeSWITCH and Kamailio pods
 // both read them from their downward-API volume.
-func syncExternalAddresses(ctx context.Context, c client.Client, source sipv1alpha1.ExternalAddressSource, poolName string, pods []corev1.Pod) error {
+func syncExternalAddresses(ctx context.Context, c client.Client, src sipv1alpha1.ExternalAddressSource, poolName string, pods []corev1.Pod) error {
 	var pool sipv1alpha1.SIPAddressPool
-	if source == sipv1alpha1.ExternalAddressAddressPool {
+	if src == sipv1alpha1.ExternalAddressAddressPool {
 		// A missing pool binds nothing, so every pod goes without.
 		if err := c.Get(ctx, types.NamespacedName{Name: poolName}, &pool); client.IgnoreNotFound(err) != nil {
 			return err
@@ -418,7 +418,7 @@ func syncExternalAddresses(ctx context.Context, c client.Client, source sipv1alp
 			continue
 		}
 		want, wantBind := "", ""
-		switch source {
+		switch src {
 		case sipv1alpha1.ExternalAddressNodeExternalIP:
 			var node corev1.Node
 			if err := c.Get(ctx, types.NamespacedName{Name: p.Spec.NodeName}, &node); err != nil {
