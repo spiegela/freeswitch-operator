@@ -117,6 +117,14 @@ func (n recordingNotifier) SetInactive(_ context.Context, _ int32, uri string) e
 	return nil
 }
 
+func (n recordingNotifier) Admit(_ context.Context, addrs []string) error {
+	*n.calls = append(*n.calls, n.url+" admit "+strings.Join(addrs, ","))
+	if n.fail {
+		return errors.New("down")
+	}
+	return nil
+}
+
 func (n recordingNotifier) Reload(context.Context, map[int32][]string) error {
 	*n.calls = append(*n.calls, n.url+" reload")
 	if n.fail {

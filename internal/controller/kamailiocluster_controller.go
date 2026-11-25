@@ -30,6 +30,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -67,6 +68,7 @@ type KamailioClusterReconciler struct {
 // +kubebuilder:rbac:groups=sip.instruments.com,resources=kamailioclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=sip.instruments.com,resources=kamailioclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile moves a proxy fleet toward its spec: the JSON-RPC token, the rendered config and the objects around
 // the pods, one planned replacement at a time, the combined dispatcher list and its live reload, and the status.
@@ -142,6 +144,9 @@ func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	slices.SortFunc(pods, func(a, b corev1.Pod) int { return strings.Compare(a.Name, b.Name) })
 
 	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.ensureRouteNames(ctx, &kc, pods); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.pruneConfigSnapshots(ctx, &kc, configName, sts, pods); err != nil {
@@ -267,8 +272,45 @@ func (r *KamailioClusterReconciler) ensureService(ctx context.Context, kc *sipv1
 		}
 		svc.Spec.Selector = want.Spec.Selector
 		svc.Spec.Ports = want.Spec.Ports
-		svc.Spec.PublishNotReadyAddresses = want.Spec.PublishNotReadyAddresses
+		// An earlier build published not-ready pods here, for their names; those are the route Service's now.
+		svc.Spec.PublishNotReadyAddresses = false
 		return controllerutil.SetControllerReference(kc, svc, r.Scheme)
+	})
+	return err
+}
+
+// ensureRouteNames keeps the route Service and the EndpointSlice that names each pod in it.
+func (r *KamailioClusterReconciler) ensureRouteNames(ctx context.Context, kc *sipv1alpha1.KamailioCluster, pods []corev1.Pod) error {
+	want := buildKamailioRouteService(kc)
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: want.Name, Namespace: want.Namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		svc.Labels = want.Labels
+		if svc.CreationTimestamp.IsZero() {
+			svc.Spec.ClusterIP = corev1.ClusterIPNone
+		}
+		svc.Spec.Selector = nil
+		svc.Spec.Ports = want.Spec.Ports
+		return controllerutil.SetControllerReference(kc, svc, r.Scheme)
+	}); err != nil {
+		return err
+	}
+
+	slice := &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: kamailioRouteName(kc), Namespace: kc.Namespace}}
+	var prev *discoveryv1.EndpointSlice
+	if err := r.Get(ctx, client.ObjectKeyFromObject(slice), slice); err == nil {
+		prev = slice.DeepCopy()
+	} else if !apierrors.IsNotFound(err) {
+		return err
+	}
+	wantSlice := buildKamailioRouteSlice(kc, pods, prev)
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, slice, func() error {
+		slice.Labels = wantSlice.Labels
+		if slice.CreationTimestamp.IsZero() {
+			slice.AddressType = wantSlice.AddressType
+		}
+		slice.Ports = wantSlice.Ports
+		slice.Endpoints = wantSlice.Endpoints
+		return controllerutil.SetControllerReference(kc, slice, r.Scheme)
 	})
 	return err
 }
@@ -529,6 +571,14 @@ func (r *KamailioClusterReconciler) syncDispatcher(ctx context.Context, kc *sipv
 	if notifier == nil || status.DispatcherReloadedHash == status.DispatcherHash {
 		return 0, nil
 	}
+	var uris []string
+	for _, id := range slices.Sorted(maps.Keys(want)) {
+		uris = append(uris, want[id]...)
+	}
+	// Best effort: the reload below covers these too, only later.
+	if err := notifier.Admit(ctx, dispatcherHosts(uris)); err != nil {
+		log.Error(err, "could not admit the fleets' addresses to Kamailio ahead of the reload")
+	}
 	delay := time.Duration(cfg.reloadDelaySecs) * time.Second
 	if status.DispatcherUpdatedAt != nil {
 		if wait := delay - r.now().Sub(status.DispatcherUpdatedAt.Time); wait > 0 {
@@ -649,6 +699,7 @@ func (r *KamailioClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&sipv1alpha1.KamailioCluster{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
+		Owns(&discoveryv1.EndpointSlice{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Secret{}).
 		Owns(&policyv1.PodDisruptionBudget{}).

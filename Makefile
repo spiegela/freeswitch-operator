@@ -169,8 +169,12 @@ check-kamailio-cfg: ## Render the KamailioCluster config template's test cases a
 	  echo "kamailio -c $$name.cfg with a bind address: ok"; \
 	  docker run --rm -v "$(KAMAILIO_CFG_DIR):/cfg:ro" $(KAMAILIO_IMAGE) -c -f "/cfg/$$name.cfg" \
 	    -A PUBLIC_ADDR=192.0.2.10 -A PRIVATE_ADDR=127.0.0.1 -A BIND_ADDR=127.0.0.2 \
-	    -A PRIVATE_NAME=proxy-kamailio-0.proxy-kamailio.telephony.svc.cluster.local >/dev/null || exit 1; \
+	    -A 'PRIVATE_NAME="proxy-kamailio-0.proxy-kamailio-route.default.svc.cluster.local"' >/dev/null || exit 1; \
 	  echo "kamailio -c $$name.cfg with a bind address and a pod name: ok"; \
+	  docker run --rm -v "$(KAMAILIO_CFG_DIR):/cfg:ro" $(KAMAILIO_IMAGE) -c -f "/cfg/$$name.cfg" \
+	    -A PUBLIC_ADDR=192.0.2.10 -A PRIVATE_ADDR=127.0.0.1 \
+	    -A 'PRIVATE_NAME="proxy-kamailio-0.proxy-kamailio-route.default.svc.cluster.local"' >/dev/null || exit 1; \
+	  echo "kamailio -c $$name.cfg with a pod name and no bind address: ok"; \
 	done
 
 .PHONY: check-kamailio-capture

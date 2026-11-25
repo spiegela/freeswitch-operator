@@ -85,9 +85,10 @@ The planner's rules, the same for every provider:
 - A pod waits for its address before it starts. FreeSWITCH and Kamailio both read it once, at start, and a pool binds
   it only once the pod is on its node, which takes seconds on AWS; started sooner, they would advertise the node's
   private address for their whole life. Kamailio's entrypoint already waits when the address is `required`; a
-  FreeSWITCH fleet that draws from a pool and requires its address gets an init container (`wait-for-address`, in
-  the FreeSWITCH image) that waits for the downward-API file, which the kubelet fills in within seconds of the
-  annotation (checked on kind). Fleets on other sources get no such container, so their pod template is unchanged.
+  FreeSWITCH fleet that requires its address (from a pool or from its node) gets an init container
+  (`wait-for-address`, in the FreeSWITCH image) that waits for the downward-API file, which the kubelet fills in
+  within seconds of the annotation (checked on kind). A fleet with `required: false` or no external address gets no
+  such container.
 - The pool rereads its provider 5 s after binding or unbinding, and every 5 minutes otherwise, to see changes made
   outside the operator. Deleting a pool leaves its addresses where they are, since they may be carrying calls.
 
@@ -112,7 +113,7 @@ Kamailio dispatches to it there, and peers only ever signal through Kamailio.
 - **FreeSWITCH** gets a `bind-address` downward-API file (`FS_BIND_ADDRESS_FILE`) in a fleet that draws from a pool;
   sipbench's config ([`bin/podinfo.sh`](../sipbench/freeswitch/conf/bin/podinfo.sh)) sets `rtp-ip` from it on both
   profiles (toward the backend too: recovery binds each leg's RTP to the address it had, and only the bind address
-  moves with the pod), falling back to `local_ip_v4`, and then advertises the external address for RTP only (`ext-rtp-ip`). `ext-sip-ip`
+  can move with the pod: a pool's address itself on MetalLB, the same secondary address on AWS within a subnet), falling back to `local_ip_v4`, and then advertises the external address for RTP only (`ext-rtp-ip`). `ext-sip-ip`
   is always `local_ip_v4`, with a pool or without: the external address may reach only the bind address, where SIP
   doesn't listen, or reach the node only through the cloud's translation, and a Contact naming it strands the
   dialog's ACK and BYE or sends them the long way round. FreeSWITCH uses the `ext-` addresses only for peers outside
@@ -127,10 +128,11 @@ Kamailio dispatches to it there, and peers only ever signal through Kamailio.
   address for FreeSWITCH, instead of on `0.0.0.0`, so replies leave from the address the request came to. A new
   request leaves from the side it is going to (`force_send_socket`: toward a node from the pod's address, toward a
   peer from the bind address); requests in a dialog follow the double Record-Route that leaves. On the FreeSWITCH
-  side it advertises its pod's DNS name (`<pod>.<service>.<namespace>.svc.<cluster domain>`, which its headless
-  Service keeps while the pod drains or starts) rather than the node's address: FreeSWITCH's requests in a dialog
-  then reach whichever pod has that name, so a call recovered on another node after Kamailio was lost with its node
-  routes back through Kamailio's replacement. `make check-kamailio-name` checks it.
+  side it advertises its pod's route name (`<pod>.<name>-kamailio-route.<namespace>.svc.<cluster domain>`, which
+  the operator keeps at the pod's last address while it restarts) rather than the node's address: FreeSWITCH's
+  requests in a dialog then reach whichever pod has that name, so a call recovered on another node after Kamailio
+  was replaced elsewhere routes back through the replacement ([Kamailio](kamailio.md#routing)).
+  `make check-kamailio-name` checks it.
 - **The address agent** ([`config/components/address-agent`](../config/components/address-agent/kustomization.yaml)), a
   DaemonSet in the manager's image with host networking and `NET_ADMIN`, puts each bind address its node is given on
   the interface that holds the node's own address (a /32 labelled `<interface>:sip`) and reports what its node has on
@@ -177,9 +179,13 @@ Identity.
 cluster endpoint, as on a one-node cluster). Binding assigns the node's primary interface a new secondary private
 address, records it on the Elastic IP as the tag `sip.instruments.com/private-address`, and associates the Elastic
 IP with it; a failed association takes the address back. Unbinding disassociates, then unassigns only the address
-the tag names (never a primary address), and removes the tag. The address agent then puts the address on the node's
-interface. This needs `ec2:AssignPrivateIpAddresses`, `ec2:UnassignPrivateIpAddresses`, and `ec2:CreateTags` and
-`ec2:DeleteTags` on Elastic IPs for that one tag key. Don't use it where the CNI hands out the primary interface's
+the tag names (never a primary address), records it as `sip.instruments.com/last-private-address`, and removes the
+first tag. Binding again asks for that last address first (never taking it from an interface that has it), so a pod
+that moves keeps its bind address, and the calls it recovers keep their media, when the new node's interface is in
+the same subnet; in another subnet (another availability zone), or once something else holds the address, it gets
+a new one. The address agent then puts the address on the node's interface. This needs
+`ec2:AssignPrivateIpAddresses`, `ec2:UnassignPrivateIpAddresses`, and `ec2:CreateTags` and `ec2:DeleteTags` on
+Elastic IPs for those two tag keys. Don't use it where the CNI hands out the primary interface's
 secondary addresses to pods (the VPC CNI does): it could hand out this one, fill the interface's address limit, or
 release it as surplus, which disassociates the Elastic IP. So the pool refuses to bind a new address to a node
 running the VPC CNI's `aws-node` pod (the node waits, and the pool's Ready condition says why); an address already

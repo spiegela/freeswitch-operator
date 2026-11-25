@@ -75,11 +75,28 @@ func (f *fakeEC2) tag() string {
 }
 
 func (f *fakeEC2) AssignPrivateIpAddresses(_ context.Context, in *ec2.AssignPrivateIpAddressesInput, _ ...func(*ec2.Options)) (*ec2.AssignPrivateIpAddressesOutput, error) {
-	f.calls = append(f.calls, "AssignPrivateIpAddresses "+awssdk.ToString(in.NetworkInterfaceId))
+	f.calls = append(f.calls, "AssignPrivateIpAddresses "+awssdk.ToString(in.NetworkInterfaceId)+" "+strings.Join(in.PrivateIpAddresses, ","))
 	for instance, eni := range f.enis {
 		if awssdk.ToString(eni.NetworkInterfaceId) == awssdk.ToString(in.NetworkInterfaceId) {
-			f.nextIP++
-			ip := "10.0.9." + strconv.Itoa(f.nextIP)
+			var ip string
+			if len(in.PrivateIpAddresses) == 1 {
+				// A subnet here is a /24: the address must be in the interface's, and on no interface yet.
+				ip = in.PrivateIpAddresses[0]
+				primary := awssdk.ToString(eni.PrivateIpAddress)
+				if ip[:strings.LastIndex(ip, ".")] != primary[:strings.LastIndex(primary, ".")] {
+					return nil, &smithy.GenericAPIError{Code: "InvalidParameterValue", Message: ip + " is not in the subnet"}
+				}
+				for _, other := range f.enis {
+					for _, pa := range other.PrivateIpAddresses {
+						if awssdk.ToString(pa.PrivateIpAddress) == ip {
+							return nil, &smithy.GenericAPIError{Code: "PrivateIpAddressInUse", Message: ip + " is in use"}
+						}
+					}
+				}
+			} else {
+				f.nextIP++
+				ip = "10.0.9." + strconv.Itoa(f.nextIP)
+			}
 			eni.PrivateIpAddresses = append(eni.PrivateIpAddresses, ec2types.NetworkInterfacePrivateIpAddress{PrivateIpAddress: awssdk.String(ip), Primary: awssdk.Bool(false)})
 			f.enis[instance] = eni
 			return &ec2.AssignPrivateIpAddressesOutput{AssignedPrivateIpAddresses: []ec2types.AssignedPrivateIpAddress{{PrivateIpAddress: awssdk.String(ip)}}}, nil
@@ -105,7 +122,10 @@ func (f *fakeEC2) UnassignPrivateIpAddresses(_ context.Context, in *ec2.Unassign
 func (f *fakeEC2) CreateTags(_ context.Context, in *ec2.CreateTagsInput, _ ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
 	f.calls = append(f.calls, "CreateTags "+in.Resources[0])
 	a := f.addrs[in.Resources[0]]
-	a.Tags = append(a.Tags, in.Tags...)
+	for _, t := range in.Tags {
+		a.Tags = slices.DeleteFunc(a.Tags, func(have ec2types.Tag) bool { return awssdk.ToString(have.Key) == awssdk.ToString(t.Key) })
+		a.Tags = append(a.Tags, t)
+	}
 	return &ec2.CreateTagsOutput{}, nil
 }
 
@@ -332,6 +352,51 @@ func TestSecondaryBindObserveUnbind(t *testing.T) {
 	}
 	if err := p.Unbind(ctx, obs[0]); err != nil {
 		t.Errorf("unbinding again: %v", err)
+	}
+}
+
+// An Elastic IP that moves takes its secondary private address with it when the next node's interface is in the
+// same subnet, so calls recovered there can bind their media to the address they had. Across subnets, or once
+// something else holds the address, it gets a new one.
+func TestSecondaryBindKeepsThePrivateAddress(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeEC2()
+	f.addEIP("eipalloc-1", "203.0.113.1")
+	f.addInstance("i-a", "eni-a", "10.0.9.200")
+	f.addInstance("i-b", "eni-b", "10.0.9.201")
+	f.addInstance("i-c", "eni-c", "10.0.8.10")
+	p := New(f, secondaryPool("eipalloc-1"))
+	move := func(to string) string {
+		t.Helper()
+		obs, _ := p.Observe(ctx)
+		if err := p.Unbind(ctx, obs[0]); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Bind(ctx, obs[0], to); err != nil {
+			t.Fatal(err)
+		}
+		obs, _ = p.Observe(ctx)
+		return obs[0].BindIP
+	}
+	first := move("i-a")
+	if got := move("i-b"); got != first {
+		t.Errorf("moved within the subnet: %s, want %s again", got, first)
+	}
+	if got := move("i-c"); got == first {
+		t.Errorf("moved to another subnet, and kept %s", got)
+	}
+
+	// The address it had last is held by something else now (here, another node's own address).
+	obs, _ := p.Observe(ctx)
+	if err := p.Unbind(ctx, obs[0]); err != nil {
+		t.Fatal(err)
+	}
+	f.addrs["eipalloc-1"].Tags = []ec2types.Tag{{Key: awssdk.String(LastPrivateAddressTag), Value: awssdk.String("10.0.9.201")}}
+	if err := p.Bind(ctx, obs[0], "i-a"); err != nil {
+		t.Fatalf("its last address in use elsewhere: %v", err)
+	}
+	if obs, _ = p.Observe(ctx); obs[0].BindIP == "10.0.9.201" || obs[0].BindIP == "" {
+		t.Errorf("bound %q", obs[0].BindIP)
 	}
 }
 

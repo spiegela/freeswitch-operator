@@ -42,6 +42,13 @@ type EC2 interface {
 // unbinding takes back only an address the operator assigned, never one something else put on the interface.
 const PrivateAddressTag = "sip.instruments.com/private-address"
 
+// LastPrivateAddressTag is set on an Elastic IP to the secondary private address unbinding took back, and binding
+// asks for that address again. Pods bind their media to it (a pool's bind address), and FreeSWITCH binds a recovered
+// call's media to the address the call had: with the same address on the next node, calls recovered there keep
+// their media. AWS gives it only when the next node's interface is in the same subnet and nothing has taken the
+// address since; otherwise the Elastic IP gets a new one.
+const LastPrivateAddressTag = "sip.instruments.com/last-private-address"
+
 // Provider binds one pool's Elastic IPs.
 type Provider struct {
 	api       EC2
@@ -157,9 +164,10 @@ func (p *Provider) Observe(ctx context.Context) ([]addresspool.Address, error) {
 // second interface, which EKS nodes with the VPC CNI usually do. It refuses to replace an Elastic IP the instance
 // already holds that isn't the pool's, and (AllowReassociation false) to take the address from anything else.
 //
-// With privateAddress Secondary it instead assigns the interface a new secondary private address, records it on the
-// Elastic IP (PrivateAddressTag) and associates the Elastic IP with it, leaving any Elastic IP on the node's own
-// address alone. A failed association takes the secondary address back.
+// With privateAddress Secondary it instead assigns the interface a secondary private address (the one the Elastic
+// IP had last, LastPrivateAddressTag, when AWS gives it; else a new one), records it on the Elastic IP
+// (PrivateAddressTag) and associates the Elastic IP with it, leaving any Elastic IP on the node's own address
+// alone. A failed association takes the secondary address back.
 func (p *Provider) Bind(ctx context.Context, a addresspool.Address, instanceID string) error {
 	if p.secondary {
 		return p.bindSecondary(ctx, a, instanceID)
@@ -231,17 +239,17 @@ func (p *Provider) bindSecondary(ctx context.Context, a addresspool.Address, ins
 		return err
 	}
 	eniID := awssdk.ToString(eni.NetworkInterfaceId)
-	assigned, err := p.api.AssignPrivateIpAddresses(ctx, &ec2.AssignPrivateIpAddressesInput{
-		NetworkInterfaceId:             eni.NetworkInterfaceId,
-		SecondaryPrivateIpAddressCount: awssdk.Int32(1),
-	})
+	out, err := p.api.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{AllocationIds: []string{a.ID}})
+	if err != nil {
+		return err
+	}
+	if len(out.Addresses) != 1 {
+		return fmt.Errorf("no Elastic IP with allocation ID %s", a.ID)
+	}
+	ip, err := p.assignSecondary(ctx, eniID, tagValue(out.Addresses[0].Tags, LastPrivateAddressTag))
 	if err != nil {
 		return fmt.Errorf("assigning a secondary private address to %s: %w", eniID, err)
 	}
-	if len(assigned.AssignedPrivateIpAddresses) != 1 {
-		return fmt.Errorf("assigning a secondary private address to %s: AWS assigned %d", eniID, len(assigned.AssignedPrivateIpAddresses))
-	}
-	ip := awssdk.ToString(assigned.AssignedPrivateIpAddresses[0].PrivateIpAddress)
 	tagged := false
 	fail := func(step string, err error) error {
 		err = fmt.Errorf("%s: %w", step, err)
@@ -288,12 +296,7 @@ func (p *Provider) unbindSecondary(ctx context.Context, a addresspool.Address) e
 	if err := p.disassociate(ctx, awssdk.ToString(cur.AssociationId)); err != nil {
 		return err
 	}
-	ip := ""
-	for _, t := range cur.Tags {
-		if awssdk.ToString(t.Key) == PrivateAddressTag {
-			ip = awssdk.ToString(t.Value)
-		}
-	}
+	ip := tagValue(cur.Tags, PrivateAddressTag)
 	if ip == "" {
 		return nil
 	}
@@ -316,7 +319,53 @@ func (p *Provider) unbindSecondary(ctx context.Context, a addresspool.Address) e
 			}
 		}
 	}
+	// Remembered before the tag that lets unbinding take it back goes: binding asks for it again. Best effort: without
+	// it (a role that may only set the older tag, say) binding just takes a new address, as it always did.
+	_, _ = p.api.CreateTags(ctx, &ec2.CreateTagsInput{
+		Resources: []string{a.ID},
+		Tags:      []ec2types.Tag{{Key: awssdk.String(LastPrivateAddressTag), Value: awssdk.String(ip)}},
+	})
 	return p.untag(ctx, a.ID)
+}
+
+// assignSecondary assigns the interface one secondary private address and returns it: last, when it is set and AWS
+// gives it (the interface is in its subnet, and nothing holds it), else any free one.
+func (p *Provider) assignSecondary(ctx context.Context, eniID, last string) (string, error) {
+	assign := func(in *ec2.AssignPrivateIpAddressesInput) (string, error) {
+		in.NetworkInterfaceId = awssdk.String(eniID)
+		out, err := p.api.AssignPrivateIpAddresses(ctx, in)
+		if err != nil {
+			return "", err
+		}
+		if len(out.AssignedPrivateIpAddresses) != 1 {
+			return "", fmt.Errorf("AWS assigned %d addresses", len(out.AssignedPrivateIpAddresses))
+		}
+		return awssdk.ToString(out.AssignedPrivateIpAddresses[0].PrivateIpAddress), nil
+	}
+	var lastErr error
+	if last != "" {
+		// Never AllowReassignment: an address something else has taken since (the VPC CNI, for a pod) stays theirs.
+		ip, err := assign(&ec2.AssignPrivateIpAddressesInput{PrivateIpAddresses: []string{last}})
+		if err == nil {
+			return ip, nil
+		}
+		lastErr = err
+	}
+	ip, err := assign(&ec2.AssignPrivateIpAddressesInput{SecondaryPrivateIpAddressCount: awssdk.Int32(1)})
+	if err != nil && lastErr != nil {
+		err = fmt.Errorf("%w (and asking for %s again: %w)", err, last, lastErr)
+	}
+	return ip, err
+}
+
+// tagValue is the value of the tag with key, or "".
+func tagValue(tags []ec2types.Tag, key string) string {
+	for _, t := range tags {
+		if awssdk.ToString(t.Key) == key {
+			return awssdk.ToString(t.Value)
+		}
+	}
+	return ""
 }
 
 func (p *Provider) unassign(ctx context.Context, eniID, ip string) error {

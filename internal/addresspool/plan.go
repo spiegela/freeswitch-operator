@@ -107,19 +107,29 @@ func Decide(in Input) Plan {
 // forgetOlderClaims keeps each pod the last claimant of one address only, the one bound to its node: a pod that
 // moved to a node with an address of its own would otherwise still be the last to have used its old one, and, when
 // it next needs an address, could be given that instead of the one it holds now (a free address comes before an
-// idle one).
+// idle one). An address in Error is still held: its node keeps it while the provider can't report on it. But its
+// ClaimedBy is carried over from before the provider failed, so it holds a pod only while the pod is still on that
+// node: one that has moved on holds what its new node has.
 func (pl *planner) forgetOlderClaims() {
+	held := func(st sipv1alpha1.PoolAddress) bool {
+		return st.State == sipv1alpha1.PoolAddressBound || st.State == sipv1alpha1.PoolAddressError
+	}
 	holds := map[sipv1alpha1.AddressClaim]bool{}
 	for _, st := range pl.status {
-		if st.State == sipv1alpha1.PoolAddressBound {
-			for _, c := range st.ClaimedBy {
+		for _, c := range st.ClaimedBy {
+			switch st.State {
+			case sipv1alpha1.PoolAddressBound:
 				holds[c] = true
+			case sipv1alpha1.PoolAddressError:
+				if slices.Contains(pl.claims[st.Node], c) {
+					holds[c] = true
+				}
 			}
 		}
 	}
 	for i := range pl.status {
 		st := &pl.status[i]
-		if st.State == sipv1alpha1.PoolAddressBound || len(st.LastClaimedBy) == 0 {
+		if held(*st) || len(st.LastClaimedBy) == 0 {
 			continue
 		}
 		last := slices.DeleteFunc(slices.Clone(st.LastClaimedBy), func(c sipv1alpha1.AddressClaim) bool { return holds[c] })

@@ -11,7 +11,9 @@
 #   BIND_ADDR      only when the pod's address pool gives it an address of its own on the node (a secondary
 #                  private address, or the public address itself): peers are served there and FreeSWITCH on
 #                  PRIVATE_ADDR, and each request leaves from the side it is going to
-#   PRIVATE_NAME   with BIND_ADDR: the pod's DNS name, advertised on PRIVATE_ADDR in place of the address
+#   PRIVATE_NAME   the pod's route name (<pod>.<name>-kamailio-route...), as a quoted string (a label may be a
+#                  config keyword, such as "default"): always one of Kamailio's own names, and with BIND_ADDR
+#                  advertised on PRIVATE_ADDR in place of the address
 #
 # Dispatcher sets, in priority order:{{range .Sets}} {{.}}{{else}} none{{end}}
 {{- if .TrustedPeers}}
@@ -46,6 +48,11 @@ msg_recv_max_size=65535
 # The same over TCP: the read buffer one message must fit in (the default overruns well short of that).
 tcp_rd_buf_size=65536
 auto_aliases=no
+#!ifdef PRIVATE_NAME
+# Ours whether or not a listener advertises it: a dialog set up while it was advertised routes through it for as
+# long as the call lasts, across a restart that came up without the bind address (a single listener).
+alias=PRIVATE_NAME:SIP_PORT
+#!endif
 
 #!ifdef BIND_ADDR
 # Peers on the pool's address, FreeSWITCH on the pod's own. Listening on both (not 0.0.0.0) makes replies leave
@@ -54,7 +61,8 @@ listen=udp:BIND_ADDR:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
 listen=tcp:BIND_ADDR:SIP_PORT advertise PUBLIC_ADDR:SIP_PORT
 #!ifdef PRIVATE_NAME
 # FreeSWITCH reaches this pod by its name: a call another node recovers after this one is lost routes back
-# through the replacement pod, wherever it runs.
+# through the replacement pod, wherever it runs. The operator keeps the name at the pod's last address while it
+# restarts, so in-dialog requests retransmit to it rather than fail on a name that doesn't resolve.
 listen=udp:PRIVATE_ADDR:SIP_PORT advertise PRIVATE_NAME:SIP_PORT
 listen=tcp:PRIVATE_ADDR:SIP_PORT advertise PRIVATE_NAME:SIP_PORT
 #!else
@@ -83,6 +91,7 @@ loadmodule "siputils.so"
 loadmodule "xlog.so"
 loadmodule "sanity.so"
 loadmodule "dispatcher.so"
+loadmodule "htable.so"
 loadmodule "xhttp.so"
 loadmodule "jsonrpcs.so"
 loadmodule "xhttp_prom.so"
@@ -107,6 +116,11 @@ modparam("dispatcher", "ds_probing_threshold", 2)
 modparam("dispatcher", "ds_inactive_threshold", 2)
 modparam("dispatcher", "ds_ping_reply_codes", "class=2;code=403;code=404;code=405")
 modparam("dispatcher", "xavp_dst", "_dsdst_")
+
+# FreeSWITCH node addresses the operator admits over JSON-RPC (htable.seti) as soon as it writes a list naming them:
+# Kamailio sees the list itself only once the kubelet has updated the mounted file and the operator has reloaded it,
+# which takes longer than a SIP transaction lasts. Entries go after 15 minutes, by when the list has them.
+modparam("htable", "htable", "admitted=>size=8;autoexpire=900;")
 
 # A failed check answers the request and returns false, rather than ending the script there, so it can be counted.
 modparam("sanity", "autodrop", 0)
@@ -157,8 +171,9 @@ request_route {
 {{- if .TrustedPeers}}
 	# Only trusted peers (spec.trustedPeers) and our own nodes get anything from us, an error included: a request
 	# from anywhere else is dropped before it is parsed further, so scanners learn nothing. In-dialog requests are
-	# checked too, so a forged Route set can't make Kamailio relay for a stranger.
-	if (!ds_is_from_list() && !route(TRUSTED_PEER)) {
+	# checked too, so a forged Route set can't make Kamailio relay for a stranger. Our own nodes are the dispatcher
+	# list's, and those the operator has admitted ahead of it (a node a pod has just moved to, with calls).
+	if (!ds_is_from_list() && $sht(admitted=>$si) == $null && !route(TRUSTED_PEER)) {
 		prom_counter_inc("rejected_requests_total", "1", "untrusted_source");
 		xlog("L_INFO", "dropped $rm from untrusted $si:$sp\n");
 		exit;

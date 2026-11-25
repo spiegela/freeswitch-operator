@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
@@ -68,11 +69,50 @@ func TestBuildKamailioStatefulSet(t *testing.T) {
 	for _, e := range c.Env {
 		env[e.Name] = e
 	}
-	if env["KAMAILIO_SERVICE"].Value != sts.Spec.ServiceName || env["POD_NAMESPACE"].ValueFrom == nil {
-		t.Fatalf("the pod's DNS name needs its Service (%q) and namespace: %+v %+v", sts.Spec.ServiceName, env["KAMAILIO_SERVICE"], env["POD_NAMESPACE"])
+	route := buildKamailioRouteService(testKamailioCluster())
+	if env["KAMAILIO_SERVICE"].Value != route.Name || route.Name == sts.Spec.ServiceName || env["POD_NAMESPACE"].ValueFrom == nil {
+		t.Fatalf("the pod's route name needs the route Service (%q) and namespace: %+v %+v", route.Name, env["KAMAILIO_SERVICE"], env["POD_NAMESPACE"])
 	}
-	if svc := buildKamailioService(testKamailioCluster()); svc.Name != sts.Spec.ServiceName || !svc.Spec.PublishNotReadyAddresses {
-		t.Fatalf("the governing Service %q publishes not-ready pods: %+v", svc.Name, svc.Spec)
+	if route.Spec.Selector != nil || route.Spec.ClusterIP != corev1.ClusterIPNone {
+		t.Fatalf("the route Service is headless with no selector (the operator writes its EndpointSlice): %+v", route.Spec)
+	}
+	if svc := buildKamailioService(testKamailioCluster()); svc.Name != sts.Spec.ServiceName || svc.Spec.PublishNotReadyAddresses {
+		t.Fatalf("the governing Service %q publishes only ready pods: %+v", svc.Name, svc.Spec)
+	}
+}
+
+// Each pod's route name follows its address, and keeps the last one while the pod has none: a Kamailio restarting
+// in place is found where it was, not missing from DNS.
+func TestKamailioRouteSlice(t *testing.T) {
+	kc := testKamailioCluster()
+	pod := func(name, ip string) corev1.Pod {
+		return corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name}, Status: corev1.PodStatus{PodIP: ip}}
+	}
+	addrs := func(s *discoveryv1.EndpointSlice) map[string]string {
+		out := map[string]string{}
+		for _, ep := range s.Endpoints {
+			if ep.Conditions.Ready == nil || !*ep.Conditions.Ready {
+				t.Errorf("%s is not ready, and DNS would leave it out", *ep.Hostname)
+			}
+			out[*ep.Hostname] = strings.Join(ep.Addresses, ",")
+		}
+		return out
+	}
+	s := buildKamailioRouteSlice(kc, []corev1.Pod{pod("proxy-kamailio-0", "10.0.0.5"), pod("proxy-kamailio-1", "10.0.0.6")}, nil)
+	if s.Labels[discoveryv1.LabelServiceName] != kamailioRouteName(kc) || s.Labels[discoveryv1.LabelManagedBy] != kamailioRouteManager || s.AddressType != discoveryv1.AddressTypeIPv4 {
+		t.Fatalf("slice: %+v", s.ObjectMeta)
+	}
+	if got := addrs(s); got["proxy-kamailio-0"] != "10.0.0.5" || got["proxy-kamailio-1"] != "10.0.0.6" {
+		t.Fatalf("running: %v", got)
+	}
+	// proxy-kamailio-0 is being replaced (gone, or not running yet); proxy-kamailio-1 moved; a stray pod past
+	// the replicas gets no name.
+	s = buildKamailioRouteSlice(kc, []corev1.Pod{pod("proxy-kamailio-0", ""), pod("proxy-kamailio-1", "10.0.0.7"), pod("proxy-kamailio-2", "10.0.0.8")}, s)
+	if got := addrs(s); len(got) != 2 || got["proxy-kamailio-0"] != "10.0.0.5" || got["proxy-kamailio-1"] != "10.0.0.7" {
+		t.Fatalf("restarting: %v", got)
+	}
+	if got := addrs(buildKamailioRouteSlice(kc, nil, s)); got["proxy-kamailio-0"] != "10.0.0.5" {
+		t.Fatalf("no pods at all: %v", got)
 	}
 }
 

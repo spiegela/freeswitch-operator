@@ -117,7 +117,7 @@ exec /bin/sh "$(dirname "$0")/` + startupScriptName + `"
 const addressWaitScript = `f="${FS_EXTERNAL_ADDRESS_FILE}"
 n=0
 until [ -s "$f" ]; do
-  [ $((n % 30)) -eq 0 ] && echo "freeswitch-operator: waiting for this node's address from the pool"
+  [ $((n % 30)) -eq 0 ] && echo "freeswitch-operator: waiting for this pod's external address"
   n=$((n + 1))
   sleep 1
 done

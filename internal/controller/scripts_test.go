@@ -210,7 +210,7 @@ func TestAddressWaitScript(t *testing.T) {
 		_ = cmd.Process.Kill()
 		t.Fatal("still waiting after the address appeared")
 	}
-	if !strings.Contains(out.String(), "waiting for this node's address") || !strings.Contains(out.String(), "external address 203.0.113.10") {
+	if !strings.Contains(out.String(), "waiting for this pod's external address") || !strings.Contains(out.String(), "external address 203.0.113.10") {
 		t.Errorf("output %q", out.String())
 	}
 }

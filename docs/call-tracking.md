@@ -108,9 +108,15 @@ read from the environment, so the same ConfigMaps serve compose (tracking off) a
    The alias keeps dial strings (`sofia/trunks/…`) and commands (`sofia status profile trunks`) as they were. The
    exporter reports a profile named `<alias>-<anything>` under its alias, so the `profile` label on the
    `freeswitch_sofia_*` series stays `trunks` and `backend` ([metrics](metrics.md)). Both profiles need it: a call
-   is recovered only with both legs. It needs an address per node: a fleet with `externalAddress.source: None`
-   (every node plain `trunks`) still recovers everyone's calls, so don't run `sofia recover` there. A pool's address
-   must be `required`, so FreeSWITCH never starts before it has it and names its profiles plainly.
+   is recovered only with both legs. It needs an address per node, known when FreeSWITCH starts, since the name is
+   fixed then: a fleet with `externalAddress.source: None` (every node plain `trunks`) still recovers everyone's
+   calls, so don't run `sofia recover` there. The address must be `required` (the default), on a pool or from the
+   node (`NodeExternalIP`): the operator then holds FreeSWITCH back until it has the address (the `wait-for-address`
+   init container), and FreeSWITCH never names its profiles plainly. With `required: false` a pod can start before
+   its address and keep plain names until it restarts.
+
+   A copy of this configuration (platform-gitops' voice edge keeps one) must ship `bin/profile-name.sh` with the rest
+   of `conf/bin`: without it the profile names come out empty and FreeSWITCH never turns ready.
 
 Only the core db moves. Each SIP profile's own tables, such as registrations it holds, stay in the pod's SQLite.
 Recovery doesn't need them.
@@ -200,9 +206,16 @@ the backend's directly (a far end that keeps sending to the Contact of the dialo
 sipbench's runner had to put the refreshed Contact back before hanging up). Recovery binds each leg's RTP to the
 address the leg had, so both legs' RTP must be on an address that moves with the pod: sipbench binds the backend's to
 the pool's bind address as well as the carriers', and a leg bound to the node's own address fails on the new node
-("Bind Error", then `INCOMPATIBLE_DESTINATION`). FreeSWITCH's own requests follow the route it saved, through Kamailio. Where Kamailio has a
-bind address, that route names Kamailio's pod rather than its node ([Kamailio](kamailio.md#routing)), so it still
-reaches Kamailio when Kamailio was lost with the node and replaced elsewhere, as on a one-node cluster. sipbench's
+("Bind Error", then `INCOMPATIBLE_DESTINATION`). The bind address moves with the pod on MetalLB (it is the pool's
+address itself) and on an AWS pool with `privateAddress: Secondary` when the new node's interface is in the same
+subnet: the pool asks for the same secondary private address again ([address pools](address-pools.md)). Across
+subnets (another availability zone), or with `privateAddress: Primary` (no bind address: RTP is on the node's own),
+a call recovered on another node loses its media. FreeSWITCH's own requests follow the route it saved, through
+Kamailio. Where Kamailio has a bind address, that route names Kamailio's pod rather than its node
+([Kamailio](kamailio.md#routing)), so it still reaches Kamailio when Kamailio was replaced elsewhere. A FreeSWITCH
+on a node new to the fleet sends from that node's address, which Kamailio's `trustedPeers` check would drop until
+its dispatcher list names the node (`reloadDelaySeconds` later): the operator admits the address over JSON-RPC as
+soon as it writes the list. sipbench's
 `moved-call-in-dialog` checks a move on kind: it cordons a call's node, crashes FreeSWITCH there, deletes the pod at
 once, and recovers on the replacement, which comes up on the spare node with the moved pod's address. Then every
 call's backend sends a REFER and every caller hangs up, and each of those requests must reach the node the call is

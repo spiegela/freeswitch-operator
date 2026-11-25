@@ -25,7 +25,7 @@
       "Action": ["ec2:CreateTags", "ec2:DeleteTags"],
       "Resource": "arn:aws:ec2:*:*:elastic-ip/*",
       "Condition": {
-        "ForAllValues:StringEquals": {"aws:TagKeys": ["sip.instruments.com/private-address"]},
+        "ForAllValues:StringEquals": {"aws:TagKeys": ["sip.instruments.com/private-address", "sip.instruments.com/last-private-address"]},
         "Null": {"aws:TagKeys": "false"}
       }
     }

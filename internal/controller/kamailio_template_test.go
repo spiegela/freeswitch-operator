@@ -92,7 +92,7 @@ func TestKamailioConfigTrustedPeers(t *testing.T) {
 	for _, want := range []string{
 		`loadmodule "ipops.so"`,
 		"# Trusted peers: carrier bench",
-		`if (!ds_is_from_list() && !route(TRUSTED_PEER)) {`,
+		`if (!ds_is_from_list() && $sht(admitted=>$si) == $null && !route(TRUSTED_PEER)) {`,
 		`prom_counter_inc("rejected_requests_total", "1", "untrusted_source");`,
 		`if (is_in_subnet("$si", "198.51.100.0/30,203.0.113.8/29")) {`,
 		`if (is_in_subnet("$si", "10.244.0.0/16,2001:db8::/32")) {`,

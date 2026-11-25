@@ -5,9 +5,11 @@
     <!-- Admission: the bench lowers this at run time with `fsctl max_sessions`. -->
     <param name="max-sessions" value="1000"/>
     <param name="sessions-per-second" value="100"/>
-    <!-- Must match the node security group on a cluster. Small here: the bench runs a few calls at a time. -->
+    <!-- Must match the node security group on a cluster. Small here: the bench runs a few calls at a time. With a
+         pool's bind address both legs of a call take a port pair (RTP and RTCP) on that one address, four ports a
+         call, so this holds about 100 calls a node. -->
     <param name="rtp-start-port" value="16384"/>
-    <param name="rtp-end-port" value="16584"/>
+    <param name="rtp-end-port" value="16784"/>
     <param name="rtp-enable-zrtp" value="false"/>
     <param name="dump-cores" value="no"/>
     <!-- vars.xml. Empty leaves the core db in SQLite. With a DSN, FreeSWITCH won't start until the database answers. -->

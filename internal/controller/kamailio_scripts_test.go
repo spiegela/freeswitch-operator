@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -91,8 +92,9 @@ func TestKamailioDrainScriptStops(t *testing.T) {
 }
 
 // runKamailioStart runs start.sh with the pod's address files and resolv.conf in a temporary directory and a fake
-// kamailio that prints its arguments. An empty bind writes no bind address file.
-func runKamailioStart(t *testing.T, bind, search string) string {
+// kamailio that prints its arguments. An empty bind writes no bind address file; drop leaves those variables out
+// of the pod's environment.
+func runKamailioStart(t *testing.T, bind, search string, drop ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	ext, bindFile, resolv := filepath.Join(dir, "external-address"), filepath.Join(dir, "bind-address"), filepath.Join(dir, "resolv.conf")
@@ -118,8 +120,12 @@ func runKamailioStart(t *testing.T, bind, search string) string {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("/bin/sh", script)
-	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "POD_IP=10.0.0.5", "HOST_IP=10.0.0.5", "POD_NAME=proxy-kamailio-0",
-		"POD_NAMESPACE=telephony", "KAMAILIO_SERVICE=proxy-kamailio", "KAMAILIO_RPC_PORT=5070"}
+	for _, e := range []string{"PATH=" + bin + ":/usr/bin:/bin", "POD_IP=10.0.0.5", "HOST_IP=10.0.0.5", "POD_NAME=proxy-kamailio-0",
+		"POD_NAMESPACE=telephony", "KAMAILIO_SERVICE=proxy-kamailio-route", "KAMAILIO_RPC_PORT=5070"} {
+		if !slices.Contains(drop, strings.SplitN(e, "=", 2)[0]) {
+			cmd.Env = append(cmd.Env, e)
+		}
+	}
 	b, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v: %s", err, b)
@@ -131,14 +137,19 @@ func TestKamailioStartScriptNamesThePodToFreeswitch(t *testing.T) {
 	const search = "telephony.svc.cluster.local svc.cluster.local cluster.local"
 	out := runKamailioStart(t, "10.0.0.6", search)
 	for _, want := range []string{"-A PUBLIC_ADDR=203.0.113.10", "-A PRIVATE_ADDR=10.0.0.5", "-A BIND_ADDR=10.0.0.6",
-		"-A PRIVATE_NAME=proxy-kamailio-0.proxy-kamailio.telephony.svc.cluster.local"} {
+		`-A PRIVATE_NAME="proxy-kamailio-0.proxy-kamailio-route.telephony.svc.cluster.local"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("with a bind address: no %q in\n%s", want, out)
 		}
 	}
-	// One listener for both sides: the name would be advertised to peers too, so none.
-	if out := runKamailioStart(t, "", search); strings.Contains(out, "PRIVATE_NAME") || strings.Contains(out, "BIND_ADDR") {
+	// One listener for both sides: the config doesn't advertise the name there, but still knows it as its own.
+	if out := runKamailioStart(t, "", search); !strings.Contains(out, `-A PRIVATE_NAME="proxy-kamailio-0.proxy-kamailio-route.telephony.svc.cluster.local"`) || strings.Contains(out, "BIND_ADDR") {
 		t.Errorf("without a bind address:\n%s", out)
+	}
+	// A pod from before these variables, running the new script after a restart (the StatefulSet rolls OnDelete,
+	// and the scripts' ConfigMap updates in place): it starts, with the address.
+	if out := runKamailioStart(t, "10.0.0.6", search, "POD_NAMESPACE", "KAMAILIO_SERVICE"); strings.Contains(out, "PRIVATE_NAME") || !strings.Contains(out, "-A BIND_ADDR=10.0.0.6") {
+		t.Errorf("without POD_NAMESPACE and KAMAILIO_SERVICE:\n%s", out)
 	}
 	// A cluster domain we can't find: the address, as before.
 	if out := runKamailioStart(t, "10.0.0.6", "example.internal"); strings.Contains(out, "PRIVATE_NAME") || !strings.Contains(out, "-A BIND_ADDR=10.0.0.6") {

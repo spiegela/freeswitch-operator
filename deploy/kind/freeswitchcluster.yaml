@@ -34,7 +34,7 @@ spec:
   rtp:
     # Must match switch.conf.xml.
     portRangeStart: 16384
-    portRangeEnd: 16584
+    portRangeEnd: 16784
   externalAddress:
     # An address MetalLB announces on kind's Docker network (hack/kind.sh makes the pool): FreeSWITCH binds RTP to
     # it and advertises it (bin/podinfo.sh). SIP stays on the node's own address,

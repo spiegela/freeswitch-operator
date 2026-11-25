@@ -1,11 +1,14 @@
 package controller
 
 import (
+	"fmt"
+	"net/netip"
 	"slices"
 	"strconv"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -83,6 +86,11 @@ func resolveKamailio(kc *sipv1alpha1.KamailioCluster) kamailioSettings {
 // Object names. The pods' objects carry a -kamailio suffix so a KamailioCluster and a FreeswitchCluster can share a
 // name without their children colliding.
 func kamailioName(kc *sipv1alpha1.KamailioCluster) string { return kc.Name + "-kamailio" }
+
+// kamailioRouteName is the Service under which the operator keeps a DNS name for each Kamailio pod, the one it
+// advertises to FreeSWITCH (PRIVATE_NAME): <pod>.<this>.<namespace>.svc.<cluster domain>.
+func kamailioRouteName(kc *sipv1alpha1.KamailioCluster) string { return kc.Name + "-kamailio-route" }
+
 func kamailioScriptsName(kc *sipv1alpha1.KamailioCluster) string {
 	return kc.Name + "-kamailio-scripts"
 }
@@ -130,10 +138,7 @@ func buildKamailioService(kc *sipv1alpha1.KamailioCluster) *corev1.Service {
 		ObjectMeta: metav1.ObjectMeta{Name: kamailioName(kc), Namespace: kc.Namespace, Labels: kamailioLabels(kc)},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: corev1.ClusterIPNone,
-			// Each pod's DNS name (FreeSWITCH's route back through Kamailio) lasts while the pod drains, and is
-			// there as soon as a replacement has its address, not only once it is ready.
-			PublishNotReadyAddresses: true,
-			Selector:                 kamailioSelectorLabels(kc),
+			Selector:  kamailioSelectorLabels(kc),
 			Ports: []corev1.ServicePort{
 				{Name: portSIPUDP, Protocol: corev1.ProtocolUDP, Port: cfg.sipPort, TargetPort: intstr.FromInt32(cfg.sipPort)},
 				{Name: portSIPTCP, Protocol: corev1.ProtocolTCP, Port: cfg.sipPort, TargetPort: intstr.FromInt32(cfg.sipPort)},
@@ -142,6 +147,100 @@ func buildKamailioService(kc *sipv1alpha1.KamailioCluster) *corev1.Service {
 			},
 		},
 	}
+}
+
+// buildKamailioRouteService is the headless Service, with no selector, that holds the pods' route names: the
+// operator writes its EndpointSlice itself (buildKamailioRouteSlice).
+func buildKamailioRouteService(kc *sipv1alpha1.KamailioCluster) *corev1.Service {
+	cfg := resolveKamailio(kc)
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: kamailioRouteName(kc), Namespace: kc.Namespace, Labels: kamailioLabels(kc)},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: corev1.ClusterIPNone,
+			Ports: []corev1.ServicePort{
+				{Name: portSIPUDP, Protocol: corev1.ProtocolUDP, Port: cfg.sipPort, TargetPort: intstr.FromInt32(cfg.sipPort)},
+				{Name: portSIPTCP, Protocol: corev1.ProtocolTCP, Port: cfg.sipPort, TargetPort: intstr.FromInt32(cfg.sipPort)},
+			},
+		},
+	}
+}
+
+// kamailioRouteManager marks the route EndpointSlice as the operator's, so Kubernetes' own controllers leave it be.
+const kamailioRouteManager = "freeswitch-operator"
+
+// buildKamailioRouteSlice names each of the fleet's pods, <pod>.<route Service>, at the address it runs on. Unlike
+// the names a StatefulSet's own Service gives, these outlast the pod: while a pod has no address (deleted, or a
+// replacement not running yet) its name keeps the address it had in prev. So FreeSWITCH, whose in-dialog requests
+// go to the name, still finds a Kamailio restarting in place where it was, and retransmits until it answers,
+// rather than failing at once on a name that doesn't resolve; and finds a replacement on another node as soon as
+// that has its address. A pod beyond the fleet's replicas loses its name. The slice holds one address family: the
+// one prev has, else the first pod's.
+func buildKamailioRouteSlice(kc *sipv1alpha1.KamailioCluster, pods []corev1.Pod, prev *discoveryv1.EndpointSlice) *discoveryv1.EndpointSlice {
+	cfg := resolveKamailio(kc)
+	family := discoveryv1.AddressType("")
+	if prev != nil {
+		family = prev.AddressType
+	}
+	familyOf := func(ip string) discoveryv1.AddressType {
+		a, err := netip.ParseAddr(ip)
+		switch {
+		case err != nil:
+			return ""
+		case a.Is4():
+			return discoveryv1.AddressTypeIPv4
+		default:
+			return discoveryv1.AddressTypeIPv6
+		}
+	}
+	current := map[string]string{}
+	for _, p := range pods {
+		if f := familyOf(p.Status.PodIP); f != "" {
+			if family == "" {
+				family = f
+			}
+			if f == family {
+				current[p.Name] = p.Status.PodIP
+			}
+		}
+	}
+	if family == "" {
+		family = discoveryv1.AddressTypeIPv4
+	}
+	held := map[string][]string{}
+	if prev != nil {
+		for _, ep := range prev.Endpoints {
+			if ep.Hostname != nil {
+				held[*ep.Hostname] = ep.Addresses
+			}
+		}
+	}
+	labels := kamailioLabels(kc)
+	labels[discoveryv1.LabelServiceName] = kamailioRouteName(kc)
+	labels[discoveryv1.LabelManagedBy] = kamailioRouteManager
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta:  metav1.ObjectMeta{Name: kamailioRouteName(kc), Namespace: kc.Namespace, Labels: labels},
+		AddressType: family,
+		Ports: []discoveryv1.EndpointPort{
+			{Name: ptr.To(portSIPUDP), Protocol: ptr.To(corev1.ProtocolUDP), Port: ptr.To(cfg.sipPort)},
+			{Name: ptr.To(portSIPTCP), Protocol: ptr.To(corev1.ProtocolTCP), Port: ptr.To(cfg.sipPort)},
+		},
+	}
+	for i := range cfg.replicas {
+		name := fmt.Sprintf("%s-%d", kamailioName(kc), i)
+		addrs := held[name]
+		if ip, ok := current[name]; ok {
+			addrs = []string{ip}
+		}
+		if len(addrs) == 0 {
+			continue
+		}
+		slice.Endpoints = append(slice.Endpoints, discoveryv1.Endpoint{
+			Addresses:  addrs,
+			Hostname:   ptr.To(name),
+			Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)},
+		})
+	}
+	return slice
 }
 
 func buildKamailioPDB(kc *sipv1alpha1.KamailioCluster) *policyv1.PodDisruptionBudget {
@@ -166,8 +265,8 @@ func buildKamailioStatefulSet(kc *sipv1alpha1.KamailioCluster, configName, confi
 	env := slices.Concat([]corev1.EnvVar{
 		{Name: "POD_NAME", ValueFrom: field("metadata.name")},
 		{Name: "POD_NAMESPACE", ValueFrom: field("metadata.namespace")},
-		// The governing Service: with it the pod's name in DNS is <pod>.<service>.<namespace>.svc.<cluster domain>.
-		{Name: "KAMAILIO_SERVICE", Value: kamailioName(kc)},
+		// The Service holding the pod's route name: <pod>.<service>.<namespace>.svc.<cluster domain>.
+		{Name: "KAMAILIO_SERVICE", Value: kamailioRouteName(kc)},
 		{Name: "NODE_NAME", ValueFrom: field("spec.nodeName")},
 		{Name: "HOST_IP", ValueFrom: field("status.hostIP")},
 		{Name: "POD_IP", ValueFrom: field("status.podIP")},
