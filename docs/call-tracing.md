@@ -59,8 +59,9 @@ the spans' services.
   side by side under the caller's INVITE, and the leg FreeSWITCH bridges sits under the hop that reached it. A
   branch that never answered ends when the next one started. CANCELs go under the INVITE they cancel; BYEs and
   other requests in the dialog under the call.
-- **The call span** (`call`) ends when the call does (a BYE answered, or the caller's INVITE refused or
-  cancelled). It carries `call.outcome` (answered, refused, cancelled, no_answer), `call.answer_ms`,
+- **The call span** (`call`) starts a microsecond before the call's first message, so trace lists (Grafana's
+  Jaeger search) name the trace and give its duration from it rather than from the INVITE starting with it. It ends
+  when the call does (a BYE answered, or the caller's INVITE refused or cancelled). It carries `call.outcome` (answered, refused, cancelled, no_answer), `call.answer_ms`,
   `call.talk_ms`, `call.agent_join_ms` (until an `AGENT` participant joined), `call.hangup` (caller or callee),
   `sip.from.user` and `sip.to.user`.
 - **When spans go out:** each transaction's span about two seconds after its final response (so a call's setup is

@@ -324,7 +324,7 @@ func checkLiveKitAndRoot(t *testing.T, b *bench, m map[string]Span) {
 	if ag := m["livekit/agent participant"]; len(ag.Events) != 1 || ag.Events[0].Name != "track published" {
 		t.Errorf("agent participant events: %+v", ag.Events)
 	}
-	if root.Parent != (SpanID{}) || !root.Start.Equal(b.at(0)) || !root.End.Equal(b.at(80000)) || root.Error ||
+	if root.Parent != (SpanID{}) || !root.Start.Equal(b.at(0).Add(-rootStartLead)) || !root.End.Equal(b.at(80000)) || root.Error ||
 		attr(root, "call.outcome") != "answered" || attr(root, "call.hangup") != "caller" ||
 		attr(root, "call.answer_ms") != int64(6008) || attr(root, "call.agent_join_ms") != int64(5500) ||
 		attr(root, "call.legs") != 2 || attr(root, "sip.to.user") != "+15550100" {
