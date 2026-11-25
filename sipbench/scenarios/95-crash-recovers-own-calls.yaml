@@ -1,0 +1,75 @@
+name: crash-recovers-own-calls
+area: fleet
+long: true
+description: >
+  FreeSWITCH crashes mid-call on one edge node and recovers that node's calls, and only those. Four long calls go
+  through the fleet (round robin, so most land on other nodes than call a's). Ten seconds in, the runner crashes
+  FreeSWITCH on call a's node (fsctl crash: no drain, the calls left in the shared recovery table); the kubelet
+  restarts it on the same node, with the same address and so the same profile names (trunks-<address>,
+  backend-<address>). The runner then runs `sofia recover` there, which must take exactly the legs of the calls on
+  that node: one profile per address keeps it off every other node's calls, which it used to take over and break.
+  Every call must still be up at the end, with audio both ways: the other nodes' without a pause, the recovered
+  ones after a gap of the restart's length. Needs call tracking (TRACK_CALLS, CORE_DB_DSN), as on kind. Each run
+  crashes a pod, and the kubelet backs off restarting a container that keeps failing (10 s, then 20 s, then 40 s,
+  until it has run for ten minutes): a fourth run within ten minutes that lands on the same pod waits too long.
+requires: [mock, fleet]
+timeoutMs: 240000
+backend:
+  routes:
+    throughout:
+      steps:
+        - answer: {}
+        - tone: {hz: 1000, ms: 120000}
+calls:
+  - id: a
+    to: throughout
+    steps:
+      - tone: {hz: 600, ms: 120000}
+    maxDurationMs: 130000
+    expect: &survives
+      status: 200
+      tonesHeard: [1000]
+      # A recovered call is silent from the crash until FreeSWITCH is back and has re-invited both ends: about 10 s
+      # on kind for a container's first restart, 20 s for its second (the kubelet's crash-loop backoff, which a run
+      # soon after another that crashed the same pod meets). The other nodes' calls have no gap at all, but which
+      # calls share a's node varies. A call whose audio never came back would show a gap of 40 s, to its hangup.
+      maxAudioGapMs: 35000
+      endedBy: local
+      backend:
+        answered: true
+        tonesHeard: [600]
+        maxAudioGapMs: 35000
+        endedBy: remote
+  - id: b
+    to: throughout
+    startMs: 500
+    steps:
+      - tone: {hz: 600, ms: 120000}
+    maxDurationMs: 130000
+    expect: *survives
+  - id: c
+    to: throughout
+    startMs: 1000
+    steps:
+      - tone: {hz: 600, ms: 120000}
+    maxDurationMs: 130000
+    expect: *survives
+  - id: d
+    to: throughout
+    startMs: 1500
+    steps:
+      - tone: {hz: 600, ms: 120000}
+    maxDurationMs: 130000
+    expect: *survives
+actions:
+  - afterAnswered: d
+    afterMs: 10000
+    crashFreeswitchOf: a
+  - recoverOn: a
+  # Long enough after recovery for audio both ways to show, well inside the media timeout (60 s).
+  - afterMs: 20000
+    hangup: a
+  - hangup: b
+  - hangup: c
+  - hangup: d
+  - waitFleetCurrent: {timeoutMs: 120000}

@@ -408,7 +408,9 @@ A minimal SBC, deliberately small enough to read in one sitting:
 - **Profiles.** `trunks` on 5060 faces far ends (and is where a SIP proxy such as Kamailio dispatches on a
   cluster). `backend` on 5080 faces the backend. RFC 2833 on both (payload type 101). Codecs PCMU and PCMA.
   `sip-options-respond-503-on-busy` makes OPTIONS answer 503 when the node is paused or full, so a dispatcher
-  probe takes it out of rotation.
+  probe takes it out of rotation. On a cluster both run under names of the node's external address
+  (`trunks-203-0-113-10`, [`bin/profile-name.sh`](freeswitch/conf/bin/profile-name.sh)), with the plain names as
+  aliases, so `sofia recover` takes only that address's calls ([call tracking](../docs/call-tracking.md)).
 - **Dialplan.** `trunks` context: bridge `sofia/backend/<user>@$${backend_host}`, carrying X- headers. A called
   number `lk<number>` is bridged as `<number>` to `$${livekit_host}` instead: LiveKit SIP, where an agent answers
   (the backend when `LIVEKIT_HOST` is unset).

@@ -230,3 +230,98 @@ func gaugeValue(t *testing.T, c prometheus.Collector, name string) float64 {
 	t.Fatalf("no %s", name)
 	return 0
 }
+
+// sofia xmlstatus on an edge whose profiles run under per-address names (sipbench/freeswitch/conf/bin/profile-name.sh),
+// as FreeSWITCH 1.10.10 gave it on the kind bench: aliases are <alias> elements. Plus a domain alias, which is not a
+// prefix of its profile's name and so leaves its label alone.
+const perAddressXML = `<?xml version="1.0" encoding="ISO-8859-1"?>
+<profiles>
+<alias>
+<name>backend</name>
+<type>alias</type>
+<data>backend-172-18-255-200</data>
+<state>ALIASED</state>
+</alias>
+<alias>
+<name>trunks</name>
+<type>alias</type>
+<data>trunks-172-18-255-200</data>
+<state>ALIASED</state>
+</alias>
+<alias>
+<name>edge.example.com</name>
+<type>alias</type>
+<data>trunks-172-18-255-200</data>
+<state>ALIASED</state>
+</alias>
+<profile>
+<name>trunks-172-18-255-200</name>
+<type>profile</type>
+<data>sip:mod_sofia@172.18.0.7:5060</data>
+<state>RUNNING (0)</state>
+</profile>
+<profile>
+<name>backend-172-18-255-200</name>
+<type>profile</type>
+<data>sip:mod_sofia@172.18.0.7:5080</data>
+<state>RUNNING (0)</state>
+</profile>
+<profile>
+<name>inside</name>
+<type>profile</type>
+<data>sip:mod_sofia@10.0.0.1:5070</data>
+<state>RUNNING (0)</state>
+</profile>
+<profile>
+<name>trunks2</name>
+<type>profile</type>
+<data>sip:mod_sofia@10.0.0.1:5090</data>
+<state>DOWN</state>
+</profile>
+</profiles>
+`
+
+func TestParseProfilesLabelsPerAddressProfiles(t *testing.T) {
+	profiles, err := parseProfiles(perAddressXML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, p := range profiles {
+		got[p.Name] = p.Label
+	}
+	want := map[string]string{
+		"trunks-172-18-255-200":  "trunks",
+		"backend-172-18-255-200": "backend",
+		"inside":                 "inside",
+		"trunks2":                "trunks2", // starts with "trunks", but no alias names it
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("labels = %v, want %v", got, want)
+	}
+}
+
+// The series carry the plain names, while the per-profile commands use the names the profiles run under.
+func TestCollectorLabelsPerAddressProfilesByAlias(t *testing.T) {
+	addr := fakeFreeSWITCH(t, "ClueCon", map[string]string{
+		"sofia xmlstatus": perAddressXML,
+		"sofia xmlstatus profile trunks-172-18-255-200":  trunksXML,
+		"sofia xmlstatus profile backend-172-18-255-200": backendXML,
+	})
+	c := &Collector{Address: addr, Password: "ClueCon", Timeout: time.Second, Log: quietLog()}
+	expected := `
+# HELP freeswitch_sofia_profile_up 1 when the SIP profile is RUNNING, 0 when it is listed in another state.
+# TYPE freeswitch_sofia_profile_up gauge
+freeswitch_sofia_profile_up{profile="backend"} 1
+freeswitch_sofia_profile_up{profile="inside"} 1
+freeswitch_sofia_profile_up{profile="trunks"} 1
+freeswitch_sofia_profile_up{profile="trunks2"} 0
+`
+	if err := testutil.CollectAndCompare(c, strings.NewReader(expected), "freeswitch_sofia_profile_up"); err != nil {
+		t.Error(err)
+	}
+	// trunks and backend each answered their own command; inside's failed, so it has no calls series.
+	if n := testutil.CollectAndCount(c, "freeswitch_sofia_calls_total"); n != 4 {
+		t.Errorf("freeswitch_sofia_calls_total series = %d, want 4 (trunks and backend, in and out)", n)
+	}
+}

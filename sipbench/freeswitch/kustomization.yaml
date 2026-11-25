@@ -33,3 +33,4 @@ configMapGenerator:
     files:
       - conf/bin/env.sh
       - conf/bin/podinfo.sh
+      - conf/bin/profile-name.sh

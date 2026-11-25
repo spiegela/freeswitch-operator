@@ -396,6 +396,13 @@ type Action struct {
 	WaitNode *WaitNode `yaml:"waitNode,omitempty"`
 	// Hangup ends the named call from the runner's side.
 	Hangup string `yaml:"hangup,omitempty"`
+	// CrashFreeswitchOf crashes FreeSWITCH in the pod that carries the named call (fsctl crash), as a fault would:
+	// no drain, and its calls left in the shared recovery table. The action ends once the kubelet has restarted
+	// the container and it is ready again, on the same node with the same address.
+	CrashFreeswitchOf string `yaml:"crashFreeswitchOf,omitempty"`
+	// RecoverOn runs `sofia recover` on the pod that carries the named call, and checks it took over exactly that
+	// pod's calls (two legs each) among the scenario's calls that are up: none of another node's.
+	RecoverOn string `yaml:"recoverOn,omitempty"`
 }
 
 // LiveKitCapability is what a run must provide for expect.livekit: the edge sends calls to lk numbers to LiveKit
@@ -554,6 +561,8 @@ func (a *Action) Kind() string {
 	add(a.BlackoutNodeOf != nil, "blackoutNodeOf")
 	add(a.WaitNode != nil, "waitNode")
 	add(a.Hangup != "", "hangup")
+	add(a.CrashFreeswitchOf != "", "crashFreeswitchOf")
+	add(a.RecoverOn != "", "recoverOn")
 	if len(kinds) != 1 {
 		return ""
 	}
@@ -901,11 +910,13 @@ func (s *Scenario) validateActions(calls map[string]bool) error { //nolint:gocyc
 		kind := a.Kind()
 		if kind == "" {
 			return fmt.Errorf("%s: needs exactly one of drainNodeOf, uncordon, rollFleet, breakConfig, "+
-				"restoreConfig, waitMember, waitFleetCurrent, expectRollStuck, blackoutNodeOf, waitNode, hangup", label)
+				"restoreConfig, waitMember, waitFleetCurrent, expectRollStuck, blackoutNodeOf, waitNode, hangup, "+
+				"crashFreeswitchOf, recoverOn", label)
 		}
 		fleet = fleet || a.OnFleet()
 		for field, call := range map[string]string{
 			"afterAnswered": a.AfterAnswered, "afterEnded": a.AfterEnded, "drainNodeOf": a.DrainNodeOf, "hangup": a.Hangup,
+			"crashFreeswitchOf": a.CrashFreeswitchOf, "recoverOn": a.RecoverOn,
 		} {
 			if call != "" && !calls[call] {
 				return fmt.Errorf("%s: %s names no call %q", label, field, call)

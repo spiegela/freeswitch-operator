@@ -30,7 +30,10 @@ and serves `/metrics` on the pod's own address (default port 9282):
 - `freeswitch_ready`, `freeswitch_calls`, `freeswitch_channels`.
 - Sessions: active, peak, total, the limit and the rate limit.
 - `freeswitch_inbound_paused`: 1 while the node drains.
-- Per SIP profile: its state, and its calls and failed calls in each direction.
+- Per SIP profile: its state, and its calls and failed calls in each direction. The `profile` label is the
+  profile's name, or for a profile named `<alias>-<anything>` with that alias, the alias: an edge's profiles run as
+  `trunks-<address>` and `backend-<address>` ([call tracking](call-tracking.md)), and report as `trunks` and
+  `backend` on every node.
 
 The exporter runs as a native sidecar, so it keeps reporting while the node drains and stops only after FreeSWITCH
 has. It is its own image, versioned apart from the operator: it is part of the pod template, so changing its image

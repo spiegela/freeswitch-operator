@@ -215,6 +215,19 @@ cases:
     status: covered
     scenarios: [node-lost-mid-call]
 
+  - id: sb-crash-recovers-own-calls
+    ref: crash-recovers-own-calls
+    title: A node's FreeSWITCH crashes mid-call and recovers its own calls, and no other node's
+    area: resilience
+    component: freeswitch
+    expect: >
+      After FreeSWITCH crashes and restarts on the same node, `sofia recover` there takes exactly the legs of that
+      node's calls from the shared recovery table, not the other nodes', since each node's profiles are named for
+      its address. Every call is still up at the end with audio both ways: the recovered ones after a gap of the
+      restart's length, the others undisturbed.
+    status: covered
+    scenarios: [crash-recovers-own-calls]
+
   - id: sb-barge-in-vad-mode
     ref: barge-in-vad-mode
     title: Barge-in detection is switchable per call between the edge and the agent

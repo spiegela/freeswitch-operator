@@ -31,6 +31,11 @@ type fakeFleet struct {
 	// blackouts are the nodes taken dark, and until when; deleted, the pods deleted.
 	blackouts map[string]fakeBlackout
 	deleted   []string
+	// restarts counts each pod's FreeSWITCH restarts (an fsctl crash adds one); execs are the commands run, as
+	// "pod: command"; recoverOut is what sofia recover answers.
+	restarts   map[string]int32
+	execs      []string
+	recoverOut string
 }
 
 type fakeBlackout struct {
@@ -161,6 +166,32 @@ func (f *fakeFleet) DeletePod(_ context.Context, pod string) error {
 	defer f.mu.Unlock()
 	f.deleted = append(f.deleted, pod)
 	return nil
+}
+
+func (f *fakeFleet) Exec(_ context.Context, pod, container string, cmd ...string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	line := strings.Join(cmd, " ")
+	f.execs = append(f.execs, pod+": "+line)
+	switch {
+	case container != fleet.FreeswitchContainer:
+		return "", fmt.Errorf("no container %s", container)
+	case line == "fs_cli -x fsctl crash":
+		if f.restarts == nil {
+			f.restarts = map[string]int32{}
+		}
+		f.restarts[pod]++
+		return "", errors.New("command terminated with exit code 1")
+	case line == "fs_cli -x sofia recover":
+		return f.recoverOut, nil
+	}
+	return "", fmt.Errorf("unexpected command %q", line)
+}
+
+func (f *fakeFleet) Container(_ context.Context, pod, _ string) (fleet.ContainerState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return fleet.ContainerState{Restarts: f.restarts[pod], Ready: true}, nil
 }
 
 const longRoute = `
@@ -363,6 +394,78 @@ actions:
 	}
 	res := r.Run(context.Background(), s)
 	if res.Status != statusFail || !strings.Contains(strings.Join(res.Failures, "\n"), "-blackout-image") {
+		t.Errorf("got %s: %v", res.Status, res.Failures)
+	}
+}
+
+func TestParseRecovered(t *testing.T) {
+	for out, want := range map[string]int{
+		"Recovered 2 call(s)\n\n":  2,
+		"Recovered 12 call(s)\n":   12,
+		"No calls to recover.\n\n": 0,
+	} {
+		if got, err := parseRecovered(out); err != nil || got != want {
+			t.Errorf("parseRecovered(%q) = %d, %v; want %d", out, got, err, want)
+		}
+	}
+	if _, err := parseRecovered("-ERR no reply\n"); err == nil {
+		t.Error("parseRecovered took an error for an answer")
+	}
+}
+
+const crashRecoverScenario = `
+name: crash
+requires: [mock, fleet]
+calls:
+  - id: a
+    to: long
+    steps:
+      - tone: {hz: 600, ms: 20000}
+    expect: {status: 200}
+actions:
+  - {afterAnswered: a, afterMs: 300, crashFreeswitchOf: a}
+  - {recoverOn: a}
+  - {hangup: a}
+`
+
+// A crash restarts the call's FreeSWITCH; a recover there that takes its one call's two legs passes.
+func TestTimelineCrashesAndRecovers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	f := newFakeFleet()
+	f.recoverOut = "Recovered 2 call(s)\n"
+	r := withFleet(startMock(t, longRoute), f)
+	res := runScenario(t, r, crashRecoverScenario)
+	want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: fs_cli -x sofia recover"}
+	if fmt.Sprint(f.execs) != fmt.Sprint(want) {
+		t.Errorf("ran %q, want %q", f.execs, want)
+	}
+	tl := strings.Join(res.Timeline, "\n  ")
+	for _, s := range []string{"crashed its FreeSWITCH, which restarted (restart 1)", "took 2 call legs: call(s) a"} {
+		if !strings.Contains(tl, s) {
+			t.Errorf("timeline lacks %q:\n  %s", s, tl)
+		}
+	}
+	if res.Status == statusFail {
+		t.Errorf("failed: %v", res.Failures)
+	}
+}
+
+// A recover that takes more than its own node's calls (other nodes' too) fails the scenario.
+func TestTimelineRecoverTakingOtherNodesCallsFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	f := newFakeFleet()
+	f.recoverOut = "Recovered 6 call(s)\n"
+	r := withFleet(startMock(t, longRoute), f)
+	s, err := scenario.Parse([]byte(crashRecoverScenario))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := r.Run(context.Background(), s)
+	if res.Status != statusFail || !strings.Contains(strings.Join(res.Failures, "\n"), "took 6 call legs, want 2") {
 		t.Errorf("got %s: %v", res.Status, res.Failures)
 	}
 }

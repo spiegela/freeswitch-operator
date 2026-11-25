@@ -56,6 +56,8 @@ the same pieces by hand:
 
 **Call tracking** ([setup](docs/call-tracking.md))
 - FreeSWITCH's core db and per-call tracking in a PostgreSQL shared by the whole fleet: the groundwork for failover.
+- SIP profiles named for each node's address (`trunks-<address>`, alias `trunks`), so `sofia recover` takes one
+  address's calls and never a live node's: a node whose FreeSWITCH restarts takes back its own calls.
 - `ghcr.io/spiegela/freeswitch` ([`images/freeswitch`](images/freeswitch/Dockerfile)): drachtio's FreeSWITCH build
   plus `mod_pgsql` and the project's own speech detector, cut down to what the edge runs (190 MB, from drachtio's
   1.5 GB).
@@ -153,8 +155,6 @@ layout, and [`config/samples`](config/samples/) has a sample of each resource.
 Features still to come, each with the stories that make it up.
 
 **Failover with call recovery** ([design](docs/call-tracking.md#failover-what-tracking-is-for-and-whats-left))
-- Narrow recovery to the lost node's calls: one SIP profile per movable address, recovered with
-  `sofia profile <name> recover`. As it is, `sofia recover` takes every other node's calls.
 - Make in-dialog SIP reach the node that takes a call over.
 - Detect a dead node and fence it.
 - Move the lost node's address to a spare and recover its calls there.
