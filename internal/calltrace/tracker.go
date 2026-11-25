@@ -782,10 +782,16 @@ func (t *Tracker) roomSpans(c *call, rm *room, now time.Time) []Span {
 	return append([]Span{room}, out...)
 }
 
+// rootStartLead is how much earlier than the call's first message the call span starts. The first transaction's span
+// starts at that message too, and trace lists (Grafana's Jaeger search, for one) name a trace and give its duration
+// from its earliest span, taking whichever the backend returned first on a tie: often the INVITE, not the call. One
+// microsecond is Jaeger's resolution. The call's own timings (call.answer_ms, ...) still count from the first message.
+const rootStartLead = time.Microsecond
+
 func (t *Tracker) rootSpan(c *call, how string, end time.Time) Span {
 	s := Span{
 		Trace: c.trace, ID: c.rootID(), Service: "sip", Name: "call", Kind: tracepb.Span_SPAN_KIND_SERVER,
-		Start: c.start, End: end,
+		Start: c.start.Add(-rootStartLead), End: end,
 		Attrs: []Attr{
 			{"sip.call_id", c.rootCallID}, {"sip.from.user", c.fromUser}, {"sip.to.user", c.toUser},
 			{"call.legs", len(c.callIDs)}, {"call.trace_end", how},
