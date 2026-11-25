@@ -18,6 +18,12 @@ source_order,source,id,area,component,status,milestone,title
 1,sipbench scenarios,sb-drain-mid-call,resilience,operator,covered,,Node drained with a live call
 1,sipbench scenarios,sb-rolling-update-live-call,resilience,operator,covered,,Rolling update with a live call
 1,sipbench scenarios,sb-bad-config-stops-roll,resilience,operator,covered,,A config without a SIP profile on the SIP port stops the roll at one node
+1,sipbench scenarios,sb-pool-media-address,media,operator,covered,,The edge advertises its pod's external address for media
+1,sipbench scenarios,sb-node-lost-mid-call,resilience,operator,covered,,A node that goes dark mid-call doesn't take new calls down with it
+1,sipbench scenarios,sb-crash-recovers-own-calls,resilience,freeswitch,covered,,"A node's FreeSWITCH crashes mid-call and recovers its own calls, and no other node's"
+1,sipbench scenarios,sb-moved-call-in-dialog,resilience,freeswitch,covered,,"A call's FreeSWITCH moves to a spare node mid-call, and the call's SIP follows it both ways"
+1,sipbench scenarios,sb-barge-in-vad-mode,media,freeswitch,covered,,Barge-in detection is switchable per call between the edge and the agent
+1,sipbench scenarios,sb-barge-in-livekit,media,freeswitch,covered,,The edge's barge-in detections reach a LiveKit agent's room
 1,sipbench scenarios,sb-silent-node-stays-in-rotation,resilience,proxy,planned,M2b,A request every node discards doesn't take the nodes out of rotation
 2,i3 Forum interop plan R2,i3f-1-directions,call-setup,edge,planned,M5,Every case is run in both directions
 2,i3 Forum interop plan R2,i3f-1-traces,headers,edge,planned,M5,SIP traces of each test call conform to the interconnection profile
