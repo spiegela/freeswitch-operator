@@ -1,8 +1,13 @@
 <!--
   backend: the profile facing what sits behind the edge. The mock backend in the bench; LiveKit SIP later.
   It stays on the private network, so it advertises its local address.
+  It runs as backend-<external address>, like trunks (sip_profiles/trunks.xml): a recovered call needs both of its
+  legs, so both profiles' names must say whose calls they are. "backend" is its alias.
 -->
-<profile name="backend">
+<profile name="$${backend_profile}">
+  <aliases>
+    <alias name="backend"/>
+  </aliases>
   <gateways/>
   <domains/>
   <settings>

@@ -23,7 +23,7 @@ page covers setting tracking up and what failover still needs.
   - **A managed service,** such as Aurora PostgreSQL, through its writer (cluster) endpoint.
 - **[`deploy/postgres/freeswitch-core-db.sql`](../deploy/postgres/freeswitch-core-db.sql) run once in that
   database,** below.
-- **Four settings in the FreeSWITCH configuration**, below.
+- **Five settings in the FreeSWITCH configuration**, below.
 
 ## Prepare the database
 
@@ -50,7 +50,7 @@ sends a caller name over the limit).
 
 ## Configure FreeSWITCH
 
-sipbench's configuration ([`sipbench/freeswitch/conf`](../sipbench/freeswitch/conf/)) already has all four. Each one is
+sipbench's configuration ([`sipbench/freeswitch/conf`](../sipbench/freeswitch/conf/)) already has all five. Each one is
 read from the environment, so the same ConfigMaps serve compose (tracking off) and a cluster (tracking on).
 
 1. **Load `mod_pgsql` before the core db opens.** Use [`pre_load_modules.conf.xml`](../sipbench/freeswitch/conf/autoload_configs/pre_load_modules.conf.xml),
@@ -83,6 +83,34 @@ read from the environment, so the same ConfigMaps serve compose (tracking off) a
    <X-PRE-PROCESS cmd="exec-set" data="core_db_dsn=/bin/sh /usr/local/freeswitch/conf/bin/env.sh CORE_DB_DSN"/>
    <X-PRE-PROCESS cmd="exec-set" data="track_calls=/bin/sh /usr/local/freeswitch/conf/bin/env.sh TRACK_CALLS false"/>
    ```
+
+5. **Name each SIP profile for the node's address, and keep its plain name as an alias.** Each tracked leg's row
+   names its profile, and `sofia recover` takes over every row another FreeSWITCH wrote under the name of a profile
+   it runs, whichever node wrote it. With the same `trunks` and `backend` on every node, recovering on one node takes
+   every other node's calls too, and breaks them: on kind, a restarted node recovered six legs (its own call's two,
+   and four from two live nodes, whose calls then dropped). Named for the address, a node's profiles match only rows
+   written under that address: its own from before a restart, or a lost node's once failover moves the address to
+   it. [`bin/profile-name.sh`](../sipbench/freeswitch/conf/bin/profile-name.sh) prints the name from the pod's
+   external address (`trunks-203-0-113-10`), or the plain name where the pod has none, and
+   [`vars.xml`](../sipbench/freeswitch/conf/vars.xml) reads it at start:
+
+   ```xml
+   <X-PRE-PROCESS cmd="exec-set" data="trunks_profile=/bin/sh /usr/local/freeswitch/conf/bin/profile-name.sh trunks"/>
+   ```
+
+   ```xml
+   <profile name="$${trunks_profile}">
+     <aliases>
+       <alias name="trunks"/>
+     </aliases>
+   ```
+
+   The alias keeps dial strings (`sofia/trunks/…`) and commands (`sofia status profile trunks`) as they were. The
+   exporter reports a profile named `<alias>-<anything>` under its alias, so the `profile` label on the
+   `freeswitch_sofia_*` series stays `trunks` and `backend` ([metrics](metrics.md)). Both profiles need it: a call
+   is recovered only with both legs. It needs an address per node: a fleet with `externalAddress.source: None`
+   (every node plain `trunks`) still recovers everyone's calls, so don't run `sofia recover` there. A pool's address
+   must be `required`, so FreeSWITCH never starts before it has it and names its profiles plainly.
 
 Only the core db moves. Each SIP profile's own tables, such as registrations it holds, stay in the pod's SQLite.
 Recovery doesn't need them.
@@ -156,18 +184,24 @@ When a node is lost, the plan is:
    re-INVITE built from the leg's saved dialog (Contact, Via, route), from the moved address, and bridges the legs
    again.
 
+**Recovery takes one address's calls.** As FreeSWITCH 1.10.10 has it, `sofia recover` takes over every row another
+FreeSWITCH wrote (`runtime_uuid != own`) under the name of a profile it runs, and deletes them. It never looks at
+which node wrote a row. With each profile named for its node's address (step 5 above), that is exactly the calls of
+the address the recovering node holds. A node whose FreeSWITCH restarts in place (a crash, an OOM kill) keeps its
+address, so `sofia recover` there takes back its own calls and nothing else. sipbench's `crash-recovers-own-calls`
+checks it on kind: it crashes FreeSWITCH under a call, recovers on that node, and checks that the recover took
+exactly that node's legs and that every call on every node is still up with audio both ways. A call recovered in
+place is re-invited from the same node and address, so its in-dialog SIP needs nothing new. Recovery skips a row
+whose profile the recovering node doesn't run: on failover, the spare must come up holding the lost address.
+
 Not built yet:
 
-- **Don't run `sofia recover` on a live fleet.** As FreeSWITCH 1.10.10 has it, it takes over every row another
-  FreeSWITCH wrote (`runtime_uuid != own`), live nodes' calls included, and deletes them. `sofia profile <name>
-  recover` narrows it to one profile name. Failover will rely on that: one profile per movable address, so
-  recovering a profile takes exactly the lost address's calls. Recovery also needs the spare to have a profile of
-  the same name, or it skips the row.
+- **Nothing runs `sofia recover`.** FreeSWITCH doesn't recover on startup. Until something does, the bench runs it
+  by hand.
 - **In-dialog SIP has to reach the spare.** The far end's BYE and re-INVITE go to the Contact it was given. That is
   the lost node's address unless it moved too.
-- **Nothing recovers calls automatically.** FreeSWITCH doesn't recover on startup, and dead-node detection,
-  fencing, the address move and the recover call are all still to be built. A lost node's rows stay in
-  `recovery` until something recovers them.
+- **Nothing moves a lost node's address.** Dead-node detection, fencing and the address move are still to be
+  built. A lost node's rows stay in `recovery` until something recovers them.
 
 Until then, a node's calls drop when it dies: FreeSWITCH ends them at its media timeout, and nothing tells the
 backend. New calls go elsewhere, within Kamailio's 5 s failover at first, then with no delay once the dispatcher's

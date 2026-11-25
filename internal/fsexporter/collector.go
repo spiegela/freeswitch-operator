@@ -145,7 +145,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		if p.running() {
 			up = 1
 		}
-		ch <- prometheus.MustNewConstMetric(descProfileUp, prometheus.GaugeValue, up, p.Name)
+		ch <- prometheus.MustNewConstMetric(descProfileUp, prometheus.GaugeValue, up, p.Label)
 		if !p.running() {
 			continue
 		}
@@ -159,11 +159,11 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.logger().Warn("could not parse sofia xmlstatus profile", "profile", p.Name, "error", err)
 			continue
 		}
-		ch <- prometheus.MustNewConstMetric(descProfileCalls, prometheus.CounterValue, info.CallsIn, p.Name, "in")
-		ch <- prometheus.MustNewConstMetric(descProfileCalls, prometheus.CounterValue, info.CallsOut, p.Name, "out")
-		ch <- prometheus.MustNewConstMetric(descProfileFailed, prometheus.CounterValue, info.FailedCallsIn, p.Name, "in")
-		ch <- prometheus.MustNewConstMetric(descProfileFailed, prometheus.CounterValue, info.FailedCallsOut, p.Name, "out")
-		ch <- prometheus.MustNewConstMetric(descProfileRegistrations, prometheus.GaugeValue, info.Registrations, p.Name)
+		ch <- prometheus.MustNewConstMetric(descProfileCalls, prometheus.CounterValue, info.CallsIn, p.Label, "in")
+		ch <- prometheus.MustNewConstMetric(descProfileCalls, prometheus.CounterValue, info.CallsOut, p.Label, "out")
+		ch <- prometheus.MustNewConstMetric(descProfileFailed, prometheus.CounterValue, info.FailedCallsIn, p.Label, "in")
+		ch <- prometheus.MustNewConstMetric(descProfileFailed, prometheus.CounterValue, info.FailedCallsOut, p.Label, "out")
+		ch <- prometheus.MustNewConstMetric(descProfileRegistrations, prometheus.GaugeValue, info.Registrations, p.Label)
 	}
 }
 
@@ -234,25 +234,47 @@ func parseCount(out string) (float64, error) {
 type profileEntry struct {
 	Name  string `xml:"name"`
 	Type  string `xml:"type"`
+	Data  string `xml:"data"` // for an alias, the profile it names
 	State string `xml:"state"`
+	// Label is the name the sofia series report the profile under: its name, or the alias NAME for a profile that
+	// runs as NAME-<suffix> with NAME as an alias. Edges name their profiles that way, one name per movable
+	// address (trunks-203-0-113-10, alias trunks), so call recovery takes one address's calls at a time
+	// (docs/call-tracking.md); the series keep the plain name, the same on every node.
+	Label string `xml:"-"`
 }
 
 func (p profileEntry) running() bool { return strings.HasPrefix(p.State, "RUNNING") }
 
 // parseProfiles reads the profiles from sofia xmlstatus, leaving out aliases (another name for a profile) and
-// gateways.
+// gateways, and labels each profile (profileEntry.Label). FreeSWITCH 1.10 lists aliases as <alias> elements; a
+// <profile> of type alias counts too.
 func parseProfiles(out string) ([]profileEntry, error) {
 	var doc struct {
 		Profiles []profileEntry `xml:"profile"`
+		Aliases  []profileEntry `xml:"alias"`
 	}
 	if err := decodeXML(out, &doc); err != nil {
 		return nil, err
 	}
+	aliases := map[string][]string{} // profile name: its aliases
+	for _, a := range append(doc.Aliases, doc.Profiles...) {
+		if a.Type == "alias" {
+			aliases[a.Data] = append(aliases[a.Data], a.Name)
+		}
+	}
 	var profiles []profileEntry
 	for _, p := range doc.Profiles {
-		if p.Type == "profile" {
-			profiles = append(profiles, p)
+		if p.Type != "profile" {
+			continue
 		}
+		p.Label = p.Name
+		for _, a := range aliases[p.Name] {
+			if suffix, ok := strings.CutPrefix(p.Name, a+"-"); ok && suffix != "" {
+				p.Label = a
+				break
+			}
+		}
+		profiles = append(profiles, p)
 	}
 	return profiles, nil
 }

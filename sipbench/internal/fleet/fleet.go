@@ -5,6 +5,7 @@
 package fleet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,9 +20,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/streaming/pkg/httpstream"
 	"k8s.io/utils/ptr"
 )
 
@@ -33,6 +37,10 @@ const fieldManager = "sipbench"
 
 // ClusterLabel names the FreeswitchCluster a pod belongs to. The operator's own label; the bench doesn't import it.
 const ClusterLabel = "sip.instruments.com/cluster"
+
+// FreeswitchContainer is the FreeSWITCH container's name in a fleet pod. The operator's own; the bench doesn't
+// import it.
+const FreeswitchContainer = "freeswitch"
 
 // ExternalAddressAnnotation is where the operator records the address a FreeSWITCH pod advertises to far ends
 // (its SIPAddressPool's binding, or the node's address). The operator's own constant; the bench doesn't import it.
@@ -139,6 +147,17 @@ type Fleet interface {
 	PodLog(ctx context.Context, pod string) (string, error)
 	// DeletePod deletes a pod; one already gone is no error.
 	DeletePod(ctx context.Context, pod string) error
+	// Exec runs a command in one of a pod's containers and returns what it printed (stdout, then stderr). A
+	// command that exits non-zero, or whose container dies under it, is an error, with the output so far.
+	Exec(ctx context.Context, pod, container string, cmd ...string) (string, error)
+	// Container reports on one of a pod's containers.
+	Container(ctx context.Context, pod, container string) (ContainerState, error)
+}
+
+// ContainerState is what the runner sees of a container.
+type ContainerState struct {
+	Restarts int32
+	Ready    bool
 }
 
 // BlackoutDelay is how long a blackout pod waits after starting before it takes its node dark, so the kubelet
@@ -168,6 +187,7 @@ var (
 
 type kube struct {
 	ns, name string
+	cfg      *rest.Config
 	core     kubernetes.Interface
 	dyn      dynamic.Interface
 }
@@ -195,7 +215,7 @@ func Connect(ref string) (Fleet, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &kube{ns: ns, name: name, core: core, dyn: dyn}, nil
+	return &kube{ns: ns, name: name, cfg: cfg, core: core, dyn: dyn}, nil
 }
 
 func (k *kube) Name() string { return k.ns + "/" + k.name }
@@ -497,4 +517,44 @@ func (k *kube) DeletePod(ctx context.Context, pod string) error {
 		return nil
 	}
 	return err
+}
+
+func (k *kube) Exec(ctx context.Context, pod, container string, cmd ...string) (string, error) {
+	req := k.core.CoreV1().RESTClient().Post().Resource("pods").Namespace(k.ns).Name(pod).SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{Container: container, Command: cmd, Stdout: true, Stderr: true},
+			scheme.ParameterCodec)
+	// WebSockets first, as kubectl does, and SPDY from API servers that don't take them.
+	ws, err := remotecommand.NewWebSocketExecutor(k.cfg, "GET", req.URL().String())
+	if err != nil {
+		return "", err
+	}
+	spdy, err := remotecommand.NewSPDYExecutor(k.cfg, "POST", req.URL())
+	if err != nil {
+		return "", err
+	}
+	ex, err := remotecommand.NewFallbackExecutor(ws, spdy, httpstream.IsUpgradeFailure)
+	if err != nil {
+		return "", err
+	}
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	err = ex.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &out, Stderr: &stderr})
+	out.Write(stderr.Bytes())
+	if err != nil {
+		return out.String(), fmt.Errorf("%s in %s/%s: %w", strings.Join(cmd, " "), pod, container, err)
+	}
+	return out.String(), nil
+}
+
+func (k *kube) Container(ctx context.Context, pod, container string) (ContainerState, error) {
+	p, err := k.core.CoreV1().Pods(k.ns).Get(ctx, pod, metav1.GetOptions{})
+	if err != nil {
+		return ContainerState{}, err
+	}
+	for _, c := range p.Status.ContainerStatuses {
+		if c.Name == container {
+			return ContainerState{Restarts: c.RestartCount, Ready: c.Ready}, nil
+		}
+	}
+	return ContainerState{}, fmt.Errorf("pod %s has no container %s yet", pod, container)
 }

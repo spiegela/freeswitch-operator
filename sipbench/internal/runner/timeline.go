@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +26,10 @@ const (
 	// A blackout pod must be running within this, and seen to finish within blackoutGrace of its end.
 	blackoutStart = 60 * time.Second
 	blackoutGrace = 3 * time.Minute
+	// A crashed FreeSWITCH must be restarted and ready again within this.
+	crashRestart = 2 * time.Minute
+	// Commands run in a FreeSWITCH container (fs_cli) must answer within this.
+	execTimeout = 30 * time.Second
 )
 
 // callState is what the timeline can see of, and do to, one call while it runs.
@@ -253,8 +260,115 @@ func (t *timeline) do(ctx context.Context, a *scenario.Action) (string, error) {
 
 	case a.WaitNode != nil:
 		return t.waitNode(ctx, a.WaitNode)
+
+	case a.CrashFreeswitchOf != "":
+		return t.crashFreeswitch(ctx, a.CrashFreeswitchOf)
+
+	case a.RecoverOn != "":
+		return t.recoverOn(ctx, a.RecoverOn)
 	}
 	return "", errors.New("no action")
+}
+
+// crashFreeswitch crashes FreeSWITCH in the pod that carries a call and waits for the kubelet to restart its
+// container and for it to be ready again.
+func (t *timeline) crashFreeswitch(ctx context.Context, call string) (string, error) {
+	f := t.r.cfg.Fleet
+	m, err := t.memberOf(ctx, call)
+	if err != nil {
+		return "", err
+	}
+	before, err := f.Container(ctx, m.Pod, fleet.FreeswitchContainer)
+	if err != nil {
+		return "", err
+	}
+	ectx, cancel := context.WithTimeout(ctx, execTimeout)
+	// FreeSWITCH dies under the command, so fs_cli's connection drops and the exec fails: expected. The restart
+	// count below is what shows it crashed.
+	_, _ = f.Exec(ectx, m.Pod, fleet.FreeswitchContainer, "fs_cli", "-x", "fsctl crash")
+	cancel()
+	deadline := time.Now().Add(crashRestart)
+	var now fleet.ContainerState
+	for {
+		now, err = f.Container(ctx, m.Pod, fleet.FreeswitchContainer)
+		if err == nil && now.Restarts > before.Restarts && now.Ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("FreeSWITCH in %s (call %s) not restarted and ready within %s (restarts %d -> %d, ready %t, err %v)",
+				m.Pod, call, crashRestart, before.Restarts, now.Restarts, now.Ready, err)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(pollEvery):
+		}
+	}
+	return fmt.Sprintf("call %s is on %s; crashed its FreeSWITCH, which restarted (restart %d) and is ready", call, m.Pod,
+		now.Restarts), nil
+}
+
+// recovered reads sofia recover's answer: "Recovered 2 call(s)" or "No calls to recover.". FreeSWITCH counts call
+// legs, so a bridged call is two.
+var recovered = regexp.MustCompile(`Recovered (\d+) call`)
+
+func parseRecovered(out string) (int, error) {
+	if strings.Contains(out, "No calls to recover") {
+		return 0, nil
+	}
+	if m := recovered.FindStringSubmatch(out); m != nil {
+		return strconv.Atoi(m[1])
+	}
+	return 0, fmt.Errorf("unexpected answer %q", strings.TrimSpace(out))
+}
+
+// recoverOn runs sofia recover on the pod that carries a call, and checks it took over exactly the legs of the
+// scenario's live calls on that pod (two each). The scenario's calls are the only ones on the fleet's nodes while
+// it runs alone: a recover that also took another node's would count more, and break those calls.
+func (t *timeline) recoverOn(ctx context.Context, call string) (string, error) {
+	m, err := t.memberOf(ctx, call)
+	if err != nil {
+		return "", err
+	}
+	var here []string
+	for _, id := range slices.Sorted(maps.Keys(t.calls)) {
+		c := t.calls[id]
+		if !closed(c.answered) || closed(c.ended) {
+			continue
+		}
+		cm, err := t.memberOf(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if cm.Pod == m.Pod {
+			here = append(here, id)
+		}
+	}
+	ectx, cancel := context.WithTimeout(ctx, execTimeout)
+	defer cancel()
+	out, err := t.r.cfg.Fleet.Exec(ectx, m.Pod, fleet.FreeswitchContainer, "fs_cli", "-x", "sofia recover")
+	if err != nil {
+		return "", err
+	}
+	n, err := parseRecovered(out)
+	if err != nil {
+		return "", fmt.Errorf("sofia recover on %s: %w", m.Pod, err)
+	}
+	if want := 2 * len(here); n != want {
+		return "", fmt.Errorf("sofia recover on %s took %d call legs, want %d: the legs of call(s) %s, the ones on it",
+			m.Pod, n, want, orNone(here))
+	}
+	return fmt.Sprintf("sofia recover on %s took %d call legs: call(s) %s", m.Pod, n, orNone(here)), nil
+}
+
+// closed reports whether ch is closed, without waiting.
+func closed(ch chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 // memberOf finds the pod that carries a call: the mock recorded where the INVITE came from, which is the pod's

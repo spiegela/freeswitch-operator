@@ -1,8 +1,13 @@
 <!--
   trunks: the profile far ends reach (carriers, PBXs), and the one Kamailio dispatches to on a cluster.
   The external address is what peers see for media; see bin/podinfo.sh.
+  It runs as trunks-<external address> (vars.xml, bin/profile-name.sh), so call recovery takes one address's calls
+  at a time; "trunks" is its alias, which dial strings and commands use.
 -->
-<profile name="trunks">
+<profile name="$${trunks_profile}">
+  <aliases>
+    <alias name="trunks"/>
+  </aliases>
   <gateways/>
   <domains/>
   <settings>
