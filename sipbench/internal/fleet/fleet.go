@@ -10,12 +10,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
@@ -155,12 +157,17 @@ type Fleet interface {
 	Exec(ctx context.Context, pod, container string, cmd ...string) (string, error)
 	// Container reports on one of a pod's containers.
 	Container(ctx context.Context, pod, container string) (ContainerState, error)
+	// TracksCalls reports whether the fleet keeps its calls in a shared recovery table: its spec.env sets
+	// TRACK_CALLS to "true" and CORE_DB_DSN (sipbench's FreeSWITCH config reads both).
+	TracksCalls(ctx context.Context) (bool, error)
 }
 
 // ContainerState is what the runner sees of a container.
 type ContainerState struct {
 	Restarts int32
 	Ready    bool
+	// Running is false while the container is stopped: it has died and the kubelet hasn't restarted it yet.
+	Running bool
 }
 
 // BlackoutDelay is how long a blackout pod waits after starting before it takes its node dark, so the kubelet
@@ -548,14 +555,54 @@ func (k *kube) Exec(ctx context.Context, pod, container string, cmd ...string) (
 	if err != nil {
 		return "", err
 	}
-	var out bytes.Buffer
-	var stderr bytes.Buffer
+	var out, stderr syncBuffer
 	err = ex.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &out, Stderr: &stderr})
-	out.Write(stderr.Bytes())
+	got := out.String() + stderr.String()
 	if err != nil {
-		return out.String(), fmt.Errorf("%s in %s/%s: %w", strings.Join(cmd, " "), pod, container, err)
+		return got, fmt.Errorf("%s in %s/%s: %w", strings.Join(cmd, " "), pod, container, err)
 	}
-	return out.String(), nil
+	return got, nil
+}
+
+// syncBuffer is a buffer safe to read while something still writes to it: once ctx is done, StreamWithContext
+// returns without waiting for the goroutines copying the command's output.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func (k *kube) TracksCalls(ctx context.Context) (bool, error) {
+	u, err := k.dyn.Resource(fscResource).Namespace(k.ns).Get(ctx, k.name, metav1.GetOptions{})
+	if err != nil {
+		return false, err
+	}
+	env, _, err := unstructured.NestedSlice(u.Object, "spec", "env")
+	if err != nil {
+		return false, err
+	}
+	track, dsn := false, false
+	for _, e := range env {
+		m, _ := e.(map[string]any)
+		switch m["name"] {
+		case "TRACK_CALLS":
+			track = m["value"] == "true"
+		case "CORE_DB_DSN":
+			dsn = m["value"] != nil && m["value"] != "" || m["valueFrom"] != nil
+		}
+	}
+	return track && dsn, nil
 }
 
 func (k *kube) Container(ctx context.Context, pod, container string) (ContainerState, error) {
@@ -565,7 +612,7 @@ func (k *kube) Container(ctx context.Context, pod, container string) (ContainerS
 	}
 	for _, c := range p.Status.ContainerStatuses {
 		if c.Name == container {
-			return ContainerState{Restarts: c.RestartCount, Ready: c.Ready}, nil
+			return ContainerState{Restarts: c.RestartCount, Ready: c.Ready, Running: c.State.Running != nil}, nil
 		}
 	}
 	return ContainerState{}, fmt.Errorf("pod %s has no container %s yet", pod, container)

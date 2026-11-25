@@ -74,7 +74,7 @@ type timeline struct {
 	pods map[string]fleet.Member
 	// unrecovered are the pods whose FreeSWITCH this run crashed and hasn't run sofia recover in since. Their calls
 	// stay in the shared recovery table, where a later run's recover would count them.
-	unrecovered []string
+	unrecovered []crashedPod
 
 	mu       sync.Mutex
 	log      []string
@@ -82,6 +82,10 @@ type timeline struct {
 }
 
 type brokenKey struct{ configMap, key, original string }
+
+// crashedPod is a pod whose FreeSWITCH crashed, and the external address its SIP profiles were named for then
+// ("" when unknown).
+type crashedPod struct{ pod, address string }
 
 // blackoutPod is a node taken dark, until about the time until.
 type blackoutPod struct {
@@ -287,16 +291,14 @@ func (t *timeline) crashFreeswitch(ctx context.Context, call string) (string, er
 	if err != nil {
 		return "", err
 	}
-	before, err := f.Container(ctx, m.Pod, fleet.FreeswitchContainer)
+	addr, err := t.addressOf(ctx, m.Pod, call)
 	if err != nil {
 		return "", err
 	}
-	ectx, cancel := context.WithTimeout(ctx, execTimeout)
-	// FreeSWITCH dies under the command, so fs_cli's connection drops and the exec fails: expected. The restart
-	// count below is what shows it crashed.
-	_, _ = f.Exec(ectx, m.Pod, fleet.FreeswitchContainer, "fs_cli", "-x", "fsctl crash")
-	cancel()
-	t.crashed(m.Pod)
+	before, err := t.crash(ctx, m.Pod, addr)
+	if err != nil {
+		return "", fmt.Errorf("call %s: %w", call, err)
+	}
 	deadline := time.Now().Add(crashRestart)
 	var now fleet.ContainerState
 	for {
@@ -338,19 +340,19 @@ func (t *timeline) moveFreeswitch(ctx context.Context, call string) (string, err
 			}
 		}
 	}
-	addrs, err := f.ExternalAddresses(ctx)
+	addr, err := t.addressOf(ctx, m.Pod, call)
 	if err != nil {
 		return "", err
 	}
-	addr := addrs[m.Pod]
 	if err := f.Cordon(ctx, m.Node, true); err != nil {
 		return "", fmt.Errorf("cordoning %s: %w", m.Node, err)
 	}
 	t.cordoned = append(t.cordoned, m.Node)
-	ectx, cancel := context.WithTimeout(ctx, execTimeout)
-	_, _ = f.Exec(ectx, m.Pod, fleet.FreeswitchContainer, "fs_cli", "-x", "fsctl crash") // dies under the command
-	cancel()
-	t.crashed(m.Pod)
+	// Only once FreeSWITCH is seen to have died: deleting a pod whose FreeSWITCH still runs stops it gracefully,
+	// which hangs every call up.
+	if _, err := t.crash(ctx, m.Pod, addr); err != nil {
+		return "", fmt.Errorf("call %s: %w", call, err)
+	}
 	if err := f.DeletePodNow(ctx, m.Pod); err != nil {
 		return "", fmt.Errorf("deleting %s: %w", m.Pod, err)
 	}
@@ -365,7 +367,8 @@ func (t *timeline) moveFreeswitch(ctx context.Context, call string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("%s (call %s) not taking calls on another node than %s (now %+v): %w", m.Pod, call, m.Node, now, err)
 	}
-	if addrs, err = f.ExternalAddresses(ctx); err != nil {
+	addrs, err := f.ExternalAddresses(ctx)
+	if err != nil {
 		return "", err
 	}
 	if addrs[m.Pod] != addr {
@@ -400,6 +403,9 @@ func (t *timeline) recoverOn(ctx context.Context, call string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if _, err := t.addressOf(ctx, m.Pod, call); err != nil {
+		return "", err
+	}
 	var here []string
 	for _, id := range slices.Sorted(maps.Keys(t.calls)) {
 		c := t.calls[id]
@@ -420,13 +426,15 @@ func (t *timeline) recoverOn(ctx context.Context, call string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	t.mu.Lock()
-	t.unrecovered = slices.DeleteFunc(t.unrecovered, func(p string) bool { return p == m.Pod })
-	t.mu.Unlock()
 	n, err := parseRecovered(out)
 	if err != nil {
+		// Not known to have run: cleanup still flushes the pod's rows.
 		return "", fmt.Errorf("sofia recover on %s: %w", m.Pod, err)
 	}
+	// It ran: it took (and deleted) every row of the pod's profiles, whatever the count says.
+	t.mu.Lock()
+	t.unrecovered = slices.DeleteFunc(t.unrecovered, func(c crashedPod) bool { return c.pod == m.Pod })
+	t.mu.Unlock()
 	if want := 2 * len(here); n != want {
 		return "", fmt.Errorf("sofia recover on %s took %d call legs, want %d: the legs of call(s) %s, the ones on it",
 			m.Pod, n, want, orNone(here))
@@ -434,33 +442,98 @@ func (t *timeline) recoverOn(ctx context.Context, call string) (string, error) {
 	return fmt.Sprintf("sofia recover on %s took %d call legs: call(s) %s", m.Pod, n, orNone(here)), nil
 }
 
+// crashSeen bounds the wait for a crashed FreeSWITCH's container to be seen stopped or restarted (a variable for
+// the tests).
+var crashSeen = 30 * time.Second
+
+// addressOf is the external address of the pod that carries a call. Crashing and recovering need one: FreeSWITCH's
+// profiles are named for it, and without one every such node runs the same plain names, so a recover would take
+// every node's calls and a flush would delete them.
+func (t *timeline) addressOf(ctx context.Context, pod, call string) (string, error) {
+	addrs, err := t.r.cfg.Fleet.ExternalAddresses(ctx)
+	if err != nil {
+		return "", err
+	}
+	if addrs[pod] == "" {
+		return "", fmt.Errorf("%s (call %s) has no external address: its profiles have plain names, which every such node shares", pod, call)
+	}
+	return addrs[pod], nil
+}
+
+// crash crashes FreeSWITCH in pod (fsctl crash: no drain, no BYE, its calls left in the recovery table) and waits
+// until it is seen to have died, then returns how the container was before. FreeSWITCH dies under the command, so
+// fs_cli's connection drops and the exec fails whether it crashed or not: if it didn't, that error says why.
+func (t *timeline) crash(ctx context.Context, pod, addr string) (fleet.ContainerState, error) {
+	f := t.r.cfg.Fleet
+	before, err := f.Container(ctx, pod, fleet.FreeswitchContainer)
+	if err != nil {
+		return before, err
+	}
+	ectx, cancel := context.WithTimeout(ctx, execTimeout)
+	_, execErr := f.Exec(ectx, pod, fleet.FreeswitchContainer, "fs_cli", "-x", "fsctl crash")
+	cancel()
+	deadline := time.Now().Add(crashSeen)
+	for {
+		now, err := f.Container(ctx, pod, fleet.FreeswitchContainer)
+		if err == nil && (now.Restarts > before.Restarts || !now.Running) {
+			t.crashed(pod, addr)
+			return before, nil
+		}
+		if time.Now().After(deadline) {
+			return before, fmt.Errorf("FreeSWITCH in %s didn't crash within %s (fsctl crash: %v)", pod, crashSeen, execErr)
+		}
+		select {
+		case <-ctx.Done():
+			return before, ctx.Err()
+		case <-time.After(pollEvery):
+		}
+	}
+}
+
 // crashed records that a pod's FreeSWITCH left its calls in the recovery table.
-func (t *timeline) crashed(pod string) {
+func (t *timeline) crashed(pod, address string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !slices.Contains(t.unrecovered, pod) {
-		t.unrecovered = append(t.unrecovered, pod)
+	if !slices.ContainsFunc(t.unrecovered, func(c crashedPod) bool { return c.pod == pod }) {
+		t.unrecovered = append(t.unrecovered, crashedPod{pod: pod, address: address})
 	}
 }
 
 // flushLeftovers empties the recovery table of each pod whose FreeSWITCH this run crashed and didn't recover
 // (sofia recover flush: every row of the pod's profiles). Those calls have ended at the runner and the mock; left
 // in the table, the next run's recover there would count them, and recovering them instead leaves channels that
-// never end. Scenarios that act on the fleet run alone, so the pod's rows are this run's.
+// never end. Scenarios that act on the fleet run alone, so the pod's rows are this run's. The flush only reaches the
+// profiles the pod runs now, which are named for its address: a pod that came back with another address can't
+// flush the crashed one's rows, and that is said instead.
 func (t *timeline) flushLeftovers(ctx context.Context) {
 	t.mu.Lock()
-	pods := slices.Clone(t.unrecovered)
+	crashed := slices.Clone(t.unrecovered)
 	t.unrecovered = nil
 	t.mu.Unlock()
-	for _, pod := range pods {
-		ectx, cancel := context.WithTimeout(ctx, execTimeout)
-		_, err := t.r.cfg.Fleet.Exec(ectx, pod, fleet.FreeswitchContainer, "fs_cli", "-x", "sofia recover flush")
-		cancel()
-		if err != nil {
-			t.note("cleanup: couldn't flush %s's calls from the recovery table, where a later recover there will count them: %v", pod, err)
+	if len(crashed) == 0 {
+		return
+	}
+	now, nowErr := t.r.cfg.Fleet.ExternalAddresses(ctx)
+	for _, c := range crashed {
+		switch {
+		case nowErr != nil:
+			t.note("cleanup: couldn't check %s still holds %s, so its calls stay in the recovery table, where a later "+
+				"recover will count them: %v", c.pod, c.address, nowErr)
+			continue
+		case now[c.pod] != c.address:
+			t.note("cleanup: %s's calls stay in the recovery table under profiles named for %s, where a later recover "+
+				"will count them: %s now holds %q, and a flush there reaches only its own profiles", c.pod, c.address,
+				c.pod, now[c.pod])
 			continue
 		}
-		t.note("cleanup: flushed %s's calls from the recovery table", pod)
+		ectx, cancel := context.WithTimeout(ctx, execTimeout)
+		_, err := t.r.cfg.Fleet.Exec(ectx, c.pod, fleet.FreeswitchContainer, "fs_cli", "-x", "sofia recover flush")
+		cancel()
+		if err != nil {
+			t.note("cleanup: couldn't flush %s's calls from the recovery table, where a later recover there will count them: %v", c.pod, err)
+			continue
+		}
+		t.note("cleanup: flushed %s's calls from the recovery table", c.pod)
 	}
 }
 
@@ -716,9 +789,9 @@ func (t *timeline) cleanup() {
 	if len(t.cordoned) == 0 && len(t.broken) == 0 && unrecovered == 0 {
 		return
 	}
+	// The fleet is put back first, on a budget of its own: a flush that hangs must not leave a node cordoned.
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
-	t.flushLeftovers(ctx)
 	if nodes, err := t.uncordon(ctx); err != nil {
 		t.fail("cleanup: %v", err)
 	} else if len(nodes) > 0 {
@@ -729,6 +802,9 @@ func (t *timeline) cleanup() {
 	} else if len(keys) > 0 {
 		t.note("cleanup: restored %s", strings.Join(keys, ", "))
 	}
+	fctx, fcancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer fcancel()
+	t.flushLeftovers(fctx)
 }
 
 // endBlackouts waits for each blackout pod to finish, which it can only be seen to do once its node is back on the

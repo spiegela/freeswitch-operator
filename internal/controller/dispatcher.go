@@ -113,6 +113,27 @@ func parseDispatcherURIs(list string, setID int32) []string {
 	return out
 }
 
+// dispatcherHosts are the hosts of dispatcher destinations (sip:<host>[:<port>][;params]), each once.
+func dispatcherHosts(uris []string) []string {
+	var out []string
+	for _, u := range uris {
+		_, rest, ok := strings.Cut(u, ":")
+		if !ok {
+			continue
+		}
+		rest, _, _ = strings.Cut(rest, ";")
+		host := rest
+		if h, _, err := net.SplitHostPort(rest); err == nil {
+			host = h
+		}
+		host = strings.Trim(host, "[]")
+		if host != "" && !slices.Contains(out, host) {
+			out = append(out, host)
+		}
+	}
+	return out
+}
+
 // removedURIs are in old but not in new.
 func removedURIs(old, cur []string) []string {
 	keep := map[string]bool{}
@@ -142,7 +163,15 @@ type DispatcherNotifier interface {
 	// wraps errListNotLoaded: the kubelet has not yet written the new file into that pod, and a later reload will
 	// pick it up. Destinations Kamailio held inactive before the reload stay inactive, if still listed.
 	Reload(ctx context.Context, want map[int32][]string) error
+	// Admit lets requests from these addresses past Kamailio's trusted-peer check at once (htable.seti on
+	// kamailioAdmittedTable), ahead of the reload that puts them in the dispatcher list Kamailio checks: a node a
+	// pod has just moved to, with calls, would otherwise have its in-dialog requests dropped until then.
+	Admit(ctx context.Context, addrs []string) error
 }
+
+// kamailioAdmittedTable is the htable of addresses the operator has admitted (Admit); entries expire on their own,
+// once the dispatcher list has long covered them.
+const kamailioAdmittedTable = "admitted"
 
 // errListNotLoaded means Kamailio reloaded but still holds another list than the one the operator wrote.
 var errListNotLoaded = errors.New("kamailio has not loaded the current dispatcher list")
@@ -175,6 +204,14 @@ func (e *rpcError) Error() string {
 
 func (n *jsonrpcNotifier) SetInactive(ctx context.Context, setID int32, uri string) error {
 	return n.call(ctx, "dispatcher.set_state", []any{"ip", setID, uri}, nil)
+}
+
+func (n *jsonrpcNotifier) Admit(ctx context.Context, addrs []string) error {
+	errs := make([]error, 0, len(addrs))
+	for _, a := range addrs {
+		errs = append(errs, n.call(ctx, "htable.seti", []any{kamailioAdmittedTable, a, 1}, nil))
+	}
+	return errors.Join(errs...)
 }
 
 func (n *jsonrpcNotifier) Reload(ctx context.Context, want map[int32][]string) error {

@@ -564,6 +564,12 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 	if !notifies || status.DispatcherReloadedHash == status.DispatcherHash {
 		return 0, nil
 	}
+	if notifier != nil {
+		// Best effort: the reload below covers these too, only later.
+		if err := notifier.Admit(ctx, dispatcherHosts(parseDispatcherURIs(content, cfg.dispatcherSetID))); err != nil {
+			log.Error(err, "could not admit the fleet's addresses to Kamailio ahead of the reload")
+		}
+	}
 	delay := time.Duration(cfg.reloadDelaySecs) * time.Second
 	if status.DispatcherUpdatedAt != nil {
 		if wait := delay - r.now().Sub(status.DispatcherUpdatedAt.Time); wait > 0 {

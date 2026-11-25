@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +29,8 @@ type fakeFleet struct {
 	reads int
 	// external is each pod's external address annotation.
 	external map[string]string
+	// execDenied refuses fsctl crash, as a runner without pods/exec is refused: FreeSWITCH keeps running.
+	execDenied bool
 	// blackouts are the nodes taken dark, and until when; deleted, the pods deleted.
 	blackouts map[string]fakeBlackout
 	deleted   []string
@@ -196,6 +199,9 @@ func (f *fakeFleet) Exec(_ context.Context, pod, container string, cmd ...string
 	case container != fleet.FreeswitchContainer:
 		return "", fmt.Errorf("no container %s", container)
 	case line == "fs_cli -x fsctl crash":
+		if f.execDenied {
+			return "", errors.New(`pods "` + pod + `" is forbidden: cannot create resource "pods/exec"`)
+		}
 		if f.restarts == nil {
 			f.restarts = map[string]int32{}
 		}
@@ -212,8 +218,10 @@ func (f *fakeFleet) Exec(_ context.Context, pod, container string, cmd ...string
 func (f *fakeFleet) Container(_ context.Context, pod, _ string) (fleet.ContainerState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return fleet.ContainerState{Restarts: f.restarts[pod], Ready: true}, nil
+	return fleet.ContainerState{Restarts: f.restarts[pod], Ready: true, Running: true}, nil
 }
+
+func (f *fakeFleet) TracksCalls(context.Context) (bool, error) { return true, nil }
 
 const longRoute = `
 detectHz: [600, 1000]
@@ -228,6 +236,9 @@ routes:
 func withFleet(r *Runner, f fleet.Fleet) *Runner {
 	r.cfg.Fleet = f
 	r.cfg.Caps["fleet"] = true
+	if tracks, _ := f.TracksCalls(context.Background()); tracks {
+		r.cfg.Caps[scenario.CallTrackingCapability] = true
+	}
 	return r
 }
 
@@ -436,7 +447,7 @@ func TestParseRecovered(t *testing.T) {
 
 const crashRecoverScenario = `
 name: crash
-requires: [mock, fleet]
+requires: [mock, fleet, call-tracking]
 calls:
   - id: a
     to: long
@@ -455,6 +466,7 @@ func TestTimelineCrashesAndRecovers(t *testing.T) {
 		t.Skip("places real calls over loopback")
 	}
 	f := newFakeFleet()
+	f.external = map[string]string{"edge-0": "192.0.2.10"}
 	f.recoverOut = "Recovered 2 call(s)\n"
 	r := withFleet(startMock(t, longRoute), f)
 	res := runScenario(t, r, crashRecoverScenario)
@@ -479,6 +491,7 @@ func TestTimelineRecoverTakingOtherNodesCallsFails(t *testing.T) {
 		t.Skip("places real calls over loopback")
 	}
 	f := newFakeFleet()
+	f.external = map[string]string{"edge-0": "192.0.2.10"}
 	f.recoverOut = "Recovered 6 call(s)\n"
 	r := withFleet(startMock(t, longRoute), f)
 	s, err := scenario.Parse([]byte(crashRecoverScenario))
@@ -493,7 +506,7 @@ func TestTimelineRecoverTakingOtherNodesCallsFails(t *testing.T) {
 
 const moveScenario = `
 name: move
-requires: [mock, fleet, spare-node]
+requires: [mock, fleet, spare-node, call-tracking]
 calls:
   - id: a
     to: long
@@ -566,11 +579,101 @@ func TestTimelineMoveToAnotherAddressFails(t *testing.T) {
 	if res.Status != statusFail || !strings.Contains(strings.Join(res.Failures, "\n"), `holds "192.0.2.11", not "192.0.2.10"`) {
 		t.Errorf("got %s: %v", res.Status, res.Failures)
 	}
-	// The crashed FreeSWITCH's calls are flushed from the table on the way out.
+	// The crashed FreeSWITCH's rows are under the old address's profiles, which a flush in the replacement can't
+	// reach: none is run, and the timeline says the rows stay.
+	if want := []string{"edge-0: fs_cli -x fsctl crash"}; fmt.Sprint(f.execs) != fmt.Sprint(want) {
+		t.Errorf("ran %q, want %q", f.execs, want)
+	}
+	if tl := strings.Join(res.Timeline, "\n"); !strings.Contains(tl, `cleanup: edge-0's calls stay in the recovery table under profiles named for 192.0.2.10`) {
+		t.Errorf("timeline:\n%s", tl)
+	}
+}
+
+// A move that isn't followed by a recover leaves the crashed FreeSWITCH's calls in the table: cleanup flushes them
+// in the replacement, which runs the same profiles.
+func TestTimelineMoveWithoutRecoverFlushes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	f := newFakeFleet()
+	f.spare = "n3"
+	f.external = map[string]string{"edge-0": "192.0.2.10"}
+	r := withFleet(startMock(t, longRoute), f)
+	r.cfg.Caps[scenario.SpareNodeCapability] = true
+	runScenario(t, r, strings.Replace(moveScenario, "  - {recoverOn: a}\n", "", 1))
 	if want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: fs_cli -x sofia recover flush"}; fmt.Sprint(f.execs) != fmt.Sprint(want) {
 		t.Errorf("ran %q, want %q", f.execs, want)
 	}
-	if tl := strings.Join(res.Timeline, "\n"); !strings.Contains(tl, "cleanup: flushed edge-0's calls from the recovery table") {
-		t.Errorf("timeline:\n%s", tl)
+}
+
+// A crash that never happens (the runner may not exec) says why, and a move then deletes nothing: deleting the pod
+// would stop FreeSWITCH gracefully and hang its calls up.
+func TestTimelineCrashThatDoesntHappenFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	defer func(d time.Duration) { crashSeen = d }(crashSeen)
+	crashSeen = time.Second
+	for _, tc := range []struct{ name, scenario string }{{"crash", crashRecoverScenario}, {"move", moveScenario}} {
+		f := newFakeFleet()
+		f.spare, f.execDenied = "n3", true
+		f.external = map[string]string{"edge-0": "192.0.2.10"}
+		r := withFleet(startMock(t, longRoute), f)
+		r.cfg.Caps[scenario.SpareNodeCapability] = true
+		s, err := scenario.Parse([]byte(tc.scenario))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res := r.Run(context.Background(), s)
+		if got := strings.Join(res.Failures, "\n"); res.Status != statusFail || !strings.Contains(got, "didn't crash") || !strings.Contains(got, "forbidden") {
+			t.Errorf("%s: got %s: %v", tc.name, res.Status, res.Failures)
+		}
+		if len(f.deleted) != 0 || slices.ContainsFunc(f.execs, func(e string) bool { return strings.Contains(e, "flush") }) {
+			t.Errorf("%s: acted on a crash that didn't happen: deleted %q, ran %q", tc.name, f.deleted, f.execs)
+		}
+	}
+}
+
+// A recover whose answer can't be read isn't known to have run: cleanup still flushes the pod's rows.
+func TestTimelineUnreadableRecoverStillFlushes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	f := newFakeFleet()
+	f.recoverOut = "-ERR no reply\n"
+	f.external = map[string]string{"edge-0": "192.0.2.10"}
+	r := withFleet(startMock(t, longRoute), f)
+	s, err := scenario.Parse([]byte(crashRecoverScenario))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := r.Run(context.Background(), s)
+	if res.Status != statusFail {
+		t.Errorf("got %s", res.Status)
+	}
+	if want := "edge-0: fs_cli -x sofia recover flush"; !slices.Contains(f.execs, want) {
+		t.Errorf("ran %q, want %q among them", f.execs, want)
+	}
+}
+
+// A pod with no external address can't be moved: there would be nothing to check its replacement against.
+func TestTimelineMoveWithoutAnAddressFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	f := newFakeFleet()
+	f.spare = "n3"
+	r := withFleet(startMock(t, longRoute), f)
+	r.cfg.Caps[scenario.SpareNodeCapability] = true
+	s, err := scenario.Parse([]byte(moveScenario))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := r.Run(context.Background(), s)
+	if res.Status != statusFail || !strings.Contains(strings.Join(res.Failures, "\n"), "has no external address") {
+		t.Errorf("got %s: %v", res.Status, res.Failures)
+	}
+	if len(f.execs) != 0 || len(f.deleted) != 0 {
+		t.Errorf("acted anyway: ran %q, deleted %q", f.execs, f.deleted)
 	}
 }

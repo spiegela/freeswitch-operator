@@ -406,13 +406,18 @@ type Action struct {
 	// MoveFreeswitchOf moves the pod that carries the named call to a spare edge node, as a lost node's would be:
 	// it cordons the call's node, crashes FreeSWITCH there (no drain, the calls left in the recovery table) and
 	// deletes the pod at once. The action ends once the replacement is up on another node, and fails unless it
-	// holds the same external address. It needs the "spare-node" capability.
+	// holds the same external address. It needs the "spare-node" and "call-tracking" capabilities.
 	MoveFreeswitchOf string `yaml:"moveFreeswitchOf,omitempty"`
 }
 
 // SpareNodeCapability is what a run must provide for MoveFreeswitchOf: an edge node the fleet doesn't use, which
 // a moved pod can go to.
 const SpareNodeCapability = "spare-node"
+
+// CallTrackingCapability is what a run must provide for CrashFreeswitchOf, RecoverOn and MoveFreeswitchOf: a fleet
+// that keeps its calls in a shared recovery table (TRACK_CALLS and CORE_DB_DSN in its env). Without it a crash only
+// drops the node's calls. The runner offers it when the fleet's spec says so.
+const CallTrackingCapability = "call-tracking"
 
 // LiveKitCapability is what a run must provide for expect.livekit: the edge sends calls to lk numbers to LiveKit
 // SIP, which takes them into the room of the bench's stand-in agent (cmd/lkagent), and the runner can ask the agent
@@ -821,12 +826,17 @@ func (s *Scenario) validateRepeats() error {
 		if b := c.Expect.Backend; b != nil && repeated[b.OtherNodeThan] {
 			return fmt.Errorf("call %q: otherNodeThan names a repeated call", c.ID)
 		}
-
 	}
 	for i, a := range s.Actions {
 		refs := []string{a.AfterAnswered, a.AfterEnded, a.DrainNodeOf, a.Hangup, a.CrashFreeswitchOf, a.RecoverOn, a.MoveFreeswitchOf}
 		if a.WaitMember != nil {
 			refs = append(refs, a.WaitMember.Of)
+		}
+		if a.BlackoutNodeOf != nil {
+			refs = append(refs, a.BlackoutNodeOf.Of)
+		}
+		if a.WaitNode != nil {
+			refs = append(refs, a.WaitNode.Of)
 		}
 		for _, call := range refs {
 			if repeated[call] {
@@ -972,8 +982,12 @@ func (s *Scenario) validateActions(calls map[string]bool) error { //nolint:gocyc
 				return fmt.Errorf("%s: blackoutNodeOf needs requires: [%s]", label, BlackoutCapability)
 			}
 		case a.MoveFreeswitchOf != "":
-			if !slices.Contains(s.Requires, SpareNodeCapability) {
-				return fmt.Errorf("%s: moveFreeswitchOf needs requires: [%s]", label, SpareNodeCapability)
+			if !slices.Contains(s.Requires, SpareNodeCapability) || !slices.Contains(s.Requires, CallTrackingCapability) {
+				return fmt.Errorf("%s: moveFreeswitchOf needs requires: [%s, %s]", label, SpareNodeCapability, CallTrackingCapability)
+			}
+		case a.CrashFreeswitchOf != "" || a.RecoverOn != "":
+			if !slices.Contains(s.Requires, CallTrackingCapability) {
+				return fmt.Errorf("%s: crashFreeswitchOf and recoverOn need requires: [%s]", label, CallTrackingCapability)
 			}
 		case a.WaitNode != nil:
 			if !calls[a.WaitNode.Of] {

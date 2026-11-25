@@ -22,8 +22,8 @@ spec:
   sip:
     port: 5060                      # the profile Kamailio dispatches to
   rtp:
-    portRangeStart: 16384           # must match the node security group
-    portRangeEnd: 32768
+    portRangeStart: 16384           # must match the node security group; with a pool's bind address both legs of a
+    portRangeEnd: 32768             # call draw from that one address, so size it for twice the calls a node takes
   externalAddress:
     source: NodeExternalIP          # NodeExternalIP | AddressPool | None
     # addressPoolRef: {name: edge-media}   # with AddressPool: a SIPAddressPool (address-pools.md)

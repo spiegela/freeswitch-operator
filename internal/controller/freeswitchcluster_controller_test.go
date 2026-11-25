@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -49,12 +50,24 @@ type fakeNotifier struct {
 	loaded   map[int32][]string // the sets the last reload asked for
 	token    string             // the bearer token the notifier was built with
 	stale    int                // reloads still to come that find the old file, as before the kubelet syncs it
+	admitted []string           // addresses admitted ahead of a reload, each once
 }
 
 func (f *fakeNotifier) SetInactive(_ context.Context, setID int32, uri string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inactive = append(f.inactive, fmt.Sprintf("%d %s", setID, uri))
+	return nil
+}
+
+func (f *fakeNotifier) Admit(_ context.Context, addrs []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, a := range addrs {
+		if !slices.Contains(f.admitted, a) {
+			f.admitted = append(f.admitted, a)
+		}
+	}
 	return nil
 }
 

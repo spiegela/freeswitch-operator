@@ -26,20 +26,34 @@ fleet. So a node that has stopped answering leaves rotation after two missed pro
 last node is passed on as `503`.
 
 **The route back from FreeSWITCH.** With a bind address of its own (an [address pool](address-pools.md) that gives
-it one), Kamailio advertises its pod's DNS name to FreeSWITCH instead of the node's address:
-`<pod>.<name>-kamailio.<namespace>.svc.<cluster domain>`, from the pod's headless Service, which publishes pods that
-aren't ready too, so the name lasts through a drain and comes back as soon as a replacement has its address. A call
-FreeSWITCH recovers on a spare after a node is lost, Kamailio with it (both on one node, as on a one-node cluster),
-sends its re-INVITE and BYE to the name, which reaches Kamailio's replacement. Without a bind address Kamailio has
-one listener and advertises its public address on both sides: a pool's address moves with the pod. The start script
-finds the cluster domain in the pod's DNS search list, and falls back to the address if it can't.
+it one), Kamailio advertises its pod's route name to FreeSWITCH instead of the node's address:
+`<pod>.<name>-kamailio-route.<namespace>.svc.<cluster domain>`. The operator keeps these names itself, in a headless
+Service with no selector and an EndpointSlice it writes: each name points at the pod's address, and keeps the last
+one while the pod has none. So a Kamailio restarting in place is found where it was, and FreeSWITCH's in-dialog
+requests retransmit until it answers, rather than failing at once on a name that doesn't resolve; and a replacement
+on another node is found as soon as it has its address. A call FreeSWITCH recovers on a spare after Kamailio's node
+is lost (both on one node, as on a one-node cluster) sends its re-INVITE and BYE to the name, which reaches
+Kamailio's replacement once there is one: a StatefulSet replaces a pod on a lost node only once that pod is deleted
+(by hand, or by whatever fences the node), and until then the name keeps the lost node's address. Without a bind
+address Kamailio has one listener and advertises its public address on both sides: a pool's address moves with the
+pod. The start script finds the cluster domain in the pod's DNS search list, and falls back to the address if it
+can't.
+
+Kamailio takes its route name as its own whether or not it advertises it (an `alias`), so calls set up through the
+name keep routing through the pod after a restart that came up without a bind address. A Kamailio from before this
+was built doesn't know the name: rolling the operator back while calls set up through the name are up loses their
+in-dialog requests (each loops back into Kamailio until `483`, or is dropped as untrusted), so let those calls end
+first.
 
 ## What it refuses
 
 - **Untrusted sources,** with `spec.trustedPeers` set (each a named list of CIDRs). Only those sources and the
   fleet's own FreeSWITCH nodes get any answer. A request from anywhere else, in a dialog or not, is dropped before
   Kamailio answers anything, so a scanner learns nothing and a forged route set can't make Kamailio relay for a
-  stranger. Empty trusts every source. It guards signaling only: carriers send media straight to FreeSWITCH, often
+  stranger. Empty trusts every source. The fleet's nodes are the dispatcher list's, which Kamailio reloads only
+  `reloadDelaySeconds` after the operator writes it (the kubelet's time to update the mounted file): so the operator
+  also admits each listed node's address at once, over JSON-RPC (`htable.seti admitted`, entries kept 15 minutes),
+  and a FreeSWITCH that has just moved to a new node, with calls, isn't dropped meanwhile. It guards signaling only: carriers send media straight to FreeSWITCH, often
   from other addresses (Twilio signals from `/30`s per edge and sends media from `168.86.128.0/18`), so the firewall
   in front of the FreeSWITCH nodes' RTP range must admit those. The list is in the rendered config, so changing it
   rolls the fleet.

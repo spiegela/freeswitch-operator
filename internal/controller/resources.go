@@ -377,13 +377,15 @@ func bindAddressEnv(source sipv1alpha1.ExternalAddressSource) []corev1.EnvVar {
 	return []corev1.EnvVar{{Name: "FS_BIND_ADDRESS_FILE", Value: bindAddrFile}}
 }
 
-// addressWaitContainers holds FreeSWITCH back until the pod knows its external address, for a fleet that draws
-// from a SIPAddressPool and requires one. FreeSWITCH reads the address once, at start, and a pool binds it only after
-// the pod is on its node, which can take seconds (an Elastic IP association); started sooner, FreeSWITCH would
-// advertise the wrong address for its whole life. The wait has no limit: a pool with no address left keeps the pod
-// here, unready, and reports Degraded. Nil for other fleets, so their pod template, and the fleet, stay as they were.
+// addressWaitContainers holds FreeSWITCH back until the pod knows its external address, for a fleet that requires
+// one (from its node or from a SIPAddressPool). FreeSWITCH reads the address once, at start, and the operator writes
+// it only after the pod is on its node, a pool only once it has bound one there, which can take seconds (an Elastic
+// IP association); started sooner, FreeSWITCH would advertise the wrong address, and a config that names its
+// profiles for the address (sipbench's, for call recovery) would run under names other nodes share, for its whole
+// life. The wait has no limit: a pool with no address left, or a node with no ExternalIP, keeps the pod here,
+// unready, and reports Degraded. Nil for a fleet that doesn't require an address, or takes none.
 func addressWaitContainers(fsc *sipv1alpha1.FreeswitchCluster, cfg settings) []corev1.Container {
-	if cfg.addressSource != sipv1alpha1.ExternalAddressAddressPool || !cfg.requireAddress {
+	if cfg.addressSource == sipv1alpha1.ExternalAddressNone || !cfg.requireAddress {
 		return nil
 	}
 	return []corev1.Container{{

@@ -12,7 +12,7 @@ description: >
   ones after a gap of the restart's length. Needs call tracking (TRACK_CALLS, CORE_DB_DSN), as on kind. Each run
   crashes a pod, and the kubelet backs off restarting a container that keeps failing (10 s, then 20 s, then 40 s,
   until it has run for ten minutes): a fourth run within ten minutes that lands on the same pod waits too long.
-requires: [mock, fleet]
+requires: [mock, fleet, call-tracking]
 timeoutMs: 240000
 backend:
   routes:

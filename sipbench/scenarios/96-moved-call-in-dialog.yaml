@@ -16,7 +16,7 @@ description: >
   scaled down in place leaves the freed node an idle address, which the pool gives the moved pod instead of its
   own). Kamailio's part, a route back through its pod's name for a Kamailio lost with the node, is checked by
   make check-kamailio-name: on kind, Kamailio runs on nodes of its own.
-requires: [mock, fleet, spare-node]
+requires: [mock, fleet, spare-node, call-tracking]
 timeoutMs: 300000
 backend:
   routes:

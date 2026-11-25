@@ -36,20 +36,26 @@ addr=""
 bind=""
 [ -s ` + bindAddrFile + ` ] && bind=$(cat ` + bindAddrFile + `)
 set -- -A "PUBLIC_ADDR=$addr" -A "PRIVATE_ADDR=$POD_IP"
+# The pod's route name, which the operator keeps in DNS: with a bind address FreeSWITCH gets it in Record-Route, not
+# the node's address, so a call another node recovers routes back through this pod's replacement, wherever it
+# runs. It is one of Kamailio's own names either way, so a dialog that recorded it still routes through this pod
+# after a restart that came up without one. The cluster domain is the one in our search list.
+name=""
+domain=$(awk -v ns="${POD_NAMESPACE:-}.svc." '$1 == "search" { for (i = 2; i <= NF; i++) if (index($i, ns) == 1) { print $i; exit } }' /etc/resolv.conf 2>/dev/null || true)
+if [ -n "${POD_NAMESPACE:-}" ] && [ -n "$domain" ] && [ -n "${KAMAILIO_SERVICE:-}" ]; then
+  name="$POD_NAME.$KAMAILIO_SERVICE.$domain"
+  # Quoted, so Kamailio's config parser reads it as a string: a label such as "default" is one of its keywords.
+  set -- "$@" -A "PRIVATE_NAME=\"$name\""
+fi
 if [ -n "$bind" ] && [ "$bind" != "$POD_IP" ]; then
   set -- "$@" -A "BIND_ADDR=$bind"
-  # FreeSWITCH gets this pod's DNS name in Record-Route, not the node's address: a call another node recovers
-  # routes back through this pod's replacement, wherever it runs. The cluster domain is the one in our search list.
-  domain=$(awk -v ns="${POD_NAMESPACE}.svc." '$1 == "search" { for (i = 2; i <= NF; i++) if (index($i, ns) == 1) { print $i; exit } }' /etc/resolv.conf 2>/dev/null || true)
-  if [ -n "$domain" ] && [ -n "${KAMAILIO_SERVICE:-}" ]; then
-    name="$POD_NAME.$KAMAILIO_SERVICE.$domain"
-    set -- "$@" -A "PRIVATE_NAME=$name"
+  if [ -n "$name" ]; then
     echo "freeswitch-operator: advertising $addr, peers on $bind, nodes on $POD_IP as $name, JSON-RPC on $POD_IP"
   else
-    echo "freeswitch-operator: advertising $addr, peers on $bind, nodes and JSON-RPC on $POD_IP (no cluster domain in /etc/resolv.conf)"
+    echo "freeswitch-operator: advertising $addr, peers on $bind, nodes and JSON-RPC on $POD_IP (no pod name: no cluster domain in /etc/resolv.conf, or no POD_NAMESPACE or KAMAILIO_SERVICE)"
   fi
 else
-  echo "freeswitch-operator: advertising $addr, JSON-RPC on $POD_IP:$KAMAILIO_RPC_PORT"
+  echo "freeswitch-operator: advertising $addr, JSON-RPC on $POD_IP:$KAMAILIO_RPC_PORT${name:+, known as $name}"
 fi
 exec kamailio -DD -E -m "${KAMAILIO_SHM_MB:-128}" -M "${KAMAILIO_PKG_MB:-16}" "$@" -f ` + kamailioConfigFile + `
 `

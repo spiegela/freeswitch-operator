@@ -261,6 +261,47 @@ func TestDecideForgetsAMovedPodsOlderAddress(t *testing.T) {
 	}
 }
 
+// An address the provider can't report on is still its pod's: the pod's older address forgets it all the same.
+func TestDecideForgetsAnOlderAddressWhileTheHeldOneErrs(t *testing.T) {
+	p := Decide(Input{Observed: []Address{addr("eip1", ""), {ID: "eip2", Err: errors.New("throttled")}}, Nodes: nodes("a", "b"),
+		Previous: []sipv1alpha1.PoolAddress{
+			{ID: "eip1", Address: "203.0.113.1", State: sipv1alpha1.PoolAddressFree, LastClaimedBy: []sipv1alpha1.AddressClaim{claim("edge-0")}},
+			{ID: "eip2", Address: "203.0.113.2", State: sipv1alpha1.PoolAddressBound, Node: "b", NodeID: "i-b",
+				ClaimedBy: []sipv1alpha1.AddressClaim{claim("edge-0")}, LastClaimedBy: []sipv1alpha1.AddressClaim{claim("edge-0")}},
+		},
+		Claimants: []Claimant{claimant("edge-0", "b")},
+	})
+	if got := p.Status[0].LastClaimedBy; len(got) != 0 {
+		t.Errorf("eip1 still remembers %v", got)
+	}
+	if got := p.Status[1].LastClaimedBy; len(got) != 1 || got[0].Pod != "edge-0" {
+		t.Errorf("eip2, in Error: %v", got)
+	}
+}
+
+// An address in Error keeps the claim it had before the provider failed. Once its pod has left that node, the claim
+// is stale: it must not make the pod forget the address it used since, which it should get back on its next node.
+func TestDecideStaleErrorClaimKeepsTheMovedPodsAddress(t *testing.T) {
+	p := Decide(Input{Observed: []Address{{ID: "eip1", Err: errors.New("no such Elastic IP")}, addr("eip2", "")}, Nodes: nodes("a", "b", "c"),
+		Previous: []sipv1alpha1.PoolAddress{
+			{ID: "eip1", Address: "203.0.113.1", State: sipv1alpha1.PoolAddressError, Node: "a", NodeID: "i-a",
+				ClaimedBy: []sipv1alpha1.AddressClaim{claim("edge-0")}, LastClaimedBy: []sipv1alpha1.AddressClaim{claim("edge-0")}},
+			{ID: "eip2", Address: "203.0.113.2", State: sipv1alpha1.PoolAddressFree, LastClaimedBy: []sipv1alpha1.AddressClaim{claim("edge-0")}},
+		},
+		// edge-0 has left b and isn't scheduled anywhere yet.
+	})
+	if got := p.Status[1].LastClaimedBy; len(got) != 1 || got[0].Pod != "edge-0" {
+		t.Fatalf("eip2 forgot edge-0: %v", got)
+	}
+	p = Decide(Input{Observed: []Address{{ID: "eip1", Err: errors.New("no such Elastic IP")}, addr("eip2", ""), addr("eip3", "")}, Nodes: nodes("a", "b", "c"),
+		Previous:  p.Status,
+		Claimants: []Claimant{claimant("edge-0", "c")},
+	})
+	if got := p.Status[1]; got.Node != "c" {
+		t.Errorf("edge-0 on c got another address than its last one: %s", summary(p))
+	}
+}
+
 // A refused node gets no new address and waits, with why; one it already holds stays.
 func TestDecideRefused(t *testing.T) {
 	in := Input{

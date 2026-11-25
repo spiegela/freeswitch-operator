@@ -94,6 +94,13 @@ func TestRenderAndParseDispatcherList(t *testing.T) {
 	}
 }
 
+func TestDispatcherHosts(t *testing.T) {
+	got := dispatcherHosts([]string{"sip:10.0.0.1:5060", "sip:10.0.0.2;transport=udp", "sip:[2001:db8::1]:5060", "sip:10.0.0.1:5080", "nonsense"})
+	if want := []string{"10.0.0.1", "10.0.0.2", "2001:db8::1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
 func TestRemovedURIs(t *testing.T) {
 	got := removedURIs([]string{"a", "b", "c"}, []string{"b", "d"})
 	if !reflect.DeepEqual(got, []string{"a", "c"}) {
@@ -378,6 +385,13 @@ func TestJSONRPCNotifier(t *testing.T) {
 		t.Fatalf("set_state params %v", params)
 	}
 
+	if err := n.Admit(ctx, []string{"10.0.0.3"}); err != nil {
+		t.Fatal(err)
+	}
+	if c := k.calls[len(k.calls)-1]; c["method"] != "htable.seti" || !reflect.DeepEqual(c["params"], []any{kamailioAdmittedTable, "10.0.0.3", float64(1)}) {
+		t.Fatalf("admit: %v", c)
+	}
+
 	want := []string{"sip:10.0.0.2:5060", "sip:10.0.0.1:5060"}
 	if err := n.Reload(ctx, map[int32][]string{1: want}); !errors.Is(err, errListNotLoaded) {
 		t.Fatalf("the kubelet hasn't written the file yet, so Kamailio holds nothing: want errListNotLoaded, got %v", err)
@@ -485,7 +499,8 @@ func TestJSONRPCNotifierSendsTheToken(t *testing.T) {
 func TestBuildStatefulSetExporter(t *testing.T) {
 	fsc := &sipv1alpha1.FreeswitchCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "edge", Namespace: "telephony"},
-		Spec:       sipv1alpha1.FreeswitchClusterSpec{Image: "freeswitch:test"},
+		// No external address, so no address wait: the exporter is the only init container there may be.
+		Spec: sipv1alpha1.FreeswitchClusterSpec{Image: "freeswitch:test", ExternalAddress: sipv1alpha1.ExternalAddressSpec{Source: sipv1alpha1.ExternalAddressNone}},
 	}
 	if n := len(buildStatefulSet(fsc, configLayout{mountPath: configDir}).Spec.Template.Spec.InitContainers); n != 0 {
 		t.Fatalf("no spec.metrics: %d init containers, want none", n)
@@ -529,7 +544,7 @@ func TestBuildStatefulSetExporter(t *testing.T) {
 	}
 }
 
-func TestAddressWaitOnlyForRequiredPoolAddresses(t *testing.T) {
+func TestAddressWaitOnlyForRequiredAddresses(t *testing.T) {
 	waits := func(mutate func(*sipv1alpha1.FreeswitchCluster)) []corev1.Container {
 		fsc := testCluster()
 		mutate(fsc)
@@ -569,9 +584,14 @@ func TestAddressWaitOnlyForRequiredPoolAddresses(t *testing.T) {
 		t.Errorf("init containers %v, want the wait first", []string{inits[0].Name, inits[len(inits)-1].Name})
 	}
 
-	// Other fleets' templates are unchanged, so upgrading the operator doesn't roll them.
-	if got := waits(func(*sipv1alpha1.FreeswitchCluster) {}); len(got) != 0 {
-		t.Error("NodeExternalIP fleet got a wait container")
+	// The node's own address is written after scheduling too.
+	if got := waits(func(*sipv1alpha1.FreeswitchCluster) {}); len(got) != 1 {
+		t.Error("NodeExternalIP fleet got no wait container")
+	}
+	if got := waits(func(f *sipv1alpha1.FreeswitchCluster) {
+		f.Spec.ExternalAddress.Source = sipv1alpha1.ExternalAddressNone
+	}); len(got) != 0 {
+		t.Error("fleet with no external address got a wait container")
 	}
 	if got := waits(func(f *sipv1alpha1.FreeswitchCluster) {
 		pool(f)

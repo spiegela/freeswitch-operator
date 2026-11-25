@@ -180,6 +180,10 @@ func (f *fanoutNotifier) SetInactive(ctx context.Context, setID int32, uri strin
 	return f.each(func(n DispatcherNotifier) error { return n.SetInactive(ctx, setID, uri) })
 }
 
+func (f *fanoutNotifier) Admit(ctx context.Context, addrs []string) error {
+	return f.each(func(n DispatcherNotifier) error { return n.Admit(ctx, addrs) })
+}
+
 func (f *fanoutNotifier) Reload(ctx context.Context, want map[int32][]string) error {
 	return f.each(func(n DispatcherNotifier) error { return n.Reload(ctx, want) })
 }
