@@ -7,7 +7,7 @@
     <load module="mod_commands"/>
     <load module="mod_dptools"/>
     <load module="mod_dialplan_xml"/>
-    <!-- spandsp: DSP helpers (tone detection, fax). This image has no G.722 codec module; see README. -->
+    <!-- spandsp: DSP helpers (tone detection, fax) and the G.722 codec. -->
     <load module="mod_spandsp"/>
     <load module="mod_tone_stream"/>
     <load module="mod_sndfile"/>

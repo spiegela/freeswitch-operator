@@ -7,8 +7,8 @@ page covers setting tracking up and what failover still needs.
 
 ## What it takes
 
-- **An image with `mod_pgsql`.** drachtio's image leaves it out. The project's own,
-  `ghcr.io/spiegela/freeswitch` ([`images/freeswitch`](../images/freeswitch/Dockerfile)), adds it. Pin it by
+- **An image with `mod_pgsql`.** The project's own, `ghcr.io/spiegela/freeswitch`
+  ([`images/freeswitch`](../images/freeswitch/Dockerfile)), has it. Pin it by
   digest in `spec.image`, or build it yourself:
 
   ```sh
@@ -190,15 +190,16 @@ When a node is lost, the plan is:
    re-INVITE built from the leg's saved dialog (Contact, Via, route), from the moved address, and bridges the legs
    again.
 
-**Recovery takes one address's calls.** As FreeSWITCH 1.10.10 has it, `sofia recover` takes over every row another
-FreeSWITCH wrote (`runtime_uuid != own`) under the name of a profile it runs, and deletes them. It never looks at
-which node wrote a row. With each profile named for its node's address (step 5 above), that is exactly the calls of
-the address the recovering node holds. A node whose FreeSWITCH restarts in place (a crash, an OOM kill) keeps its
-address, so `sofia recover` there takes back its own calls and nothing else. sipbench's `crash-recovers-own-calls`
-checks it on kind: it crashes FreeSWITCH under a call, recovers on that node, and checks that the recover took
-exactly that node's legs and that every call on every node is still up with audio both ways. A call recovered in
-place is re-invited from the same node and address, so its in-dialog SIP needs nothing new. Recovery skips a row
-whose profile the recovering node doesn't run: on failover, the spare must come up holding the lost address.
+**Recovery takes one address's calls.** As FreeSWITCH has it (1.10.10 through 1.11.4), `sofia recover` takes over
+every row another FreeSWITCH wrote (`runtime_uuid != own`) under the name of a profile it runs, and deletes them. It
+never looks at which node wrote a row. With each profile named for its node's address (step 5 above), that is
+exactly the calls of the address the recovering node holds. A node whose FreeSWITCH restarts in place (a crash, an
+OOM kill) keeps its address, so `sofia recover` there takes back its own calls and nothing else. sipbench's
+`crash-recovers-own-calls` checks it on kind: it crashes FreeSWITCH under a call, recovers on that node, and checks
+that the recover took exactly that node's legs and that every call on every node is still up with audio both ways. A
+call recovered in place is re-invited from the same node and address, so its in-dialog SIP needs nothing new.
+Recovery skips a row whose profile the recovering node doesn't run: on failover, the spare must come up holding the
+lost address.
 
 **In-dialog SIP follows a recovered call to its new node.** The re-INVITEs recovery sends carry the recovering
 node's Contact (its own address), so both far ends send their next requests there: the carrier's through Kamailio,

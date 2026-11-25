@@ -58,9 +58,9 @@ the same pieces by hand:
 - FreeSWITCH's core db and per-call tracking in a PostgreSQL shared by the whole fleet: the groundwork for failover.
 - SIP profiles named for each node's address (`trunks-<address>`, alias `trunks`), so `sofia recover` takes one
   address's calls and never a live node's: a node whose FreeSWITCH restarts takes back its own calls.
-- `ghcr.io/spiegela/freeswitch` ([`images/freeswitch`](images/freeswitch/Dockerfile)): drachtio's FreeSWITCH build
-  plus `mod_pgsql` and the project's own speech detector, cut down to what the edge runs (190 MB, from drachtio's
-  1.5 GB).
+- `ghcr.io/spiegela/freeswitch` ([`images/freeswitch`](images/freeswitch/Dockerfile)): FreeSWITCH 1.11.4, built
+  from source ([`images/freeswitch-base`](images/freeswitch-base/Dockerfile)) with `mod_pgsql`, G.722, `mod_lua` and
+  `mod_opusfile`, plus the project's own speech detector, cut down to what the edge runs (154 MB).
 
 **Barge-in voice detection** ([details](docs/barge-in.md))
 - A per-call switch between detecting the caller's speech at the edge and leaving it to the agent behind LiveKit.
@@ -208,15 +208,17 @@ Features still to come, each with the stories that make it up.
    | --- | --- |
    | `ghcr.io/spiegela/freeswitch-operator` | The operator, and the address agent |
    | `ghcr.io/spiegela/freeswitch-exporter` | The FreeSWITCH metrics exporter, versioned apart so an operator upgrade never rolls a fleet |
-   | `ghcr.io/spiegela/freeswitch` | FreeSWITCH: drachtio's public build of 1.10.10 plus `mod_pgsql` for call tracking and `mod_speech_detect` for barge-in, without jambonz's modules ([`images/freeswitch`](images/freeswitch/Dockerfile)) |
+   | `ghcr.io/spiegela/freeswitch-base` | FreeSWITCH 1.11.4 built from source, with its compilers and headers: what the image below builds on ([`images/freeswitch-base`](images/freeswitch-base/Dockerfile)) |
+   | `ghcr.io/spiegela/freeswitch` | FreeSWITCH 1.11.4 with `mod_pgsql` for call tracking and `mod_speech_detect` for barge-in, cut down for an edge ([`images/freeswitch`](images/freeswitch/Dockerfile)) |
    | `ghcr.io/spiegela/sipbench` | The test bench: the runner, the mock backend and the stand-in LiveKit agent |
 
-   A release is tagged `latest` and `sha-<commit>`, and a `v*` git tag adds its version. The FreeSWITCH image builds
-   on drachtio's rather than FreeSWITCH from source, which leaves two small modules to compile: `mod_pgsql` and the
-   barge-in detectors (`mod_speech_detect`, Apache-2.0, on Silero VAD and ONNX Runtime, both MIT). It leaves out
-   jambonz's modules (the cloud speech ones, and voice detectors licensed AGPL-3.0 outside jambonz) and the SDKs they
-   need, and strips what it keeps: 190 MB against drachtio's 1.5 GB, which every node would pull on install, upgrade
-   and failover. It has no G.722, so that scenario is skipped.
+   A release is tagged `latest` and `sha-<commit>`, and a `v*` git tag adds its version. FreeSWITCH is the project's
+   own build: the base image compiles FreeSWITCH 1.11.4 from SignalWire's source on Debian bookworm, with sofia-sip,
+   spandsp and libfvad from theirs, each pinned by tag and commit. It builds only the modules an edge uses, plus G.722
+   (`mod_spandsp`), `mod_lua` and `mod_opusfile`, and leaves out video. The edge's image compiles the barge-in
+   detectors against it (`mod_speech_detect`, Apache-2.0, on Silero VAD and ONNX Runtime, both MIT) and strips what
+   it keeps: 154 MB, which every node pulls on install, upgrade and failover. The base is built natively for each
+   platform (it compiles FreeSWITCH, too slow emulated), and only rebuilds when it changes.
 
    **The open-source project stands on its own.** Its images, docs and samples name only public sources. An
    organisation running the edge internally mirrors the images into its own registry (ECR, say) from its own

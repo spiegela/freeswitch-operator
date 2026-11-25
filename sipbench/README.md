@@ -461,11 +461,14 @@ A minimal SBC, deliberately small enough to read in one sitting:
 
 ### Image
 
-`drachtio/drachtio-freeswitch-mrf:0.9.6`, pinned by digest in `compose.yaml`. It's a public, multi-arch build of
-FreeSWITCH 1.10.10 that runs natively on arm64. The image's own entrypoint rewrites its config, so compose runs
-the binary directly against `freeswitch/conf`. The alternatives were worse: the common community image is
-amd64-only, and SignalWire's official packages need an account token to download. The image has no G.722 module,
-hence the G.722 skip.
+The project's own FreeSWITCH 1.11.4 image ([`images/freeswitch`](../images/freeswitch/Dockerfile)), which compose
+builds as `freeswitch:dev` on the published base (`ghcr.io/spiegela/freeswitch-base`). To try a change to the base
+itself, build it first and name it: `docker build -t freeswitch-base:dev ../images/freeswitch-base`, then
+`FREESWITCH_BASE=freeswitch-base:dev docker compose up -d --build` (or `make compose-bench FREESWITCH_BASE=build`
+from the repository root, which does both). Compose runs the binary against `freeswitch/conf`.
+
+Until 2026-11 the bench ran on drachtio's public build of 1.10.10 (`drachtio/drachtio-freeswitch-mrf:0.9.6`); the
+results above are from it.
 
 ## Conformance record
 
@@ -475,8 +478,8 @@ profiles, and which scenario checks each one. A new scenario needs an entry ther
 
 ## Known gaps
 
-- **G.722** is untested: it needs a FreeSWITCH build with `mod_g722`, plus a G.722 codec in the runner (diago has
-  none; a pure-Go encoder would do).
+- **G.722** is untested end to end: the edge has it (`mod_spandsp`, offered after G.711), but the runner has no
+  G.722 codec (diago has none; a pure-Go encoder would do), so `codec-g722` is still skipped.
 - **Early media** has a mock step (`earlyMedia`), but the runner doesn't listen before answer, so no scenario
   asserts it yet.
 - Transfers requested by the **far end** (REFER from the trunk side) and attended transfers aren't covered.

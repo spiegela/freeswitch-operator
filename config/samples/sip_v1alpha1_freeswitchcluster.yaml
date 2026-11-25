@@ -8,12 +8,10 @@ metadata:
 spec:
   # One FreeSWITCH per node; keep one spare for updates and failover.
   replicas: 3
-  # Any image with freeswitch, fs_cli and /bin/sh. This public image (FreeSWITCH 1.10.10, amd64 and arm64)
-  # is the one sipbench's compose bench tests against. For call tracking use the project's own build of it with
-  # mod_pgsql, ghcr.io/spiegela/freeswitch (docs/call-tracking.md).
-  image: drachtio/drachtio-freeswitch-mrf:0.9.6@sha256:cb81acc1112990ca33693374f1de7443d44cf9c95e6ae6c02ba1edcee4b68bba
-  # The config below is mounted read-only, and this image's entrypoint edits its config (sed -i) before starting,
-  # so it would exit at once. Run the binary against the assembled config instead.
+  # Any image with freeswitch, fs_cli and /bin/sh. The project's own (FreeSWITCH 1.11.4 with mod_pgsql for call
+  # tracking and mod_speech_detect for barge-in, amd64 and arm64; images/freeswitch) is the one the benches test.
+  image: ghcr.io/spiegela/freeswitch:latest
+  # Run the binary against the config assembled below, mounted read-only.
   command: ["/usr/local/freeswitch/bin/freeswitch"]
   args: ["-nonat", "-nf", "-nc", "-conf", "/usr/local/freeswitch/conf", "-log", "/tmp", "-db", "/tmp"]
   nodeSelector:

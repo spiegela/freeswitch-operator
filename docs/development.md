@@ -54,7 +54,7 @@ otherwise skip.
 
 ### What the bench covers on kind
 
-Through Kamailio the bench passes everything but `codec-g722` (the image has no G.722) and `admission-limit` (it
+Through Kamailio the bench passes everything but `codec-g722` (the runner has no G.722 codec) and `admission-limit` (it
 needs the event socket of one particular node). On kind the runner also acts on the fleet (`SIPBENCH_FLEET`), so
 fleet drills run as scenarios:
 

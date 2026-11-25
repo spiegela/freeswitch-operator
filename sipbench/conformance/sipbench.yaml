@@ -127,7 +127,7 @@ cases:
     expect: A far end offering only G.722 gets G.722 end to end.
     status: partial
     scenarios: [codec-g722]
-    gap: Skipped in every run so far; the bench image has no G.722 module and the runner no G.722 codec.
+    gap: Skipped in every run so far; the edge offers G.722 (mod_spandsp) but the runner has no G.722 codec.
 
   - id: sb-admission-limit
     ref: admission-limit
