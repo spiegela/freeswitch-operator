@@ -6,13 +6,14 @@ description: >
   through the fleet (round robin, so most land on other nodes than call a's). Ten seconds in, the runner crashes
   FreeSWITCH on call a's node (fsctl crash: no drain, the calls left in the shared recovery table); the kubelet
   restarts it on the same node, with the same address and so the same profile names (trunks-<address>,
-  backend-<address>). The runner then runs `sofia recover` there, which must take exactly the legs of the calls on
-  that node: one profile per address keeps it off every other node's calls, which it used to take over and break.
+  backend-<address>), and it recovers on start (spec.recovery) before the pod turns ready. That recovery must have
+  taken exactly the legs of the calls on that node: one profile per address keeps it off every other node's calls,
+  which it used to take over and break.
   Every call must still be up at the end, with audio both ways: the other nodes' without a pause, the recovered
-  ones after a gap of the restart's length. Needs call tracking (TRACK_CALLS, CORE_DB_DSN), as on kind. Each run
+  ones after a gap of the restart's length. Needs call tracking (TRACK_CALLS, CORE_DB_DSN) and recovery on start, as on kind. Each run
   crashes a pod, and the kubelet backs off restarting a container that keeps failing (10 s, then 20 s, then 40 s,
   until it has run for ten minutes): a fourth run within ten minutes that lands on the same pod waits too long.
-requires: [mock, fleet, call-tracking]
+requires: [mock, fleet, call-recovery]
 timeoutMs: 240000
 backend:
   routes:
@@ -65,7 +66,7 @@ actions:
   - afterAnswered: d
     afterMs: 10000
     crashFreeswitchOf: a
-  - recoverOn: a
+  - expectRecovered: a
   # Long enough after recovery for audio both ways to show, well inside the media timeout (60 s).
   - afterMs: 20000
     hangup: a

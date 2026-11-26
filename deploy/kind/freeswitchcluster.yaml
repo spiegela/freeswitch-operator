@@ -49,6 +49,9 @@ spec:
       - {name: freeswitch-dialplan, path: dialplan}
       - {name: freeswitch-profiles, path: sip_profiles}
       - {name: freeswitch-bin, path: bin}
+  # Each start of FreeSWITCH (a crash restarted, a pod replaced elsewhere with the same pool address) takes back the
+  # calls tracked under its address before the pod turns ready. The profiles are named for it (bin/profile-name.sh).
+  recovery: {}
   drain:
     # Short, so a stuck drain shows up quickly here. Production allows hours.
     maxDrainSeconds: 300

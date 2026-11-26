@@ -56,10 +56,13 @@ the same pieces by hand:
 - Pool addresses stay with a node for its life and move to its replacement.
 - Providers: AWS Elastic IPs (on the node's own private address or a secondary one), and MetalLB on kind and on-prem.
 
-**Call tracking** ([setup](docs/call-tracking.md))
+**Call tracking and recovery** ([setup](docs/call-tracking.md))
 - FreeSWITCH's core db and per-call tracking in a PostgreSQL shared by the whole fleet: the groundwork for failover.
 - SIP profiles named for each node's address (`trunks-<address>`, alias `trunks`), so `sofia recover` takes one
   address's calls and never a live node's: a node whose FreeSWITCH restarts takes back its own calls.
+- Recovery on start (`spec.recovery`): a FreeSWITCH that starts takes back the calls tracked under its address
+  before its pod turns ready, after a crash or in a pod failed over to a spare with the same address. In-dialog SIP
+  follows a call recovered on another node.
 - `ghcr.io/spiegela/freeswitch` ([`images/freeswitch`](images/freeswitch/Dockerfile)): FreeSWITCH 1.11.4, built
   from source ([`images/freeswitch-base`](images/freeswitch-base/Dockerfile)) with `mod_pgsql`, G.722, `mod_lua` and
   `mod_opusfile`, plus the project's own speech detector, cut down to what the edge runs (154 MB).
@@ -159,7 +162,6 @@ layout, and [`config/samples`](config/samples/) has a sample of each resource.
 Features still to come, each with the stories that make it up.
 
 **Failover with call recovery** ([design](docs/call-tracking.md#failover-what-tracking-is-for-and-whats-left))
-- Recover a failed member's calls on the spare it moved to (dead-node detection, fencing and the move are in).
 - Have `node-lost-mid-call` check the call survives.
 - Check call tracking against a managed PostgreSQL (Aurora), through a database failover.
 

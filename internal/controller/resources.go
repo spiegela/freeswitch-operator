@@ -59,6 +59,7 @@ type settings struct {
 	liveness        *sipv1alpha1.LivenessSpec          // nil: no liveness probe
 	metrics         *sipv1alpha1.FreeswitchMetricsSpec // nil: no exporter; otherwise with defaults applied
 	failover        failoverSettings
+	recovery        bool // recover the address's calls each time FreeSWITCH starts
 }
 
 func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
@@ -119,6 +120,7 @@ func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
 		}
 	}
 	out.failover = resolveFailover(s.Failover)
+	out.recovery = s.Recovery != nil
 	if l := s.Liveness; l != nil {
 		out.liveness = &sipv1alpha1.LivenessSpec{PeriodSeconds: 30, TimeoutSeconds: 15, FailureThreshold: 10}
 		if l.PeriodSeconds != 0 {
@@ -132,6 +134,14 @@ func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
 		}
 	}
 	return out
+}
+
+// recoveryHook runs the recover script after each start of FreeSWITCH, or is nil when recovery is off.
+func recoveryHook(on bool) *corev1.LifecycleHandler {
+	if !on {
+		return nil
+	}
+	return &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + recoverScriptName}}}
 }
 
 // livenessProbe runs the live script, or is nil when liveness is off.
@@ -193,6 +203,7 @@ func buildScriptsConfigMap(fsc *sipv1alpha1.FreeswitchCluster) *corev1.ConfigMap
 			readyScriptName:   readyScript,
 			startupScriptName: startupScript,
 			liveScriptName:    liveScript,
+			recoverScriptName: recoverScript,
 		},
 	}
 }
@@ -315,7 +326,8 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		// hang it guards against. A crash needs no probe: the process exits and the container restarts.
 		LivenessProbe: livenessProbe(cfg.liveness),
 		Lifecycle: &corev1.Lifecycle{
-			PreStop: &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + drainScriptName}}},
+			PostStart: recoveryHook(cfg.recovery),
+			PreStop:   &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + drainScriptName}}},
 		},
 	}
 

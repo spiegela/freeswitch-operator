@@ -221,8 +221,8 @@ cases:
     area: resilience
     component: freeswitch
     expect: >
-      After FreeSWITCH crashes and restarts on the same node, `sofia recover` there takes exactly the legs of that
-      node's calls from the shared recovery table, not the other nodes', since each node's profiles are named for
+      After FreeSWITCH crashes and restarts on the same node, its recovery on start (`sofia recover` before the pod
+      turns ready) takes exactly the legs of that node's calls from the shared recovery table, not the other nodes', since each node's profiles are named for
       its address. Every call is still up at the end with audio both ways: the recovered ones after a gap of the
       restart's length, the others undisturbed.
     status: covered
@@ -235,7 +235,7 @@ cases:
     component: freeswitch
     expect: >
       After a call's pod is moved to a spare edge node (its FreeSWITCH crashed, the pod deleted at once, the
-      replacement on the spare with the same address), `sofia recover` there takes exactly that node's calls, and
+      replacement on the spare with the same address), its recovery on start takes exactly that node's calls, and
       their re-INVITEs move both far ends to the spare. A BYE from the caller (through Kamailio) and one from the
       backend (directly) each reach the spare, which ends the other leg. The other node's calls run on without a
       gap.

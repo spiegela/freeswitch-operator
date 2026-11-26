@@ -161,6 +161,35 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(err).To(MatchError(ContainSubstring("metrics.port must differ from sip.port")))
 	})
 
+	It("takes spec.recovery only with a required external address", func() {
+		ns := newNamespace(ctx)
+		obj := func(name string, address map[string]any) *unstructured.Unstructured {
+			spec := map[string]any{"image": "example/freeswitch:1", "recovery": map[string]any{}}
+			if address != nil {
+				spec["externalAddress"] = address
+			}
+			return &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": sipv1alpha1.GroupVersion.String(), "kind": "FreeswitchCluster",
+				"metadata": map[string]any{"name": name, "namespace": ns},
+				"spec":     spec,
+			}}
+		}
+		Expect(k8sClient.Create(ctx, obj("defaults", nil))).To(Succeed())
+		Expect(k8sClient.Create(ctx, obj("pool", map[string]any{
+			"source": "AddressPool", "addressPoolRef": map[string]any{"name": "edge-media"},
+		}))).To(Succeed())
+		Expect(k8sClient.Create(ctx, obj("node-ip-required", map[string]any{"source": "NodeExternalIP", "required": true}))).To(Succeed())
+		for name, address := range map[string]map[string]any{
+			"none":         {"source": "None"},
+			"not-required": {"required": false},
+			"pool-not-required": {
+				"source": "AddressPool", "addressPoolRef": map[string]any{"name": "edge-media"}, "required": false,
+			},
+		} {
+			Expect(k8sClient.Create(ctx, obj(name, address))).To(MatchError(ContainSubstring("recovery needs a required external address")), name)
+		}
+	})
+
 	It("creates the fleet's objects with the shape SIP media needs", func() {
 		ns := newNamespace(ctx)
 		Expect(k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {

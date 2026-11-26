@@ -35,6 +35,7 @@ spec:
   drain:
     maxDrainSeconds: 7200           # upper bound on waiting for live calls to finish
   # liveness: {}                    # opt-in hang detection (below)
+  # recovery: {}                    # opt-in: take back tracked calls when FreeSWITCH starts (call-tracking.md)
   dispatcher:
     setID: 1                        # Kamailio dispatcher set for this fleet
     configMapName: edge-dispatcher  # the operator writes dispatcher.list here
@@ -91,6 +92,9 @@ The operator renders a StatefulSet with:
     alive). It checks every 30 s with a 15 s timeout and restarts after 10 misses in a row, about five minutes of
     silence. `fs_cli` gives up two seconds before the probe does, so a slow answer is a counted miss, never a
     killed probe.
+  - **Recovery on start is opt-in** (`spec.recovery`): a `postStart` hook that waits for FreeSWITCH's SIP profiles
+    and runs `sofia recover`, so the pod turns ready only once the calls tracked under its address are back
+    ([call tracking](call-tracking.md#configure-the-freeswitchcluster)).
 - A downward-API volume of the pod's annotations, through which the operator hands the pod its external address
   ([address pools](address-pools.md)).
 

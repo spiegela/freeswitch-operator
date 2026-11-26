@@ -189,9 +189,10 @@ needs `NET_ADMIN`; compose and the kind Job provide both), `sip-trace` when the 
 own address, not a Service VIP, so a call can keep all its SIP on one socket (see Impairments below), and
 `address-pool` when the FreeswitchCluster under test draws its external address from a SIPAddressPool,
 `spare-node` when the fleet has an edge node it doesn't use, holding no pool address of its own (see
-`moveFreeswitchOf` below; the kind Job offers it: two FreeSWITCH nodes on three edge nodes), `call-tracking`,
-added with `-fleet` when the FreeswitchCluster's `spec.env` sets `TRACK_CALLS=true` and a `CORE_DB_DSN`, so its
-calls survive a crash in a shared recovery table, and
+`moveFreeswitchOf` below; the kind Job offers it: two FreeSWITCH nodes on three edge nodes), `call-recovery`,
+added with `-fleet` when the FreeswitchCluster's `spec.env` sets `TRACK_CALLS=true` and a `CORE_DB_DSN` and its
+`spec.recovery` is set, so its calls survive a crash in a shared recovery table and come back when FreeSWITCH
+starts again, and
 `node-blackout`, added by `-blackout-image` (`SIPBENCH_BLACKOUT_IMAGE`) with `-fleet`, when the runner may take an
 edge node off the network (see `blackoutNodeOf` below), and `livekit`, added by `-lkagent <url>`
 (`SIPBENCH_LKAGENT`), when calls to `lk<number>` reach LiveKit SIP and the stand-in agent below can be asked what
@@ -260,9 +261,9 @@ the RFC 4475 or ETSI texts.
 | Action | Effect |
 |---|---|
 | `drainNodeOf: <call>` | what `kubectl drain` does to the call's edge node: cordon it, evict the FreeSWITCH pod |
-| `crashFreeswitchOf: <call>` | crash FreeSWITCH in the call's pod (`fsctl crash`: no drain, its calls left in the recovery table); done once the kubelet has restarted it and it is ready, and fails if it doesn't crash. Needs `call-tracking` |
-| `recoverOn: <call>` | run `sofia recover` in the call's pod; fails unless it took exactly the legs of the scenario's live calls on that pod. Needs `call-tracking` |
-| `moveFreeswitchOf: <call>` | move the call's pod to a spare edge node, as a lost node's would move: cordon its node, crash FreeSWITCH, delete the pod at once; done once the replacement takes calls on another node, and fails unless the pod has an external address and the replacement holds the same one. Needs `spare-node` and `call-tracking` |
+| `crashFreeswitchOf: <call>` | crash FreeSWITCH in the call's pod (`fsctl crash`: no drain, its calls left in the recovery table); done once the kubelet has restarted it and it is ready, and fails if it doesn't crash. Needs `call-recovery` |
+| `expectRecovered: <call>` | check the recovery on start in the call's pod (the operator's postStart hook, which runs `sofia recover`; it writes what it did to `/tmp/freeswitch-operator-recovered`); waits for it, and fails unless it took exactly the legs of the scenario's live calls on that pod. Needs `call-recovery` |
+| `moveFreeswitchOf: <call>` | move the call's pod to a spare edge node, as a lost node's would move: cordon its node, crash FreeSWITCH, delete the pod at once; done once the replacement takes calls on another node, and fails unless the pod has an external address and the replacement holds the same one. Needs `spare-node` and `call-recovery` |
 | `uncordon: {}` | uncordon every node this scenario cordoned |
 | `rollFleet: {}` | set `SIPBENCH_ROLL` on the fleet's pod template, so the operator rolls every pod |
 | `breakConfig: {configMap, key, replace or match, with}` | edit a ConfigMap the fleet reads: the first `replace` (literal text) or the first match of `match` (a Go regular expression; `with` may use `$1`) |
@@ -277,8 +278,8 @@ the RFC 4475 or ETSI texts.
 A call's pod is found from where the mock received the INVITE: the fleet runs on the host network, so that is a
 member's address. Whatever happens, a scenario ends with its cordoned nodes uncordoned and its edited ConfigMaps
 put back. Every action but `hangup` needs the `fleet` capability, and a scenario using them must say
-`requires: [fleet]`; `blackoutNodeOf` also needs `node-blackout`, `crashFreeswitchOf` and `recoverOn` `call-tracking`, and
-`moveFreeswitchOf` both `spare-node` and `call-tracking`. The runner's access is in `k8s/runner-rbac.yaml`.
+`requires: [fleet]`; `blackoutNodeOf` also needs `node-blackout`, `crashFreeswitchOf` and `expectRecovered` `call-recovery`, and
+`moveFreeswitchOf` both `spare-node` and `call-recovery`. The runner's access is in `k8s/runner-rbac.yaml`.
 Results carry a `timeline` of what each action did and when.
 
 `blackoutNodeOf` can't reach a node from the runner's pod, so it runs `sipbench blackout` on the node: a pod placed

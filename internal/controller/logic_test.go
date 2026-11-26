@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func endpoint(addr, pod, node string, ready, terminating bool) discoveryv1.Endpo
 }
 
 func TestReadyDestinationsKeepsOnlyReadyNonTerminating(t *testing.T) {
-	slices := []discoveryv1.EndpointSlice{{
+	eps := []discoveryv1.EndpointSlice{{
 		Endpoints: []discoveryv1.Endpoint{
 			endpoint("10.0.1.30", "edge-2", "n3", true, false),
 			endpoint("10.0.1.10", "edge-0", "n1", true, false),
@@ -43,7 +44,7 @@ func TestReadyDestinationsKeepsOnlyReadyNonTerminating(t *testing.T) {
 		// A duplicate address in a second slice is listed once.
 		Endpoints: []discoveryv1.Endpoint{endpoint("10.0.1.10", "edge-0", "n1", true, false)},
 	}}
-	got := readyDestinations(slices, 5060, "udp")
+	got := readyDestinations(eps, 5060, "udp")
 	want := []destination{
 		{URI: "sip:10.0.1.10:5060", Pod: "edge-0", Node: "n1"},
 		{URI: "sip:10.0.1.30:5060", Pod: "edge-2", Node: "n3"},
@@ -218,6 +219,9 @@ func TestBuildStatefulSet(t *testing.T) {
 	c := spec.Containers[0]
 	if c.Lifecycle == nil || c.Lifecycle.PreStop == nil || !strings.HasSuffix(c.Lifecycle.PreStop.Exec.Command[1], drainScriptName) {
 		t.Fatal("preStop must run the drain script")
+	}
+	if c.Lifecycle.PostStart != nil {
+		t.Fatal("without spec.recovery nothing runs after FreeSWITCH starts")
 	}
 	if c.ReadinessProbe == nil || !strings.HasSuffix(c.ReadinessProbe.Exec.Command[1], readyScriptName) {
 		t.Fatal("readiness must run the ready script")
@@ -598,5 +602,21 @@ func TestAddressWaitOnlyForRequiredAddresses(t *testing.T) {
 		f.Spec.ExternalAddress.Required = ptr.To(false)
 	}); len(got) != 0 {
 		t.Error("fleet with required: false got a wait container")
+	}
+}
+
+// spec.recovery runs the recover script as the postStart hook, from the scripts ConfigMap.
+func TestBuildStatefulSetRecovery(t *testing.T) {
+	fsc := testCluster()
+	fsc.Spec.Recovery = &sipv1alpha1.RecoverySpec{}
+	c := buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec.Containers[0]
+	if h := c.Lifecycle.PostStart; h == nil || h.Exec == nil || !slices.Equal(h.Exec.Command, []string{shell, scriptsDir + "/" + recoverScriptName}) {
+		t.Fatalf("postStart %+v, want the recover script", h)
+	}
+	if c.Lifecycle.PreStop == nil {
+		t.Fatal("the drain must stay")
+	}
+	if got := buildScriptsConfigMap(fsc).Data[recoverScriptName]; got != recoverScript {
+		t.Fatal("the scripts ConfigMap must carry the recover script")
 	}
 }

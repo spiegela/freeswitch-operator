@@ -1,10 +1,10 @@
 # Call tracking and failover
 
-**Call tracking works on any cluster today; failover moves a lost member but not yet its calls.** With call tracking
-on, each FreeSWITCH node records every live call leg in a PostgreSQL that the whole fleet shares. The operator's
-[failover](freeswitch-fleet.md#health-and-failover) already fences a Failed member's node and starts its pod on a
-spare; recovery (on the [roadmap](../README.md#roadmap)) will use those records to move its calls there too. This
-page covers setting tracking up and what recovery still needs.
+**Call tracking, recovery on start and failover work on any cluster today.** With call tracking on, each FreeSWITCH
+node records every live call leg in a PostgreSQL that the whole fleet shares. With `spec.recovery`, a FreeSWITCH that
+starts takes back the calls tracked under its address: after a crash, or in a pod the operator's
+[failover](freeswitch-fleet.md#health-and-failover) started on a spare with the failed member's address. This page
+covers setting tracking and recovery up, and how failover uses them.
 
 ## What it takes
 
@@ -111,7 +111,8 @@ read from the environment, so the same ConfigMaps serve compose (tracking off) a
    `freeswitch_sofia_*` series stays `trunks` and `backend` ([metrics](metrics.md)). Both profiles need it: a call
    is recovered only with both legs. It needs an address per node, known when FreeSWITCH starts, since the name is
    fixed then: a fleet with `externalAddress.source: None` (every node plain `trunks`) still recovers everyone's
-   calls, so don't run `sofia recover` there. The address must be `required` (the default), on a pool or from the
+   calls, so don't run `sofia recover` there (`spec.recovery` refuses such a fleet). The address must be `required`
+   (the default), on a pool or from the
    node (`NodeExternalIP`): the operator then holds FreeSWITCH back until it has the address (the `wait-for-address`
    init container), and FreeSWITCH never names its profiles plainly. With `required: false` a pod can start before
    its address and keep plain names until it restarts.
@@ -140,6 +141,33 @@ spec:
 ```
 
 For Aurora, use the writer endpoint as `host` and add `sslmode=require`.
+
+**Turn on recovery on start** with `spec.recovery: {}`:
+
+```yaml
+spec:
+  recovery: {}
+```
+
+Each time FreeSWITCH starts in a pod (a new pod, or the kubelet restarting a crashed one), the operator's postStart
+hook waits for every SIP profile in FreeSWITCH's `sofia.conf` to run, then runs `sofia recover`, which takes over
+every call leg tracked under the name of a profile it runs and re-invites both far ends. The kubelet runs no probe
+until the hook returns, so the pod turns ready, and Kamailio sends it new calls, only once the old ones are back.
+The hook:
+
+- **Recovers only under names made for the pod's address.** Every profile must be named `<name>-<address>` (step 5
+  above). One that isn't would take other nodes' live calls, so the hook recovers nothing and says which profile
+  stopped it. The API refuses `recovery` on a fleet whose address isn't required (`source: None`, or `required:
+  false`).
+- **Waits for every profile.** A bridged call is recovered only with both legs, and FreeSWITCH starts its profiles
+  one by one. When one isn't running within 120 s (as long as the startup probe gives FreeSWITCH) the hook recovers
+  nothing: the calls drop, as they would without it.
+- **Never fails.** A failed postStart hook kills the container, and FreeSWITCH restarting wouldn't recover the calls
+  either.
+- **Says what it did** in the container's log (`freeswitch-operator: recovery: Recovered 4 call(s)`) and in
+  `/tmp/freeswitch-operator-recovered` in the container, where sipbench reads it.
+
+Turning it on, or off, changes the pod template, so it rolls the fleet one drained node at a time.
 
 Things to know:
 
@@ -196,12 +224,12 @@ When a node is lost, the plan is:
 every row another FreeSWITCH wrote (`runtime_uuid != own`) under the name of a profile it runs, and deletes them. It
 never looks at which node wrote a row. With each profile named for its node's address (step 5 above), that is
 exactly the calls of the address the recovering node holds. A node whose FreeSWITCH restarts in place (a crash, an
-OOM kill) keeps its address, so `sofia recover` there takes back its own calls and nothing else. sipbench's
-`crash-recovers-own-calls` checks it on kind: it crashes FreeSWITCH under a call, recovers on that node, and checks
-that the recover took exactly that node's legs and that every call on every node is still up with audio both ways. A
-call recovered in place is re-invited from the same node and address, so its in-dialog SIP needs nothing new.
-Recovery skips a row whose profile the recovering node doesn't run: on failover, the spare must come up holding the
-lost address.
+OOM kill) keeps its address, so `sofia recover` there takes back its own calls and nothing else. With
+`spec.recovery`, that happens as FreeSWITCH starts again. sipbench's `crash-recovers-own-calls` checks it on kind: it
+crashes FreeSWITCH under a call, and checks that the recovery on start took exactly that node's legs and that every
+call on every node is still up with audio both ways. A call recovered in place is re-invited from the same node and
+address, so its in-dialog SIP needs nothing new. Recovery skips a row whose profile the recovering node doesn't run:
+on failover, the spare must come up holding the lost address.
 
 **In-dialog SIP follows a recovered call to its new node.** The re-INVITEs recovery sends carry the recovering
 node's Contact (its own address), so both far ends send their next requests there: the carrier's through Kamailio,
@@ -220,23 +248,23 @@ on a node new to the fleet sends from that node's address, which Kamailio's `tru
 its dispatcher list names the node (`reloadDelaySeconds` later): the operator admits the address over JSON-RPC as
 soon as it writes the list. sipbench's
 `moved-call-in-dialog` checks a move on kind: it cordons a call's node, crashes FreeSWITCH there, deletes the pod at
-once, and recovers on the replacement, which comes up on the spare node with the moved pod's address. Then every
+once, and checks the replacement, which comes up on the spare node with the moved pod's address, recovered the
+calls on start. Then every
 call's backend sends a REFER and every caller hangs up, and each of those requests must reach the node the call is
 on now. A pod replaced onto a spare keeps its address only when the spare holds none of its own (the pool's rule);
 one that kept an idle address from an earlier pod gives the moved pod that one, and its calls' rows stay put.
 
 Not built yet:
 
-- **Nothing runs `sofia recover`.** FreeSWITCH doesn't recover on startup. Until something does, the bench runs it
-  by hand.
-A lost node's rows stay in `recovery` until something recovers them.
+- **Rows nobody recovers stay.** When a failed member's replacement doesn't come up with its address (a spare that
+  holds an idle address of its own, or no spare at all), its rows stay in `recovery` until a FreeSWITCH holding that
+  address starts with `spec.recovery`.
 
-Built: dead-node detection, fencing and the move ([failover](freeswitch-fleet.md#health-and-failover)). The
-replacement comes up on the spare with the failed member's address when the spare holds none of its own, so a
-`sofia recover` there would take exactly that member's calls. Until something runs it, a node's calls drop when it
-dies: FreeSWITCH ends them at its media timeout, and nothing tells the backend. New calls go elsewhere, within
+With failover and `spec.recovery`, a lost node's calls move: the operator fences the node and starts the member on
+the spare, the pool gives it the member's address, and FreeSWITCH recovers the calls as it starts there, before its
+pod turns ready. A call is silent from the node's loss until then. New calls go elsewhere meanwhile, within
 Kamailio's 5 s failover at first, then with no delay once the dispatcher's probes have taken the node out.
-sipbench's `node-lost-mid-call` checks that: it takes a call's node off the network for two minutes (tc drop
-filters on the node's own interface), checks the rest of the fleet keeps taking calls, and waits for the operator
-to fail the member over to the spare. It records the lost call as the baseline for recovery.
+sipbench's `node-lost-mid-call` checks it: it takes a call's node off the network for two minutes (tc drop filters
+on the node's own interface), checks the rest of the fleet keeps taking calls, waits for the operator to fail the
+member over to the spare, and checks the call is back there with audio both ways.
 

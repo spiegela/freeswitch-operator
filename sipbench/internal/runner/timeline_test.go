@@ -35,7 +35,7 @@ type fakeFleet struct {
 	blackouts map[string]fakeBlackout
 	deleted   []string
 	// restarts counts each pod's FreeSWITCH restarts (an fsctl crash adds one); execs are the commands run, as
-	// "pod: command"; recoverOut is what sofia recover answers.
+	// "pod: command"; recoverOut is what the recovery on start wrote in a pod that restarted ("" for nothing).
 	restarts   map[string]int32
 	execs      []string
 	recoverOut string
@@ -216,7 +216,10 @@ func (f *fakeFleet) Exec(_ context.Context, pod, container string, cmd ...string
 		}
 		f.restarts[pod]++
 		return "", errors.New("command terminated with exit code 1")
-	case line == "fs_cli -x sofia recover":
+	case line == readRecoveredCmd:
+		if f.restarts[pod] == 0 {
+			return "", nil
+		}
 		return f.recoverOut, nil
 	case line == "fs_cli -x sofia recover flush":
 		return "Flushing recovery database.\n", nil
@@ -230,7 +233,10 @@ func (f *fakeFleet) Container(_ context.Context, pod, _ string) (fleet.Container
 	return fleet.ContainerState{Restarts: f.restarts[pod], Ready: true, Running: true}, nil
 }
 
-func (f *fakeFleet) TracksCalls(context.Context) (bool, error) { return true, nil }
+func (f *fakeFleet) RecoversCalls(context.Context) (bool, error) { return true, nil }
+
+// readRecoveredCmd is how the runner reads what a pod's recovery on start wrote.
+const readRecoveredCmd = "/bin/sh -c cat " + recoveredFile + " 2>/dev/null || true"
 
 const longRoute = `
 detectHz: [600, 1000]
@@ -245,8 +251,8 @@ routes:
 func withFleet(r *Runner, f fleet.Fleet) *Runner {
 	r.cfg.Fleet = f
 	r.cfg.Caps["fleet"] = true
-	if tracks, _ := f.TracksCalls(context.Background()); tracks {
-		r.cfg.Caps[scenario.CallTrackingCapability] = true
+	if recovers, _ := f.RecoversCalls(context.Background()); recovers {
+		r.cfg.Caps[scenario.CallRecoveryCapability] = true
 	}
 	return r
 }
@@ -467,7 +473,7 @@ func TestParseRecovered(t *testing.T) {
 
 const crashRecoverScenario = `
 name: crash
-requires: [mock, fleet, call-tracking]
+requires: [mock, fleet, call-recovery]
 calls:
   - id: a
     to: long
@@ -476,11 +482,11 @@ calls:
     expect: {status: 200}
 actions:
   - {afterAnswered: a, afterMs: 300, crashFreeswitchOf: a}
-  - {recoverOn: a}
+  - {expectRecovered: a}
   - {hangup: a}
 `
 
-// A crash restarts the call's FreeSWITCH; a recover there that takes its one call's two legs passes.
+// A crash restarts the call's FreeSWITCH; a recovery on start there that took its one call's two legs passes.
 func TestTimelineCrashesAndRecovers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("places real calls over loopback")
@@ -490,12 +496,12 @@ func TestTimelineCrashesAndRecovers(t *testing.T) {
 	f.recoverOut = "Recovered 2 call(s)\n"
 	r := withFleet(startMock(t, longRoute), f)
 	res := runScenario(t, r, crashRecoverScenario)
-	want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: fs_cli -x sofia recover"}
+	want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: " + readRecoveredCmd}
 	if fmt.Sprint(f.execs) != fmt.Sprint(want) {
 		t.Errorf("ran %q, want %q", f.execs, want)
 	}
 	tl := strings.Join(res.Timeline, "\n  ")
-	for _, s := range []string{"crashed its FreeSWITCH, which restarted (restart 1)", "took 2 call legs: call(s) a"} {
+	for _, s := range []string{"crashed its FreeSWITCH, which restarted (restart 1)", "the recovery on start in edge-0 took 2 call legs: call(s) a"} {
 		if !strings.Contains(tl, s) {
 			t.Errorf("timeline lacks %q:\n  %s", s, tl)
 		}
@@ -505,7 +511,7 @@ func TestTimelineCrashesAndRecovers(t *testing.T) {
 	}
 }
 
-// A recover that takes more than its own node's calls (other nodes' too) fails the scenario.
+// A recovery that takes more than its own node's calls (other nodes' too) fails the scenario.
 func TestTimelineRecoverTakingOtherNodesCallsFails(t *testing.T) {
 	if testing.Short() {
 		t.Skip("places real calls over loopback")
@@ -526,7 +532,7 @@ func TestTimelineRecoverTakingOtherNodesCallsFails(t *testing.T) {
 
 const moveScenario = `
 name: move
-requires: [mock, fleet, spare-node, call-tracking]
+requires: [mock, fleet, spare-node, call-recovery]
 calls:
   - id: a
     to: long
@@ -540,13 +546,13 @@ calls:
     expect: {status: 200}
 actions:
   - {afterAnswered: b, afterMs: 300, moveFreeswitchOf: a}
-  - {recoverOn: a}
+  - {expectRecovered: a}
   - {hangup: a}
   - {hangup: b}
 `
 
 // A move cordons the call's node, crashes FreeSWITCH, deletes the pod at once, and waits for the replacement to
-// take calls on the spare node with the same address; the recover then runs in the replacement.
+// take calls on the spare node with the same address, which recovered the calls on start.
 func TestTimelineMovesToASpareAndRecovers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("places real calls over loopback")
@@ -558,7 +564,7 @@ func TestTimelineMovesToASpareAndRecovers(t *testing.T) {
 	r := withFleet(startMock(t, longRoute), f)
 	r.cfg.Caps[scenario.SpareNodeCapability] = true
 	res := runScenario(t, r, moveScenario)
-	want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: fs_cli -x sofia recover"}
+	want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: " + readRecoveredCmd}
 	if fmt.Sprint(f.execs) != fmt.Sprint(want) {
 		t.Errorf("ran %q, want %q", f.execs, want)
 	}
@@ -570,7 +576,7 @@ func TestTimelineMovesToASpareAndRecovers(t *testing.T) {
 	}
 	tl := strings.Join(res.Timeline, "\n  ")
 	for _, s := range []string{"cordoned it, crashed FreeSWITCH and deleted the pod; its replacement takes calls on n3, with the same external address \"192.0.2.10\"",
-		"took 4 call legs: call(s) a, b"} {
+		"the recovery on start in edge-0 took 4 call legs: call(s) a, b"} {
 		if !strings.Contains(tl, s) {
 			t.Errorf("timeline lacks %q:\n  %s", s, tl)
 		}
@@ -609,9 +615,9 @@ func TestTimelineMoveToAnotherAddressFails(t *testing.T) {
 	}
 }
 
-// A move that isn't followed by a recover leaves the crashed FreeSWITCH's calls in the table: cleanup flushes them
-// in the replacement, which runs the same profiles.
-func TestTimelineMoveWithoutRecoverFlushes(t *testing.T) {
+// A replacement that recovered nothing on start leaves the crashed FreeSWITCH's calls in the table: cleanup flushes
+// them in the replacement, which runs the same profiles.
+func TestTimelineMoveWithoutRecoveryFlushes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("places real calls over loopback")
 	}
@@ -620,8 +626,8 @@ func TestTimelineMoveWithoutRecoverFlushes(t *testing.T) {
 	f.external = map[string]string{"edge-0": "192.0.2.10"}
 	r := withFleet(startMock(t, longRoute), f)
 	r.cfg.Caps[scenario.SpareNodeCapability] = true
-	runScenario(t, r, strings.Replace(moveScenario, "  - {recoverOn: a}\n", "", 1))
-	if want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: fs_cli -x sofia recover flush"}; fmt.Sprint(f.execs) != fmt.Sprint(want) {
+	runScenario(t, r, strings.Replace(moveScenario, "  - {expectRecovered: a}\n", "", 1))
+	if want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: " + readRecoveredCmd, "edge-0: fs_cli -x sofia recover flush"}; fmt.Sprint(f.execs) != fmt.Sprint(want) {
 		t.Errorf("ran %q, want %q", f.execs, want)
 	}
 }
@@ -654,7 +660,7 @@ func TestTimelineCrashThatDoesntHappenFails(t *testing.T) {
 	}
 }
 
-// A recover whose answer can't be read isn't known to have run: cleanup still flushes the pod's rows.
+// A recovery whose answer can't be read isn't known to have run: cleanup still flushes the pod's rows.
 func TestTimelineUnreadableRecoverStillFlushes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("places real calls over loopback")
@@ -695,5 +701,57 @@ func TestTimelineMoveWithoutAnAddressFails(t *testing.T) {
 	}
 	if len(f.execs) != 0 || len(f.deleted) != 0 {
 		t.Errorf("acted anyway: ran %q, deleted %q", f.execs, f.deleted)
+	}
+}
+
+// A recovery on start the scenario doesn't check has still taken the rows: cleanup flushes nothing, which would only
+// drop what it recovered.
+func TestTimelineRecoveryOnStartNeedsNoFlush(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	f := newFakeFleet()
+	f.spare = "n3"
+	f.recoverOut = "Recovered 4 call(s)"
+	f.external = map[string]string{"edge-0": "192.0.2.10"}
+	r := withFleet(startMock(t, longRoute), f)
+	r.cfg.Caps[scenario.SpareNodeCapability] = true
+	res := runScenario(t, r, strings.Replace(moveScenario, "  - {expectRecovered: a}\n", "", 1))
+	if want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: " + readRecoveredCmd}; fmt.Sprint(f.execs) != fmt.Sprint(want) {
+		t.Errorf("ran %q, want %q", f.execs, want)
+	}
+	if tl := strings.Join(res.Timeline, "\n"); !strings.Contains(tl, "cleanup: edge-0 recovered its calls on start (Recovered 4 call(s)): nothing to flush") {
+		t.Errorf("timeline:\n%s", tl)
+	}
+}
+
+// A recovery on start that didn't run fails the check with the hook's reason, and cleanup flushes the rows it left;
+// one that wrote nothing at all fails once the wait is up.
+func TestTimelineRecoveryThatDidntRunFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	defer func(d time.Duration) { recoveredWait = d }(recoveredWait)
+	recoveredWait = time.Second
+	for _, tc := range []struct{ out, want string }{
+		{"skipped: SIP profile backend is not named for this pod's address (NAME-192-0-2-10); calls not recovered",
+			"the recovery on start in edge-0 didn't run: SIP profile backend is not named"},
+		{"", "edge-0 recovered nothing on start within 1s"},
+	} {
+		f := newFakeFleet()
+		f.recoverOut = tc.out
+		f.external = map[string]string{"edge-0": "192.0.2.10"}
+		r := withFleet(startMock(t, longRoute), f)
+		s, err := scenario.Parse([]byte(crashRecoverScenario))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res := r.Run(context.Background(), s)
+		if res.Status != statusFail || !strings.Contains(strings.Join(res.Failures, "\n"), tc.want) {
+			t.Errorf("%q: got %s: %v", tc.out, res.Status, res.Failures)
+		}
+		if want := "edge-0: fs_cli -x sofia recover flush"; !slices.Contains(f.execs, want) {
+			t.Errorf("%q: ran %q, want %q among them", tc.out, f.execs, want)
+		}
 	}
 }

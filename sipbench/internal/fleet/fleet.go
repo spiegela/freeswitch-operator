@@ -164,9 +164,10 @@ type Fleet interface {
 	Exec(ctx context.Context, pod, container string, cmd ...string) (string, error)
 	// Container reports on one of a pod's containers.
 	Container(ctx context.Context, pod, container string) (ContainerState, error)
-	// TracksCalls reports whether the fleet keeps its calls in a shared recovery table: its spec.env sets
-	// TRACK_CALLS to "true" and CORE_DB_DSN (sipbench's FreeSWITCH config reads both).
-	TracksCalls(ctx context.Context) (bool, error)
+	// RecoversCalls reports whether the fleet keeps its calls in a shared recovery table and recovers them when
+	// FreeSWITCH starts: its spec.env sets TRACK_CALLS to "true" and CORE_DB_DSN (sipbench's FreeSWITCH config reads
+	// both), and spec.recovery is set.
+	RecoversCalls(ctx context.Context) (bool, error)
 }
 
 // ContainerState is what the runner sees of a container.
@@ -619,9 +620,12 @@ func (s *syncBuffer) String() string {
 	return s.b.String()
 }
 
-func (k *kube) TracksCalls(ctx context.Context) (bool, error) {
+func (k *kube) RecoversCalls(ctx context.Context) (bool, error) {
 	u, err := k.dyn.Resource(fscResource).Namespace(k.ns).Get(ctx, k.name, metav1.GetOptions{})
 	if err != nil {
+		return false, err
+	}
+	if _, on, err := unstructured.NestedMap(u.Object, "spec", "recovery"); err != nil || !on {
 		return false, err
 	}
 	env, _, err := unstructured.NestedSlice(u.Object, "spec", "env")

@@ -72,8 +72,8 @@ type timeline struct {
 	blackouts []blackoutPod
 	// pods remembers which pod carried each call, once looked up.
 	pods map[string]fleet.Member
-	// unrecovered are the pods whose FreeSWITCH this run crashed and hasn't run sofia recover in since. Their calls
-	// stay in the shared recovery table, where a later run's recover would count them.
+	// unrecovered are the pods whose FreeSWITCH this run crashed and whose recovery on start this run hasn't seen
+	// run since. Their calls may still be in the shared recovery table, where a later run's recover would count them.
 	unrecovered []crashedPod
 
 	mu       sync.Mutex
@@ -274,8 +274,8 @@ func (t *timeline) do(ctx context.Context, a *scenario.Action) (string, error) {
 	case a.CrashFreeswitchOf != "":
 		return t.crashFreeswitch(ctx, a.CrashFreeswitchOf)
 
-	case a.RecoverOn != "":
-		return t.recoverOn(ctx, a.RecoverOn)
+	case a.ExpectRecovered != "":
+		return t.expectRecovered(ctx, a.ExpectRecovered)
 
 	case a.MoveFreeswitchOf != "":
 		return t.moveFreeswitch(ctx, a.MoveFreeswitchOf)
@@ -391,10 +391,27 @@ func parseRecovered(out string) (int, error) {
 	return 0, fmt.Errorf("unexpected answer %q", strings.TrimSpace(out))
 }
 
-// recoverOn runs sofia recover on the pod that carries a call, and checks it took over exactly the legs of the
-// scenario's live calls on that pod (two each). The scenario's calls are the only ones on the fleet's nodes while
-// it runs alone: a recover that also took another node's would count more, and break those calls.
-func (t *timeline) recoverOn(ctx context.Context, call string) (string, error) {
+// recoveredFile is where the operator's recovery on start (spec.recovery) writes what it did, one line: sofia
+// recover's answer, or why it recovered nothing ("skipped: ..."). It is in the container's own filesystem, so each
+// start of FreeSWITCH writes its own. The operator's constant of the same name (internal/controller/scripts.go).
+const recoveredFile = "/tmp/freeswitch-operator-recovered"
+
+// recoveredWait bounds the wait for that line once the pod is up again (a variable for the tests). The operator's
+// hook writes it before the pod turns ready, after waiting up to 120 s for FreeSWITCH's SIP profiles.
+var recoveredWait = 150 * time.Second
+
+// readRecovered reads what the recovery on start in pod wrote, or "" while it has written nothing.
+func (t *timeline) readRecovered(ctx context.Context, pod string) (string, error) {
+	ectx, cancel := context.WithTimeout(ctx, execTimeout)
+	defer cancel()
+	out, err := t.r.cfg.Fleet.Exec(ectx, pod, fleet.FreeswitchContainer, "/bin/sh", "-c", "cat "+recoveredFile+" 2>/dev/null || true")
+	return strings.TrimSpace(out), err
+}
+
+// expectRecovered checks the recovery on start in the pod that carries a call: it must have taken over exactly the
+// legs of the scenario's live calls on that pod (two each). The scenario's calls are the only ones on the fleet's
+// nodes while it runs alone: a recovery that also took another node's would count more, and break those calls.
+func (t *timeline) expectRecovered(ctx context.Context, call string) (string, error) {
 	m, err := t.memberOf(ctx, call)
 	if err != nil {
 		return "", err
@@ -416,26 +433,42 @@ func (t *timeline) recoverOn(ctx context.Context, call string) (string, error) {
 			here = append(here, id)
 		}
 	}
-	ectx, cancel := context.WithTimeout(ctx, execTimeout)
-	defer cancel()
-	out, err := t.r.cfg.Fleet.Exec(ectx, m.Pod, fleet.FreeswitchContainer, "fs_cli", "-x", "sofia recover")
-	if err != nil {
-		return "", err
+	var out string
+	deadline := time.Now().Add(recoveredWait)
+	for {
+		if out, err = t.readRecovered(ctx, m.Pod); err != nil {
+			return "", err
+		}
+		if out != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("%s recovered nothing on start within %s (%s is empty): is spec.recovery set?",
+				m.Pod, recoveredWait, recoveredFile)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(pollEvery):
+		}
+	}
+	if strings.HasPrefix(out, "skipped:") {
+		return "", fmt.Errorf("the recovery on start in %s didn't run: %s", m.Pod, strings.TrimPrefix(out, "skipped: "))
 	}
 	n, err := parseRecovered(out)
 	if err != nil {
 		// Not known to have run: cleanup still flushes the pod's rows.
-		return "", fmt.Errorf("sofia recover on %s: %w", m.Pod, err)
+		return "", fmt.Errorf("the recovery on start in %s: %w", m.Pod, err)
 	}
 	// It ran: it took (and deleted) every row of the pod's profiles, whatever the count says.
 	t.mu.Lock()
 	t.unrecovered = slices.DeleteFunc(t.unrecovered, func(c crashedPod) bool { return c.pod == m.Pod })
 	t.mu.Unlock()
 	if want := 2 * len(here); n != want {
-		return "", fmt.Errorf("sofia recover on %s took %d call legs, want %d: the legs of call(s) %s, the ones on it",
+		return "", fmt.Errorf("the recovery on start in %s took %d call legs, want %d: the legs of call(s) %s, the ones on it",
 			m.Pod, n, want, orNone(here))
 	}
-	return fmt.Sprintf("sofia recover on %s took %d call legs: call(s) %s", m.Pod, n, orNone(here)), nil
+	return fmt.Sprintf("the recovery on start in %s took %d call legs: call(s) %s", m.Pod, n, orNone(here)), nil
 }
 
 // crashSeen bounds the wait for a crashed FreeSWITCH's container to be seen stopped or restarted (a variable for
@@ -495,8 +528,8 @@ func (t *timeline) crashed(pod, address string) {
 	}
 }
 
-// flushLeftovers empties the recovery table of each pod whose FreeSWITCH this run crashed and didn't recover
-// (sofia recover flush: every row of the pod's profiles). Those calls have ended at the runner and the mock; left
+// flushLeftovers empties the recovery table of each pod whose FreeSWITCH this run crashed and that didn't recover
+// on start (sofia recover flush: every row of the pod's profiles). Those calls have ended at the runner and the mock; left
 // in the table, the next run's recover there would count them, and recovering them instead leaves channels that
 // never end. Scenarios that act on the fleet run alone, so the pod's rows are this run's. The flush only reaches the
 // profiles the pod runs now, which are named for its address: a pod that came back with another address can't
@@ -521,6 +554,13 @@ func (t *timeline) flushLeftovers(ctx context.Context) {
 				"will count them: %s now holds %q, and a flush there reaches only its own profiles", c.pod, c.address,
 				c.pod, now[c.pod])
 			continue
+		}
+		// The recovery on start took the rows already when it ran; a flush now would only drop what it recovered.
+		if out, err := t.readRecovered(ctx, c.pod); err == nil {
+			if _, err := parseRecovered(out); err == nil {
+				t.note("cleanup: %s recovered its calls on start (%s): nothing to flush", c.pod, out)
+				continue
+			}
 		}
 		ectx, cancel := context.WithTimeout(ctx, execTimeout)
 		_, err := t.r.cfg.Fleet.Exec(ectx, c.pod, fleet.FreeswitchContainer, "fs_cli", "-x", "sofia recover flush")

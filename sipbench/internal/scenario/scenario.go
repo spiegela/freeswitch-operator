@@ -404,13 +404,14 @@ type Action struct {
 	// no drain, and its calls left in the shared recovery table. The action ends once the kubelet has restarted
 	// the container and it is ready again, on the same node with the same address.
 	CrashFreeswitchOf string `yaml:"crashFreeswitchOf,omitempty"`
-	// RecoverOn runs `sofia recover` on the pod that carries the named call, and checks it took over exactly that
-	// pod's calls (two legs each) among the scenario's calls that are up: none of another node's.
-	RecoverOn string `yaml:"recoverOn,omitempty"`
+	// ExpectRecovered checks the recovery on start (the FreeswitchCluster's spec.recovery) in the pod that carries
+	// the named call, once it has run: it must have taken over exactly that pod's calls (two legs each) among the
+	// scenario's calls that are up, none of another node's.
+	ExpectRecovered string `yaml:"expectRecovered,omitempty"`
 	// MoveFreeswitchOf moves the pod that carries the named call to a spare edge node, as a lost node's would be:
 	// it cordons the call's node, crashes FreeSWITCH there (no drain, the calls left in the recovery table) and
 	// deletes the pod at once. The action ends once the replacement is up on another node, and fails unless it
-	// holds the same external address. It needs the "spare-node" and "call-tracking" capabilities.
+	// holds the same external address. It needs the "spare-node" and "call-recovery" capabilities.
 	MoveFreeswitchOf string `yaml:"moveFreeswitchOf,omitempty"`
 }
 
@@ -418,10 +419,11 @@ type Action struct {
 // a moved pod can go to.
 const SpareNodeCapability = "spare-node"
 
-// CallTrackingCapability is what a run must provide for CrashFreeswitchOf, RecoverOn and MoveFreeswitchOf: a fleet
-// that keeps its calls in a shared recovery table (TRACK_CALLS and CORE_DB_DSN in its env). Without it a crash only
-// drops the node's calls. The runner offers it when the fleet's spec says so.
-const CallTrackingCapability = "call-tracking"
+// CallRecoveryCapability is what a run must provide for CrashFreeswitchOf, ExpectRecovered and MoveFreeswitchOf: a
+// fleet that keeps its calls in a shared recovery table (TRACK_CALLS and CORE_DB_DSN in its env) and recovers them
+// each time FreeSWITCH starts (spec.recovery). Without it a crash only drops the node's calls. The runner offers it
+// when the fleet's spec says so.
+const CallRecoveryCapability = "call-recovery"
 
 // LiveKitCapability is what a run must provide for expect.livekit: the edge sends calls to lk numbers to LiveKit
 // SIP, which takes them into the room of the bench's stand-in agent (cmd/lkagent), and the runner can ask the agent
@@ -587,7 +589,7 @@ func (a *Action) Kind() string {
 	add(a.WaitFailover != nil, "waitFailover")
 	add(a.Hangup != "", "hangup")
 	add(a.CrashFreeswitchOf != "", "crashFreeswitchOf")
-	add(a.RecoverOn != "", "recoverOn")
+	add(a.ExpectRecovered != "", "expectRecovered")
 	add(a.MoveFreeswitchOf != "", "moveFreeswitchOf")
 	if len(kinds) != 1 {
 		return ""
@@ -839,7 +841,7 @@ func (s *Scenario) validateRepeats() error {
 		}
 	}
 	for i, a := range s.Actions {
-		refs := []string{a.AfterAnswered, a.AfterEnded, a.DrainNodeOf, a.Hangup, a.CrashFreeswitchOf, a.RecoverOn, a.MoveFreeswitchOf}
+		refs := []string{a.AfterAnswered, a.AfterEnded, a.DrainNodeOf, a.Hangup, a.CrashFreeswitchOf, a.ExpectRecovered, a.MoveFreeswitchOf}
 		if a.WaitMember != nil {
 			refs = append(refs, a.WaitMember.Of)
 		}
@@ -943,12 +945,12 @@ func (s *Scenario) validateActions(calls map[string]bool) error { //nolint:gocyc
 		if kind == "" {
 			return fmt.Errorf("%s: needs exactly one of drainNodeOf, uncordon, rollFleet, breakConfig, "+
 				"restoreConfig, waitMember, waitFleetCurrent, expectRollStuck, blackoutNodeOf, waitNode, hangup, "+
-				"crashFreeswitchOf, recoverOn, moveFreeswitchOf", label)
+				"crashFreeswitchOf, expectRecovered, moveFreeswitchOf", label)
 		}
 		fleet = fleet || a.OnFleet()
 		for field, call := range map[string]string{
 			"afterAnswered": a.AfterAnswered, "afterEnded": a.AfterEnded, "drainNodeOf": a.DrainNodeOf, "hangup": a.Hangup,
-			"crashFreeswitchOf": a.CrashFreeswitchOf, "recoverOn": a.RecoverOn, "moveFreeswitchOf": a.MoveFreeswitchOf,
+			"crashFreeswitchOf": a.CrashFreeswitchOf, "expectRecovered": a.ExpectRecovered, "moveFreeswitchOf": a.MoveFreeswitchOf,
 		} {
 			if call != "" && !calls[call] {
 				return fmt.Errorf("%s: %s names no call %q", label, field, call)
@@ -993,12 +995,12 @@ func (s *Scenario) validateActions(calls map[string]bool) error { //nolint:gocyc
 				return fmt.Errorf("%s: blackoutNodeOf needs requires: [%s]", label, BlackoutCapability)
 			}
 		case a.MoveFreeswitchOf != "":
-			if !slices.Contains(s.Requires, SpareNodeCapability) || !slices.Contains(s.Requires, CallTrackingCapability) {
-				return fmt.Errorf("%s: moveFreeswitchOf needs requires: [%s, %s]", label, SpareNodeCapability, CallTrackingCapability)
+			if !slices.Contains(s.Requires, SpareNodeCapability) || !slices.Contains(s.Requires, CallRecoveryCapability) {
+				return fmt.Errorf("%s: moveFreeswitchOf needs requires: [%s, %s]", label, SpareNodeCapability, CallRecoveryCapability)
 			}
-		case a.CrashFreeswitchOf != "" || a.RecoverOn != "":
-			if !slices.Contains(s.Requires, CallTrackingCapability) {
-				return fmt.Errorf("%s: crashFreeswitchOf and recoverOn need requires: [%s]", label, CallTrackingCapability)
+		case a.CrashFreeswitchOf != "" || a.ExpectRecovered != "":
+			if !slices.Contains(s.Requires, CallRecoveryCapability) {
+				return fmt.Errorf("%s: crashFreeswitchOf and expectRecovered need requires: [%s]", label, CallRecoveryCapability)
 			}
 		case a.WaitNode != nil:
 			if !calls[a.WaitNode.Of] {

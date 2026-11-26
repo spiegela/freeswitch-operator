@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -212,5 +213,137 @@ func TestAddressWaitScript(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "waiting for this pod's external address") || !strings.Contains(out.String(), "external address 203.0.113.10") {
 		t.Errorf("output %q", out.String())
+	}
+}
+
+// sofiaConf is what `xml_locate configuration configuration name sofia.conf` prints for a configuration with the
+// given profile names.
+func sofiaConf(names ...string) string {
+	var b strings.Builder
+	b.WriteString("<configuration name=\"sofia.conf\" description=\"sofia Endpoint\">\n  <profiles>\n")
+	for _, n := range names {
+		b.WriteString("    <profile name=\"" + n + "\">\n      <aliases>\n        <alias name=\"x\"/>\n      </aliases>\n" +
+			"      <gateways>\n        <gateway name=\"carrier\"/>\n      </gateways>\n    </profile>\n")
+	}
+	b.WriteString("  </profiles>\n</configuration>\n")
+	return b.String()
+}
+
+// sofiaStatus is `sofia status` with the given profiles running, each with its plain name as an alias.
+func sofiaStatus(names ...string) string {
+	var b strings.Builder
+	b.WriteString("                     Name\t   Type\t                                      Data\tState\n")
+	for _, n := range names {
+		b.WriteString("  " + n + "\tprofile\t   sip:mod_sofia@10.0.0.5:5060\tRUNNING (0)\n")
+		plain, _, _ := strings.Cut(n, "-")
+		b.WriteString("  " + plain + "\talias\t   " + n + "\tALIASED\n")
+	}
+	return b.String()
+}
+
+type recoverRun struct {
+	result, log string
+	recovered   bool // whether sofia recover ran
+}
+
+// runRecover runs the recover script with a fake fs_cli. statuses are what `sofia status` prints, one per call,
+// the last repeating, so a profile can start while the script waits.
+func runRecover(t *testing.T, address, status, conf string, statuses ...string) recoverRun {
+	t.Helper()
+	dir, bin := t.TempDir(), t.TempDir()
+	write := func(path, body string, mode os.FileMode) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(dir, recoverScriptName), recoverScript, 0o755)
+	write(filepath.Join(bin, "status.out"), status, 0o644)
+	write(filepath.Join(bin, "conf.out"), conf, 0o644)
+	for i, s := range statuses {
+		write(filepath.Join(bin, "sofia."+strconv.Itoa(i)), s, 0o644)
+	}
+	addrFile := filepath.Join(dir, "external-address")
+	if address != "" {
+		write(addrFile, address+"\n", 0o644)
+	}
+	fake := `#!/bin/sh
+for a; do last=$a; done
+b='` + bin + `'
+case "$last" in
+  status) cat "$b/status.out" ;;
+  'xml_locate configuration configuration name sofia.conf') cat "$b/conf.out" ;;
+  'sofia status')
+    n=$(cat "$b/n" 2>/dev/null || echo 0)
+    [ -e "$b/sofia.$n" ] && echo $((n + 1)) > "$b/n" || n=$((n - 1))
+    cat "$b/sofia.$n" ;;
+  'sofia recover') touch "$b/recovered"; echo "Recovered 4 call(s)" ;;
+esac
+`
+	write(filepath.Join(bin, "fs_cli"), fake, 0o755)
+	result, logFile := filepath.Join(dir, "recovered"), filepath.Join(dir, "log")
+	cmd := exec.Command("/bin/sh", filepath.Join(dir, recoverScriptName))
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "FS_RECOVERY_WAIT_SECONDS=3",
+		"FS_EXTERNAL_ADDRESS_FILE=" + addrFile, "FS_RECOVERED_FILE=" + result, "FS_RECOVERY_LOG=" + logFile}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("recover.sh must always succeed (a failed postStart hook kills the container): %v: %s", err, out)
+	}
+	r := recoverRun{}
+	b, err := os.ReadFile(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.result = strings.TrimSpace(string(b))
+	if b, err := os.ReadFile(logFile); err == nil {
+		r.log = string(b)
+	}
+	_, err = os.Stat(filepath.Join(bin, "recovered"))
+	r.recovered = err == nil
+	return r
+}
+
+func TestRecoverScript(t *testing.T) {
+	const addr = "203.0.113.10"
+	named := []string{"backend-203-0-113-10", "trunks-203-0-113-10"}
+	for _, tc := range []struct {
+		name, address, status, conf string
+		statuses                    []string
+		recovers                    bool
+		want                        string
+	}{
+		{"every profile running and named", addr, fsReady, sofiaConf(named...),
+			[]string{sofiaStatus(named...)}, true, "Recovered 4 call(s)"},
+		{"waits for the last profile to start", addr, fsReady, sofiaConf(named...),
+			[]string{sofiaStatus(named[1]), sofiaStatus(named[1]), sofiaStatus(named...)}, true, "Recovered 4 call(s)"},
+		{"a profile that never starts", addr, fsReady, sofiaConf(named...),
+			[]string{sofiaStatus(named[1])}, false, "skipped: SIP profiles not all running after 3s (missing backend-203-0-113-10); calls not recovered"},
+		{"FreeSWITCH never ready", addr, "", sofiaConf(named...),
+			[]string{sofiaStatus(named...)}, false, "(FreeSWITCH not ready)"},
+		{"a profile under a shared name", addr, fsReady, sofiaConf("backend", named[1]),
+			[]string{sofiaStatus("backend", named[1])}, false, "skipped: SIP profile backend is not named for this pod's address"},
+		{"another address's name", addr, fsReady, sofiaConf("trunks-203-0-113-11"),
+			[]string{sofiaStatus("trunks-203-0-113-11")}, false, "is not named for this pod's address (NAME-203-0-113-10)"},
+		{"no address", "", fsReady, sofiaConf(named...),
+			[]string{sofiaStatus(named...)}, false, "skipped: this pod has no external address"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := runRecover(t, tc.address, tc.status, tc.conf, tc.statuses...)
+			if r.recovered != tc.recovers {
+				t.Errorf("sofia recover ran: %v, want %v (result %q)", r.recovered, tc.recovers, r.result)
+			}
+			if !strings.Contains(r.result, tc.want) {
+				t.Errorf("result %q, want it to hold %q", r.result, tc.want)
+			}
+			if want := "freeswitch-operator: recovery: " + r.result + "\n"; r.log != want {
+				t.Errorf("log %q, want %q", r.log, want)
+			}
+		})
+	}
+}
+
+// The recovery waits as long for FreeSWITCH as the startup probe does.
+func TestRecoveryWaitsAsLongAsTheStartupProbe(t *testing.T) {
+	if want := strconv.Itoa(int(startupGraceSeconds)); recoveryWaitSeconds != want {
+		t.Errorf("recoveryWaitSeconds is %s, startupGraceSeconds %s", recoveryWaitSeconds, want)
 	}
 }

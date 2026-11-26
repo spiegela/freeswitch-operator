@@ -341,6 +341,17 @@ type LivenessSpec struct {
 	FailureThreshold int32 `json:"failureThreshold,omitempty"`
 }
 
+// RecoverySpec turns on call recovery when FreeSWITCH starts. Each time FreeSWITCH starts in a pod (a new pod, or
+// the kubelet restarting a crashed one) the operator's postStart hook waits for its SIP profiles to run, then runs
+// `sofia recover`: FreeSWITCH takes over every call leg tracked under the name of a profile it runs, and re-invites
+// both far ends. The pod turns ready only after that, so it takes no new calls before the old ones are back.
+//
+// Recovery takes the calls of the pod's address only when every SIP profile is named for it, as NAME-<address>
+// (each character but letters and digits a dash: trunks-203-0-113-10; docs/call-tracking.md). The hook checks the
+// names and recovers nothing when one doesn't end that way: a profile under a name every node shares would take
+// other nodes' live calls. The result is in the container's log and in /tmp/freeswitch-operator-recovered.
+type RecoverySpec struct{}
+
 // FreeswitchMetricsSpec runs a Prometheus exporter in each FreeSWITCH pod. It reads FreeSWITCH over its event
 // socket on 127.0.0.1 (sessions, calls, whether inbound calls are paused, each SIP profile's state and call
 // counters) and serves them at /metrics on the pod's own address, for a Prometheus server or an OpenTelemetry
@@ -431,6 +442,7 @@ type DispatcherSpec struct {
 
 // FreeswitchClusterSpec defines the desired state of FreeswitchCluster.
 // +kubebuilder:validation:XValidation:rule="!has(self.metrics) || self.metrics.port != (has(self.sip) && has(self.sip.port) ? self.sip.port : 5060)",message="metrics.port must differ from sip.port"
+// +kubebuilder:validation:XValidation:rule="!has(self.recovery) || !has(self.externalAddress) || ((!has(self.externalAddress.source) || self.externalAddress.source != 'None') && (!has(self.externalAddress.required) || self.externalAddress.required))",message="recovery needs a required external address: externalAddress.source other than None, and required true"
 type FreeswitchClusterSpec struct {
 	// replicas is the number of FreeSWITCH nodes. Each runs on its own Kubernetes node. Keep one spare.
 	// +kubebuilder:validation:Minimum=0
@@ -509,6 +521,11 @@ type FreeswitchClusterSpec struct {
 	// with the defaults: health is reported, and only pods annotated sip.instruments.com/fail-over are failed over.
 	// +optional
 	Failover *FailoverSpec `json:"failover,omitempty"`
+
+	// recovery, when set, recovers the calls tracked under a pod's address each time FreeSWITCH starts there. It
+	// needs call tracking in the configuration and a required external address. Unset, nothing recovers calls.
+	// +optional
+	Recovery *RecoverySpec `json:"recovery,omitempty"`
 }
 
 // Member is one FreeSWITCH pod as the operator sees it.
