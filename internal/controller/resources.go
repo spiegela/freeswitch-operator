@@ -27,8 +27,12 @@ const (
 	volumeScripts = "operator-scripts"
 	volumePodInfo = "podinfo"
 	volumeConfig  = "config"
-	portSIPUDP    = "sip-udp"
-	portSIPTCP    = "sip-tcp"
+	// volumeRun is an emptyDir FreeSWITCH and the exporter share, at runDir: the recovery on start writes what it
+	// did there (recoveredFile), for the exporter's metrics. It lasts as long as the pod, across restarts.
+	volumeRun  = "operator-run"
+	runDir     = "/run/freeswitch-operator"
+	portSIPUDP = "sip-udp"
+	portSIPTCP = "sip-tcp"
 
 	// drainGraceMargin is added to maxDrainSeconds for the pod's termination grace period, so the preStop drain
 	// always finishes before the kubelet's SIGKILL.
@@ -288,6 +292,10 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		mounts = append(mounts, corev1.VolumeMount{Name: volumeConfig, MountPath: conf.mountPath, ReadOnly: true})
 		templateAnnotations = map[string]string{configHashAnnotation: conf.hash}
 	}
+	if cfg.recovery {
+		volumes = append(volumes, corev1.Volume{Name: volumeRun, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
+		mounts = append(mounts, corev1.VolumeMount{Name: volumeRun, MountPath: runDir})
+	}
 
 	container := corev1.Container{
 		Name:            containerName,
@@ -348,7 +356,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 			},
 		},
 		Containers:     []corev1.Container{container},
-		InitContainers: slices.Concat(addressWaitContainers(fsc, cfg), exporterContainers(cfg.metrics)),
+		InitContainers: slices.Concat(addressWaitContainers(fsc, cfg), exporterContainers(cfg.metrics, cfg.recovery)),
 		Volumes:        volumes,
 	}
 
@@ -428,8 +436,8 @@ func addressWaitContainers(fsc *sipv1alpha1.FreeswitchCluster, cfg settings) []c
 
 // exporterContainers is the metrics exporter as a native sidecar (an init container that keeps running): it starts
 // before FreeSWITCH and the kubelet stops it only after FreeSWITCH has exited, so it reports through the whole
-// drain. Nil when spec.metrics is unset.
-func exporterContainers(m *sipv1alpha1.FreeswitchMetricsSpec) []corev1.Container {
+// drain. With recovery on start it reads what the recovery did (recoveredFile). Nil when spec.metrics is unset.
+func exporterContainers(m *sipv1alpha1.FreeswitchMetricsSpec, recovery bool) []corev1.Container {
 	if m == nil {
 		return nil
 	}
@@ -440,6 +448,11 @@ func exporterContainers(m *sipv1alpha1.FreeswitchMetricsSpec) []corev1.Container
 	}
 	if ref := m.EventSocket.PasswordSecretRef; ref != nil {
 		env = append(env, corev1.EnvVar{Name: "ESL_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: ref}})
+	}
+	var mounts []corev1.VolumeMount
+	if recovery {
+		env = append(env, corev1.EnvVar{Name: "RECOVERED_FILE", Value: recoveredFile})
+		mounts = []corev1.VolumeMount{{Name: volumeRun, MountPath: runDir, ReadOnly: true}}
 	}
 	resources := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
@@ -454,6 +467,7 @@ func exporterContainers(m *sipv1alpha1.FreeswitchMetricsSpec) []corev1.Container
 		ImagePullPolicy: m.ExporterImagePullPolicy,
 		RestartPolicy:   ptr.To(corev1.ContainerRestartPolicyAlways),
 		Env:             env,
+		VolumeMounts:    mounts,
 		Resources:       resources,
 		// The host network makes this a port on the node; declaring it lets a scrape config find it by name.
 		Ports: []corev1.ContainerPort{{Name: portMetrics, Protocol: corev1.ProtocolTCP, ContainerPort: m.Port, HostPort: m.Port}},

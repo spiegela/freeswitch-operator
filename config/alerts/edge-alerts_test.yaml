@@ -166,6 +166,28 @@ tests:
               summary: "edge-2 is above 80% of its session limit"
               description: Sessions beyond max-sessions are refused. Add nodes or raise the limit.
 
+  # A start that recovered its calls, and one that skipped the recovery.
+  - interval: 1m
+    input_series:
+      - series: 'freeswitch_recovery_skipped{job="freeswitch",namespace="telephony",fleet="edge",pod="edge-0"}'
+        values: '0x5'
+      - series: 'freeswitch_recovery_skipped{job="freeswitch",namespace="telephony",fleet="edge",pod="edge-1"}'
+        values: '_ _ 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FreeswitchRecoverySkipped
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: FreeswitchRecoverySkipped
+        exp_alerts:
+          - exp_labels: {severity: warning, job: freeswitch, namespace: telephony, fleet: edge, pod: edge-1}
+            exp_annotations:
+              summary: "FreeSWITCH on edge-1 did not recover its calls when it started"
+              description: >
+                The recovery on start skipped sofia recover: its SIP profiles weren't all running within 120 s, or one
+                isn't named for the pod's address. The calls tracked under its address were lost, and their rows stay in
+                the recovery table. The container's log has a "freeswitch-operator: recovery:" line saying why.
+
   # A pool with a node waiting, an address in Error, no spare and a stale provider read; a fleet waiting on its agent.
   - interval: 1m
     input_series:

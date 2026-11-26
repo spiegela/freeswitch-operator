@@ -54,6 +54,21 @@ func TestReadyDestinationsKeepsOnlyReadyNonTerminating(t *testing.T) {
 	}
 }
 
+// A starting pod's address is admitted to Kamailio while it recovers its calls, before it is ready.
+func TestStartingHosts(t *testing.T) {
+	eps := []discoveryv1.EndpointSlice{{
+		Endpoints: []discoveryv1.Endpoint{
+			endpoint("10.0.1.40", "edge-3", "n4", false, false), // starting
+			endpoint("10.0.1.10", "edge-0", "n1", true, false),
+			endpoint("10.0.1.20", "edge-1", "n2", false, true), // draining
+			endpoint("10.0.1.30", "edge-2", "n3", false, false),
+		},
+	}, {Endpoints: []discoveryv1.Endpoint{endpoint("10.0.1.40", "edge-3", "n4", false, false)}}}
+	if got, want := startingHosts(eps), []string{"10.0.1.30", "10.0.1.40"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
 func TestSIPURI(t *testing.T) {
 	cases := map[string]string{
 		sipURI("10.0.0.1", 5060, "udp"): "sip:10.0.0.1:5060",
@@ -618,5 +633,34 @@ func TestBuildStatefulSetRecovery(t *testing.T) {
 	}
 	if got := buildScriptsConfigMap(fsc).Data[recoverScriptName]; got != recoverScript {
 		t.Fatal("the scripts ConfigMap must carry the recover script")
+	}
+	// What the hook did goes on the run volume, which the exporter reads for its freeswitch_recovery_* series.
+	if !slices.ContainsFunc(c.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == volumeRun && m.MountPath == runDir && !m.ReadOnly }) {
+		t.Fatalf("mounts %+v, want the run volume writable at %s", c.VolumeMounts, runDir)
+	}
+	fsc.Spec.Metrics = &sipv1alpha1.FreeswitchMetricsSpec{ExporterImage: "exporter:test"}
+	spec := buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec
+	if !slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumeRun && v.EmptyDir != nil }) {
+		t.Fatalf("volumes %+v, want the run volume, an emptyDir", spec.Volumes)
+	}
+	i := slices.IndexFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == exporterContainerName })
+	if i < 0 {
+		t.Fatal("no exporter")
+	}
+	e := spec.InitContainers[i]
+	if !slices.ContainsFunc(e.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == volumeRun && m.MountPath == runDir && m.ReadOnly }) ||
+		!slices.Contains(e.Env, corev1.EnvVar{Name: "RECOVERED_FILE", Value: recoveredFile}) {
+		t.Fatalf("exporter mounts %+v env %+v, want the run volume read-only and RECOVERED_FILE", e.VolumeMounts, e.Env)
+	}
+
+	// Without recovery there is no run volume, and the exporter reads no file.
+	fsc.Spec.Recovery = nil
+	spec = buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec
+	if slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumeRun }) {
+		t.Fatal("a run volume without recovery")
+	}
+	e = spec.InitContainers[slices.IndexFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == exporterContainerName })]
+	if len(e.VolumeMounts) != 0 || slices.ContainsFunc(e.Env, func(v corev1.EnvVar) bool { return v.Name == "RECOVERED_FILE" }) {
+		t.Fatalf("exporter mounts %+v env %+v without recovery", e.VolumeMounts, e.Env)
 	}
 }

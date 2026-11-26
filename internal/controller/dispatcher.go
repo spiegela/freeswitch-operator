@@ -30,6 +30,29 @@ type destination struct {
 	Node string
 }
 
+// startingHosts are the addresses of the endpoints neither ready nor terminating: pods still starting. With
+// spec.recovery, such a pod recovers its calls before it turns ready, and their re-INVITEs reach Kamailio from its
+// node's address before the dispatcher list names it.
+func startingHosts(endpointSlices []discoveryv1.EndpointSlice) []string {
+	var out []string
+	for _, s := range endpointSlices {
+		for _, ep := range s.Endpoints {
+			ready := ep.Conditions.Ready != nil && *ep.Conditions.Ready
+			terminating := ep.Conditions.Terminating != nil && *ep.Conditions.Terminating
+			if ready || terminating {
+				continue
+			}
+			for _, a := range ep.Addresses {
+				if !slices.Contains(out, a) {
+					out = append(out, a)
+				}
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // readyDestinations turns EndpointSlices into dispatcher destinations: one per ready endpoint address. Terminating
 // endpoints are never ready, so a draining node leaves the list as soon as its preStop hook starts.
 func readyDestinations(endpointSlices []discoveryv1.EndpointSlice, port int32, transport string) []destination {

@@ -587,6 +587,16 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 			}
 		}
 	}
+	if notifier != nil && cfg.recovery {
+		// A pod recovering its calls on start re-invites them before it is ready, so before the list names its node:
+		// Kamailio's trusted-peer check would drop FreeSWITCH's requests from there. Admitted again on each look
+		// while it starts; the entries outlive the start (kamailioAdmittedTable).
+		if starting := startingHosts(endpointSlices.Items); len(starting) > 0 {
+			if err := notifier.Admit(ctx, starting); err != nil {
+				log.Error(err, "could not admit starting pods' addresses to Kamailio", "addresses", starting)
+			}
+		}
+	}
 	status.DispatcherHash = hash
 	status.DispatcherUpdatedAt = nil
 	if t, err := time.Parse(time.RFC3339Nano, cm.Annotations[sipv1alpha1.DispatcherUpdatedAtAnnotation]); err == nil {

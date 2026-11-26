@@ -45,6 +45,8 @@ type fakeFleet struct {
 	moveAddress string
 	// unfenced are the nodes unfenced.
 	unfenced []string
+	// draining are the pods deleted gracefully, whose drain has started.
+	draining map[string]bool
 }
 
 type fakeBlackout struct {
@@ -181,6 +183,10 @@ func (f *fakeFleet) DeletePod(_ context.Context, pod string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deleted = append(f.deleted, pod)
+	if f.draining == nil {
+		f.draining = map[string]bool{}
+	}
+	f.draining[pod] = true
 	return nil
 }
 
@@ -223,6 +229,16 @@ func (f *fakeFleet) Exec(_ context.Context, pod, container string, cmd ...string
 		return f.recoverOut, nil
 	case line == "fs_cli -x sofia recover flush":
 		return "Flushing recovery database.\n", nil
+	case line == "true":
+		if f.execDenied {
+			return "", errors.New(`pods "` + pod + `" is forbidden: cannot create resource "pods/exec"`)
+		}
+		return "", nil
+	case line == "test -e "+drainMarker:
+		if !f.draining[pod] {
+			return "", errors.New("command terminated with exit code 1")
+		}
+		return "", nil
 	}
 	return "", fmt.Errorf("unexpected command %q", line)
 }
@@ -551,8 +567,9 @@ actions:
   - {hangup: b}
 `
 
-// A move cordons the call's node, crashes FreeSWITCH, deletes the pod at once, and waits for the replacement to
-// take calls on the spare node with the same address, which recovered the calls on start.
+// A move cordons the call's node, deletes the pod gracefully, crashes FreeSWITCH once its drain has started (so the
+// kubelet doesn't restart it in place, where it would recover the calls itself), deletes the pod at once, and waits
+// for the replacement to take calls on the spare node with the same address, which recovered the calls on start.
 func TestTimelineMovesToASpareAndRecovers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("places real calls over loopback")
@@ -564,18 +581,18 @@ func TestTimelineMovesToASpareAndRecovers(t *testing.T) {
 	r := withFleet(startMock(t, longRoute), f)
 	r.cfg.Caps[scenario.SpareNodeCapability] = true
 	res := runScenario(t, r, moveScenario)
-	want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: " + readRecoveredCmd}
+	want := []string{"edge-0: true", "edge-0: test -e " + drainMarker, "edge-0: fs_cli -x fsctl crash", "edge-0: " + readRecoveredCmd}
 	if fmt.Sprint(f.execs) != fmt.Sprint(want) {
 		t.Errorf("ran %q, want %q", f.execs, want)
 	}
-	if fmt.Sprint(f.deleted) != "[edge-0 (now)]" {
-		t.Errorf("deleted %q, want edge-0 at once", f.deleted)
+	if fmt.Sprint(f.deleted) != "[edge-0 edge-0 (now)]" {
+		t.Errorf("deleted %q, want edge-0 gracefully, then at once", f.deleted)
 	}
 	if f.cordoned["n0"] {
 		t.Error("n0 left cordoned")
 	}
 	tl := strings.Join(res.Timeline, "\n  ")
-	for _, s := range []string{"cordoned it, crashed FreeSWITCH and deleted the pod; its replacement takes calls on n3, with the same external address \"192.0.2.10\"",
+	for _, s := range []string{"cordoned it, deleted the pod and crashed FreeSWITCH under its drain; its replacement takes calls on n3, with the same external address \"192.0.2.10\"",
 		"the recovery on start in edge-0 took 4 call legs: call(s) a, b"} {
 		if !strings.Contains(tl, s) {
 			t.Errorf("timeline lacks %q:\n  %s", s, tl)
@@ -607,7 +624,7 @@ func TestTimelineMoveToAnotherAddressFails(t *testing.T) {
 	}
 	// The crashed FreeSWITCH's rows are under the old address's profiles, which a flush in the replacement can't
 	// reach: none is run, and the timeline says the rows stay.
-	if want := []string{"edge-0: fs_cli -x fsctl crash"}; fmt.Sprint(f.execs) != fmt.Sprint(want) {
+	if want := []string{"edge-0: true", "edge-0: test -e " + drainMarker, "edge-0: fs_cli -x fsctl crash"}; fmt.Sprint(f.execs) != fmt.Sprint(want) {
 		t.Errorf("ran %q, want %q", f.execs, want)
 	}
 	if tl := strings.Join(res.Timeline, "\n"); !strings.Contains(tl, `cleanup: edge-0's calls stay in the recovery table under profiles named for 192.0.2.10`) {
@@ -627,7 +644,7 @@ func TestTimelineMoveWithoutRecoveryFlushes(t *testing.T) {
 	r := withFleet(startMock(t, longRoute), f)
 	r.cfg.Caps[scenario.SpareNodeCapability] = true
 	runScenario(t, r, strings.Replace(moveScenario, "  - {expectRecovered: a}\n", "", 1))
-	if want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: " + readRecoveredCmd, "edge-0: fs_cli -x sofia recover flush"}; fmt.Sprint(f.execs) != fmt.Sprint(want) {
+	if want := []string{"edge-0: true", "edge-0: test -e " + drainMarker, "edge-0: fs_cli -x fsctl crash", "edge-0: " + readRecoveredCmd, "edge-0: fs_cli -x sofia recover flush"}; fmt.Sprint(f.execs) != fmt.Sprint(want) {
 		t.Errorf("ran %q, want %q", f.execs, want)
 	}
 }
@@ -651,7 +668,11 @@ func TestTimelineCrashThatDoesntHappenFails(t *testing.T) {
 			t.Fatal(err)
 		}
 		res := r.Run(context.Background(), s)
-		if got := strings.Join(res.Failures, "\n"); res.Status != statusFail || !strings.Contains(got, "didn't crash") || !strings.Contains(got, "forbidden") {
+		want := "didn't crash"
+		if tc.name == "move" {
+			want = "can't run commands in edge-0"
+		}
+		if got := strings.Join(res.Failures, "\n"); res.Status != statusFail || !strings.Contains(got, want) || !strings.Contains(got, "forbidden") {
 			t.Errorf("%s: got %s: %v", tc.name, res.Status, res.Failures)
 		}
 		if len(f.deleted) != 0 || slices.ContainsFunc(f.execs, func(e string) bool { return strings.Contains(e, "flush") }) {
@@ -717,7 +738,7 @@ func TestTimelineRecoveryOnStartNeedsNoFlush(t *testing.T) {
 	r := withFleet(startMock(t, longRoute), f)
 	r.cfg.Caps[scenario.SpareNodeCapability] = true
 	res := runScenario(t, r, strings.Replace(moveScenario, "  - {expectRecovered: a}\n", "", 1))
-	if want := []string{"edge-0: fs_cli -x fsctl crash", "edge-0: " + readRecoveredCmd}; fmt.Sprint(f.execs) != fmt.Sprint(want) {
+	if want := []string{"edge-0: true", "edge-0: test -e " + drainMarker, "edge-0: fs_cli -x fsctl crash", "edge-0: " + readRecoveredCmd}; fmt.Sprint(f.execs) != fmt.Sprint(want) {
 		t.Errorf("ran %q, want %q", f.execs, want)
 	}
 	if tl := strings.Join(res.Timeline, "\n"); !strings.Contains(tl, "cleanup: edge-0 recovered its calls on start (Recovered 4 call(s)): nothing to flush") {

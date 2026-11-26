@@ -95,6 +95,18 @@ groups:
           summary: "{{ $labels.pod }} is above 80% of its session limit"
           description: Sessions beyond max-sessions are refused. Add nodes or raise the limit.
 
+      - alert: FreeswitchRecoverySkipped
+        # The last start's recovery (spec.recovery) recovered nothing because something was wrong. It stays until
+        # FreeSWITCH next starts and recovers, so it fires at once.
+        expr: freeswitch_recovery_skipped == 1
+        labels: {severity: warning}
+        annotations:
+          summary: "FreeSWITCH on {{ $labels.pod }} did not recover its calls when it started"
+          description: >
+            The recovery on start skipped sofia recover: its SIP profiles weren't all running within 120 s, or one
+            isn't named for the pod's address. The calls tracked under its address were lost, and their rows stay in
+            the recovery table. The container's log has a "freeswitch-operator: recovery:" line saying why.
+
   - name: freeswitch-operator
     rules:
       - alert: EdgeFleetUnavailable

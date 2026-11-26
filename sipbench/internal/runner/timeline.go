@@ -351,8 +351,25 @@ func (t *timeline) moveFreeswitch(ctx context.Context, call string) (string, err
 		return "", fmt.Errorf("cordoning %s: %w", m.Node, err)
 	}
 	t.cordoned = append(t.cordoned, m.Node)
-	// Only once FreeSWITCH is seen to have died: deleting a pod whose FreeSWITCH still runs stops it gracefully,
-	// which hangs every call up.
+	// A lost node's FreeSWITCH stops without hanging its calls up, and nothing recovers them on that node. A crash
+	// alone isn't that: the kubelet restarts FreeSWITCH in place, and its recovery on start takes the calls back
+	// there. And deleting a pod whose FreeSWITCH runs stops it gracefully, which hangs every call up. So the pod is
+	// deleted first, gracefully: its drain (preStop) pauses inbound calls and holds FreeSWITCH while calls are up,
+	// and the kubelet restarts nothing in a pod shutting down. FreeSWITCH crashes under the drain, leaving its calls
+	// in the recovery table, and only then is the pod deleted at once, for its StatefulSet to replace it.
+	ectx, cancel := context.WithTimeout(ctx, execTimeout)
+	_, err = f.Exec(ectx, m.Pod, fleet.FreeswitchContainer, "true")
+	cancel()
+	if err != nil {
+		// Found out before the delete: a crash refused after it would leave the pod draining, calls and all.
+		return "", fmt.Errorf("call %s: can't run commands in %s, to crash its FreeSWITCH: %w", call, m.Pod, err)
+	}
+	if err := f.DeletePod(ctx, m.Pod); err != nil {
+		return "", fmt.Errorf("deleting %s: %w", m.Pod, err)
+	}
+	if err := t.waitDraining(ctx, m.Pod); err != nil {
+		return "", fmt.Errorf("call %s: %w", call, err)
+	}
 	if _, err := t.crash(ctx, m.Pod, addr); err != nil {
 		return "", fmt.Errorf("call %s: %w", call, err)
 	}
@@ -373,7 +390,7 @@ func (t *timeline) moveFreeswitch(ctx context.Context, call string) (string, err
 		return "", fmt.Errorf("%s moved from %s to %s, but holds %q, not %q: its calls' profiles are named for the old "+
 			"address (does %s hold an idle address of its own?)", m.Pod, m.Node, now.Node, addrs[m.Pod], addr, now.Node)
 	}
-	return fmt.Sprintf("call %s was on %s on %s; cordoned it, crashed FreeSWITCH and deleted the pod; its replacement "+
+	return fmt.Sprintf("call %s was on %s on %s; cordoned it, deleted the pod and crashed FreeSWITCH under its drain; its replacement "+
 		"takes calls on %s, with the same external address %q", call, m.Pod, m.Node, now.Node, addr), nil
 }
 
@@ -392,9 +409,10 @@ func parseRecovered(out string) (int, error) {
 }
 
 // recoveredFile is where the operator's recovery on start (spec.recovery) writes what it did, one line: sofia
-// recover's answer, or why it recovered nothing ("skipped: ..."). It is in the container's own filesystem, so each
-// start of FreeSWITCH writes its own. The operator's constant of the same name (internal/controller/scripts.go).
-const recoveredFile = "/tmp/freeswitch-operator-recovered"
+// recover's answer, or why it recovered nothing ("skipped: ..."). It is on a volume the pod keeps across restarts, and
+// each start of FreeSWITCH removes the last start's before it waits. The operator's constant of the same name
+// (internal/controller/scripts.go).
+const recoveredFile = "/run/freeswitch-operator/recovered"
 
 // recoveredWait bounds the wait for that line once the pod is up again (a variable for the tests). The operator's
 // hook writes it before the pod turns ready, after waiting up to 120 s for FreeSWITCH's SIP profiles.
@@ -514,6 +532,34 @@ func (t *timeline) crash(ctx context.Context, pod, addr string) (fleet.Container
 		select {
 		case <-ctx.Done():
 			return before, ctx.Err()
+		case <-time.After(pollEvery):
+		}
+	}
+}
+
+// drainMarker is the file the operator's drain (preStop) creates as it starts. The operator's constant of the same
+// name (internal/controller/scripts.go).
+const drainMarker = "/tmp/freeswitch-operator-draining"
+
+// drainSeen bounds the wait for a deleted pod's drain to start (a variable for the tests).
+var drainSeen = 30 * time.Second
+
+// waitDraining waits until a deleted pod's drain has started.
+func (t *timeline) waitDraining(ctx context.Context, pod string) error {
+	deadline := time.Now().Add(drainSeen)
+	for {
+		ectx, cancel := context.WithTimeout(ctx, execTimeout)
+		_, err := t.r.cfg.Fleet.Exec(ectx, pod, fleet.FreeswitchContainer, "test", "-e", drainMarker)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s didn't start draining within %s of its deletion (last: %v)", pod, drainSeen, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-time.After(pollEvery):
 		}
 	}

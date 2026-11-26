@@ -409,8 +409,9 @@ type Action struct {
 	// scenario's calls that are up, none of another node's.
 	ExpectRecovered string `yaml:"expectRecovered,omitempty"`
 	// MoveFreeswitchOf moves the pod that carries the named call to a spare edge node, as a lost node's would be:
-	// it cordons the call's node, crashes FreeSWITCH there (no drain, the calls left in the recovery table) and
-	// deletes the pod at once. The action ends once the replacement is up on another node, and fails unless it
+	// it cordons the call's node, deletes the pod (its drain holds FreeSWITCH, and the kubelet restarts nothing in a
+	// pod shutting down, so nothing recovers the calls in place), crashes FreeSWITCH under the drain (the calls left
+	// in the recovery table) and deletes the pod at once. The action ends once the replacement is up on another node, and fails unless it
 	// holds the same external address. It needs the "spare-node" and "call-recovery" capabilities.
 	MoveFreeswitchOf string `yaml:"moveFreeswitchOf,omitempty"`
 }

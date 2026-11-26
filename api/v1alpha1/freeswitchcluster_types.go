@@ -349,7 +349,8 @@ type LivenessSpec struct {
 // Recovery takes the calls of the pod's address only when every SIP profile is named for it, as NAME-<address>
 // (each character but letters and digits a dash: trunks-203-0-113-10; docs/call-tracking.md). The hook checks the
 // names and recovers nothing when one doesn't end that way: a profile under a name every node shares would take
-// other nodes' live calls. The result is in the container's log and in /tmp/freeswitch-operator-recovered.
+// other nodes' live calls. The result is in the container's log and in /run/freeswitch-operator/recovered, on a
+// volume the metrics exporter shares (the freeswitch_recovery_* series).
 type RecoverySpec struct{}
 
 // FreeswitchMetricsSpec runs a Prometheus exporter in each FreeSWITCH pod. It reads FreeSWITCH over its event

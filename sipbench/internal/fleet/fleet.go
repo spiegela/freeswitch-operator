@@ -162,7 +162,7 @@ type Fleet interface {
 	// Exec runs a command in one of a pod's containers and returns what it printed (stdout, then stderr). A
 	// command that exits non-zero, or whose container dies under it, is an error, with the output so far.
 	Exec(ctx context.Context, pod, container string, cmd ...string) (string, error)
-	// Container reports on one of a pod's containers.
+	// Container reports on one of a pod's containers. A pod that is gone reads as a stopped container.
 	Container(ctx context.Context, pod, container string) (ContainerState, error)
 	// RecoversCalls reports whether the fleet keeps its calls in a shared recovery table and recovers them when
 	// FreeSWITCH starts: its spec.env sets TRACK_CALLS to "true" and CORE_DB_DSN (sipbench's FreeSWITCH config reads
@@ -647,6 +647,9 @@ func (k *kube) RecoversCalls(ctx context.Context) (bool, error) {
 
 func (k *kube) Container(ctx context.Context, pod, container string) (ContainerState, error) {
 	p, err := k.core.CoreV1().Pods(k.ns).Get(ctx, pod, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return ContainerState{}, nil
+	}
 	if err != nil {
 		return ContainerState{}, err
 	}

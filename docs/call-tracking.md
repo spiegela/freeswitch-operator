@@ -165,7 +165,9 @@ The hook:
 - **Never fails.** A failed postStart hook kills the container, and FreeSWITCH restarting wouldn't recover the calls
   either.
 - **Says what it did** in the container's log (`freeswitch-operator: recovery: Recovered 4 call(s)`) and in
-  `/tmp/freeswitch-operator-recovered` in the container, where sipbench reads it.
+  `/run/freeswitch-operator/recovered`, on a volume the exporter shares: with `spec.metrics`, the
+  `freeswitch_recovery_*` series report it ([metrics](metrics.md)), and `FreeswitchRecoverySkipped` fires when a
+  start recovered nothing because something was wrong. sipbench reads the file too.
 
 Turning it on, or off, changes the pod template, so it rolls the fleet one drained node at a time.
 
@@ -247,8 +249,9 @@ Kamailio. Where Kamailio has a bind address, that route names Kamailio's pod rat
 on a node new to the fleet sends from that node's address, which Kamailio's `trustedPeers` check would drop until
 its dispatcher list names the node (`reloadDelaySeconds` later): the operator admits the address over JSON-RPC as
 soon as it writes the list. sipbench's
-`moved-call-in-dialog` checks a move on kind: it cordons a call's node, crashes FreeSWITCH there, deletes the pod at
-once, and checks the replacement, which comes up on the spare node with the moved pod's address, recovered the
+`moved-call-in-dialog` checks a move on kind: it cordons a call's node, deletes the pod, crashes FreeSWITCH under its
+drain (a crash alone would only restart it in place, where it recovers its own calls), deletes the pod at once, and
+checks the replacement, which comes up on the spare node with the moved pod's address, recovered the
 calls on start. Then every
 call's backend sends a REFER and every caller hangs up, and each of those requests must reach the node the call is
 on now. A pod replaced onto a spare keeps its address only when the spare holds none of its own (the pool's rule);
@@ -262,7 +265,8 @@ Not built yet:
 
 With failover and `spec.recovery`, a lost node's calls move: the operator fences the node and starts the member on
 the spare, the pool gives it the member's address, and FreeSWITCH recovers the calls as it starts there, before its
-pod turns ready. A call is silent from the node's loss until then. New calls go elsewhere meanwhile, within
+pod turns ready. A call is silent from the node's loss until then: 70 s on kind (the node NotReady after about
+45 s, Failed 15 s later, then the pod's start on the spare). New calls go elsewhere meanwhile, within
 Kamailio's 5 s failover at first, then with no delay once the dispatcher's probes have taken the node out.
 sipbench's `node-lost-mid-call` checks it: it takes a call's node off the network for two minutes (tc drop filters
 on the node's own interface), checks the rest of the fleet keeps taking calls, waits for the operator to fail the

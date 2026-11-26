@@ -4,8 +4,9 @@ long: true
 description: >
   A call's FreeSWITCH moves to a spare edge node mid-call, and the call's SIP follows it both ways. Four long calls
   go through the fleet. Ten seconds in, the runner moves call a's pod to the spare node, as a lost node's pod would
-  move: it cordons the node, crashes FreeSWITCH (no drain, no BYE, the calls left in the recovery table) and
-  deletes the pod at once. The replacement comes up on the spare with the same address, so the same profile names,
+  move: it cordons the node, deletes the pod (whose drain holds FreeSWITCH while calls are up, and keeps the kubelet
+  from restarting it in place, where it would recover the calls itself), crashes FreeSWITCH under the drain (no
+  BYE, the calls left in the recovery table) and deletes the pod at once. The replacement comes up on the spare with the same address, so the same profile names,
   and recovers on start (spec.recovery): that must have taken exactly the legs of the calls that were on a's node.
   Their re-INVITEs give both far ends the spare's Contact. Every call then exercises its dialog both ways: the
   backend sends a REFER (it must reach the spare directly), the spare accepts it, releases the backend with a
