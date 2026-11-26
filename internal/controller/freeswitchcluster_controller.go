@@ -218,9 +218,13 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		fsc.Status = *status
 		if err := r.Status().Update(ctx, &fsc); err != nil {
 			if apierrors.IsConflict(err) {
+				if failoverErr != nil {
+					// Retried on the failover's error (and logged), which writes the status again too.
+					return ctrl.Result{}, failoverErr
+				}
 				return ctrl.Result{RequeueAfter: time.Second}, nil
 			}
-			return ctrl.Result{}, err
+			return ctrl.Result{}, errors.Join(err, failoverErr)
 		}
 	}
 	if failoverErr != nil {

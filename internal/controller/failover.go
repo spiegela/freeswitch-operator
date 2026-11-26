@@ -114,16 +114,21 @@ func (r *FreeswitchClusterReconciler) carryOut(ctx context.Context, fsc *sipv1al
 		d.err = fmt.Errorf("failing over %s: %w", t.Name, err)
 		return 0
 	}
-	if d.resume && !deleted {
+	what := "deleted the pod to start it on another node"
+	switch {
+	case !deleted && d.resume:
 		// Carried out already: the pod is gone, and the cache that still listed it hadn't caught up.
 		log.V(1).Info("failover already carried out", "pod", t.Name)
 		return 0
+	case !deleted:
+		// A new failover all the same (recorded, and the node fenced), of a pod something else had deleted.
+		what = "the pod was already gone, so it starts on another node"
 	}
-	log.Info("failed over member", "pod", t.Name, "node", t.Spec.NodeName, "trigger", d.trigger, "reason", d.reason, "resumed", d.resume)
+	log.Info("failed over member", "pod", t.Name, "node", t.Spec.NodeName, "trigger", d.trigger, "reason", d.reason,
+		"resumed", d.resume, "deleted", deleted)
 	recordFailover(fleet, d.trigger, nil)
-	r.event(fsc, corev1.EventTypeWarning, "FailingOver", "Failover",
-		"%s failover of %s: fenced node %s and deleted the pod to start it on another node; %s",
-		d.trigger, t.Name, t.Spec.NodeName, truncate(d.reason, 512))
+	r.event(fsc, corev1.EventTypeWarning, "FailingOver", "Failover", "%s failover of %s: fenced node %s and %s; %s",
+		d.trigger, t.Name, t.Spec.NodeName, what, truncate(d.reason, 512))
 	return 0
 }
 
@@ -263,7 +268,7 @@ func membersHealthyCondition(gen int64, suspect, failed []string, last *sipv1alp
 
 // failOver fences the pod's node, then deletes the pod at once (no drain: its calls are lost anyway). The
 // StatefulSet starts it again, and the fenced label keeps it off the fenced node. deleted is false when the pod was
-// already gone.
+// already gone: deleted, or already replaced by a new pod of the same name (the UID precondition conflicts).
 func (r *FreeswitchClusterReconciler) failOver(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, p *corev1.Pod, trigger sipv1alpha1.FailoverTrigger, reason string, now time.Time) (deleted bool, err error) {
 	if p.Spec.NodeName != "" {
 		by := fmt.Sprintf("%s failover of FreeswitchCluster %s/%s pod %s at %s: %s",
@@ -274,7 +279,7 @@ func (r *FreeswitchClusterReconciler) failOver(ctx context.Context, fsc *sipv1al
 	}
 	uid := p.UID
 	switch err := r.Delete(ctx, p, client.Preconditions{UID: &uid}, client.GracePeriodSeconds(0)); {
-	case apierrors.IsNotFound(err):
+	case apierrors.IsNotFound(err), apierrors.IsConflict(err):
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("deleting pod: %w", err)

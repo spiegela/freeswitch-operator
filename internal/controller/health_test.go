@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -626,6 +627,27 @@ func TestResumeAlreadyCarriedOut(t *testing.T) {
 	r.carryOut(context.Background(), fsc, fleet, &d, fsc.Status.DeepCopy(), t0)
 	if d.err != nil || ok() != before {
 		t.Errorf("err %v; failovers ok %v, was %v", d.err, ok(), before)
+	}
+}
+
+// A pod already replaced by a new one of the same name fails the delete's UID precondition with a Conflict: that pod
+// is gone too, and resuming its failover does nothing more.
+func TestResumeAlreadyReplaced(t *testing.T) {
+	replaced := interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+		return apierrors.NewConflict(corev1.Resource("pods"), obj.GetName(), errors.New("Precondition failed: UID in precondition"))
+	}}
+	c, fsc, pod, _ := failoverTestClient(t, replaced)
+	r := &FreeswitchClusterReconciler{Client: c, Now: func() time.Time { return t0 }}
+	fleet := fleetRef{kind: kindFreeswitch, namespace: "telephony", name: "edge-replaced"}
+	if deleted, err := r.failOver(context.Background(), fsc, &pod, sipv1alpha1.FailoverTriggerManual, "asked", t0); err != nil || deleted {
+		t.Fatalf("deleted %v, err %v", deleted, err)
+	}
+	d := failoverDecision{target: &pod, trigger: sipv1alpha1.FailoverTriggerManual, reason: "asked", resume: true}
+	r.carryOut(context.Background(), fsc, fleet, &d, fsc.Status.DeepCopy(), t0)
+	for _, result := range []string{reloadOK, reloadError} {
+		if n := testutil.ToFloat64(failovers.WithLabelValues(fleet.labels(string(sipv1alpha1.FailoverTriggerManual), result)...)); d.err != nil || n != 0 {
+			t.Errorf("err %v; failovers %s %v", d.err, result, n)
+		}
 	}
 }
 

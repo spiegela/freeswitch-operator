@@ -522,10 +522,18 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(stale.Status.LastFailover).To(BeNil(), "left as it was")
 		Expect(fleet().Status.LastFailover).To(BeNil())
 
-		By("in mode Automatic, the node is fenced and the pod deleted at once, and the record survives a status update that conflicts")
+		By("in mode Automatic, a failover that can't fence is recorded, shown on the member and retried, with the status written")
 		fsc := fleet()
 		fsc.Spec.Failover.Mode = sipv1alpha1.FailoverAutomatic
 		Expect(k8sClient.Update(ctx, fsc)).To(Succeed())
+		refused := &FreeswitchClusterReconciler{Client: nodePatchesFail{k8sClient}, Scheme: k8sClient.Scheme(), SIPProbes: probes}
+		_, err = refused.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "edge"}})
+		Expect(err).To(MatchError(ContainSubstring("node patch refused")))
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(p1), &corev1.Pod{})).To(Succeed(), "not deleted before its node is fenced")
+		Expect(fleet().Status.LastFailover).NotTo(BeNil(), "recorded before fencing")
+		Expect(member("edge-1").Health.Message).To(ContainSubstring("failover failed, retrying"))
+
+		By("the recorded failover is finished: the node is fenced and the pod deleted at once, and the record survives a status update that conflicts")
 		conflicting := &FreeswitchClusterReconciler{Client: statusConflicts{k8sClient}, Scheme: k8sClient.Scheme(), SIPProbes: probes}
 		reconcileOnce(conflicting, ns)
 		err = k8sClient.Get(ctx, client.ObjectKeyFromObject(p1), &corev1.Pod{})
@@ -757,6 +765,16 @@ var _ = Describe("FreeswitchCluster controller", func() {
 
 func podKey(p *corev1.Pod) types.NamespacedName {
 	return types.NamespacedName{Namespace: p.Namespace, Name: p.Name}
+}
+
+// nodePatchesFail is a client that can't patch nodes, so it can't fence one.
+type nodePatchesFail struct{ client.Client }
+
+func (c nodePatchesFail) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if _, ok := obj.(*corev1.Node); ok {
+		return errors.New("node patch refused")
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
 }
 
 // statusConflicts is a client whose status updates all conflict, as they do when the cache is behind; status
