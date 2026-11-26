@@ -26,6 +26,9 @@ const (
 	// healthRecheck is how often a fleet with a member that isn't Healthy, or a failover under way, is reconciled
 	// with nothing else happening.
 	healthRecheck = 10 * time.Second
+
+	// fencedValue is the value of the FencedTaint and the FencedLabel.
+	fencedValue = "true"
 )
 
 // markFirstReady records on each ready pod when the operator first saw it ready, so that only pods that have worked
@@ -278,7 +281,7 @@ func fenceNode(ctx context.Context, reader client.Reader, c client.Client, name,
 		// The node lifecycle controller changes taints too (unreachable, not-ready): don't overwrite its change.
 		patch := client.MergeFromWithOptions(n.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		if !tainted {
-			n.Spec.Taints = append(n.Spec.Taints, corev1.Taint{Key: sipv1alpha1.FencedTaint, Value: "true", Effect: corev1.TaintEffectNoSchedule})
+			n.Spec.Taints = append(n.Spec.Taints, corev1.Taint{Key: sipv1alpha1.FencedTaint, Value: fencedValue, Effect: corev1.TaintEffectNoSchedule})
 			if n.Annotations == nil {
 				n.Annotations = map[string]string{}
 			}
@@ -288,7 +291,7 @@ func fenceNode(ctx context.Context, reader client.Reader, c client.Client, name,
 			if n.Labels == nil {
 				n.Labels = map[string]string{}
 			}
-			n.Labels[sipv1alpha1.FencedLabel] = "true"
+			n.Labels[sipv1alpha1.FencedLabel] = fencedValue
 		}
 		return client.IgnoreNotFound(c.Patch(ctx, &n, patch))
 	})
@@ -344,7 +347,7 @@ func toleratesFenced(t corev1.Toleration) bool {
 	case "":
 		return t.Operator == corev1.TolerationOpExists
 	case sipv1alpha1.FencedTaint:
-		return t.Operator == corev1.TolerationOpExists || t.Value == "true"
+		return t.Operator == corev1.TolerationOpExists || t.Value == fencedValue
 	}
 	return false
 }
