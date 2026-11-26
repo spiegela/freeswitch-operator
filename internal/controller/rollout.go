@@ -16,12 +16,8 @@ import (
 )
 
 func podReady(p *corev1.Pod) bool {
-	for _, c := range p.Status.Conditions {
-		if c.Type == corev1.PodReady {
-			return c.Status == corev1.ConditionTrue
-		}
-	}
-	return false
+	c := podCondition(p, corev1.PodReady)
+	return c != nil && c.Status == corev1.ConditionTrue
 }
 
 func podRevision(p *corev1.Pod) string {
@@ -39,13 +35,13 @@ func memberState(p *corev1.Pod) sipv1alpha1.MemberState {
 	}
 }
 
-// ordinal returns a StatefulSet pod's ordinal, or -1.
-func ordinal(p *corev1.Pod) int {
-	i := strings.LastIndex(p.Name, "-")
+// ordinal returns a StatefulSet pod's ordinal, from its name, or -1.
+func ordinal(pod string) int {
+	i := strings.LastIndex(pod, "-")
 	if i < 0 {
 		return -1
 	}
-	n, err := strconv.Atoi(p.Name[i+1:])
+	n, err := strconv.Atoi(pod[i+1:])
 	if err != nil {
 		return -1
 	}
@@ -91,7 +87,7 @@ func nextPodToReplace(pods []corev1.Pod, updateRevision string, desired int32) r
 		return d
 	}
 	// Prefer an outdated pod that is not ready. Otherwise every other pod must be ready.
-	slices.SortFunc(outdated, func(a, b *corev1.Pod) int { return cmp.Compare(ordinal(b), ordinal(a)) })
+	slices.SortFunc(outdated, func(a, b *corev1.Pod) int { return cmp.Compare(ordinal(b.Name), ordinal(a.Name)) })
 	for _, p := range outdated {
 		if !podReady(p) {
 			d.Replace = p

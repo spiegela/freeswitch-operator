@@ -245,6 +245,9 @@ spec:
   metalLB:
     ipAddressPool: sip-edge
     addresses: [$list]
+  # MetalLB's fencing is Advisory; on kind a fenced node is one the bench took off the network, so let failover
+  # take its address back.
+  allowAdvisoryFencing: true
 EOF
     [ "$i" = 6 ] && return 1
     sleep 5

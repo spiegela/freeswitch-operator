@@ -279,6 +279,9 @@ func (t *timeline) do(ctx context.Context, a *scenario.Action) (string, error) {
 
 	case a.MoveFreeswitchOf != "":
 		return t.moveFreeswitch(ctx, a.MoveFreeswitchOf)
+
+	case a.WaitFailover != nil:
+		return t.waitFailover(ctx, a.WaitFailover)
 	}
 	return "", errors.New("no action")
 }
@@ -356,14 +359,7 @@ func (t *timeline) moveFreeswitch(ctx context.Context, call string) (string, err
 	if err := f.DeletePodNow(ctx, m.Pod); err != nil {
 		return "", fmt.Errorf("deleting %s: %w", m.Pod, err)
 	}
-	var now fleet.Member
-	err = t.poll(ctx, moveWait, func(s fleet.Status) (bool, error) {
-		cur, ok := s.Member(m.Pod)
-		if ok {
-			now = cur
-		}
-		return ok && cur.Node != "" && cur.Node != m.Node && cur.State == "Active", nil
-	})
+	now, _, err := t.activeElsewhere(ctx, m, moveWait)
 	if err != nil {
 		return "", fmt.Errorf("%s (call %s) not taking calls on another node than %s (now %+v): %w", m.Pod, call, m.Node, now, err)
 	}
@@ -680,6 +676,39 @@ func (t *timeline) waitNode(ctx context.Context, w *scenario.WaitNode) (string, 
 	}
 }
 
+// waitFailover waits until a pod of the same name as the call's takes calls again on another node: the operator
+// failed it over.
+func (t *timeline) waitFailover(ctx context.Context, w *scenario.WaitFailoverOf) (string, error) {
+	m, err := t.memberOf(ctx, w.Of)
+	if err != nil {
+		return "", err
+	}
+	start := time.Now()
+	cur, ok, err := t.activeElsewhere(ctx, m, msOr(w.TimeoutMs, defaultFleetWait))
+	if err != nil {
+		where := "gone"
+		if ok {
+			where = cur.State + " on " + cur.Node
+		}
+		return "", fmt.Errorf("pod %s (call %s) not failed over from %s: it is %s: %w", m.Pod, w.Of, m.Node, where, err)
+	}
+	return fmt.Sprintf("pod %s (call %s) failed over from %s to %s, taking calls %s after the wait began",
+		m.Pod, w.Of, m.Node, cur.Node, time.Since(start).Round(time.Second)), nil
+}
+
+// activeElsewhere waits until a pod of m's name takes calls on another node than m's. It returns the pod as last
+// seen, and whether it was there at the last look.
+func (t *timeline) activeElsewhere(ctx context.Context, m fleet.Member, timeout time.Duration) (cur fleet.Member, present bool, err error) {
+	err = t.poll(ctx, timeout, func(s fleet.Status) (bool, error) {
+		var seen fleet.Member
+		if seen, present = s.Member(m.Pod); present {
+			cur = seen
+		}
+		return present && cur.State == fleet.MemberActive && cur.Node != "" && cur.Node != m.Node, nil
+	})
+	return cur, present, err
+}
+
 func (t *timeline) rollStuck(ctx context.Context, rs *scenario.RollStuck) (string, error) {
 	var first fleet.Status
 	err := t.poll(ctx, msOr(rs.TimeoutMs, defaultRollStarted), func(s fleet.Status) (bool, error) {
@@ -711,7 +740,7 @@ func (t *timeline) rollStuck(ctx context.Context, rs *scenario.RollStuck) (strin
 			return "", fmt.Errorf("more than one pod stopped taking calls: %s", describe(s))
 		}
 		for _, m := range s.Members {
-			if m.Revision == s.UpdateRevision && m.State == "Active" {
+			if m.Revision == s.UpdateRevision && m.State == fleet.MemberActive {
 				return "", fmt.Errorf("the replacement %s takes calls: the change did not break it", m.Pod)
 			}
 		}
@@ -782,16 +811,28 @@ func (t *timeline) restore(ctx context.Context) ([]string, error) {
 // cleanup undoes what the actions left behind, however the scenario ended. A node taken dark comes back on its own;
 // cleanup waits for that first, so the next scenario finds the fleet whole.
 func (t *timeline) cleanup() {
+	dark := make([]string, 0, len(t.blackouts))
+	for _, b := range t.blackouts {
+		dark = append(dark, b.node)
+	}
 	t.endBlackouts()
 	t.mu.Lock()
 	unrecovered := len(t.unrecovered)
 	t.mu.Unlock()
-	if len(t.cordoned) == 0 && len(t.broken) == 0 && unrecovered == 0 {
+	if len(t.cordoned) == 0 && len(t.broken) == 0 && unrecovered == 0 && len(dark) == 0 {
 		return
 	}
 	// The fleet is put back first, on a budget of its own: a flush that hangs must not leave a node cordoned.
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
+	// A node taken dark may have been fenced by a failover; once it is back, unfence it so it is the spare again.
+	for _, n := range slices.Compact(slices.Sorted(slices.Values(dark))) {
+		if was, err := t.r.cfg.Fleet.Unfence(ctx, n); err != nil {
+			t.fail("cleanup: unfencing %s: %v", n, err)
+		} else if was {
+			t.note("cleanup: unfenced %s", n)
+		}
+	}
 	if nodes, err := t.uncordon(ctx); err != nil {
 		t.fail("cleanup: %v", err)
 	} else if len(nodes) > 0 {

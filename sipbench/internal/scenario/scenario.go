@@ -394,6 +394,10 @@ type Action struct {
 	BlackoutNodeOf *Blackout `yaml:"blackoutNodeOf,omitempty"`
 	// WaitNode waits until the node that carries a call is Ready or NotReady, as Kubernetes reports it.
 	WaitNode *WaitNode `yaml:"waitNode,omitempty"`
+	// WaitFailover waits until the operator has failed over the pod that carried a call: a pod of the same name
+	// takes calls again on another node. A scenario that took a node dark unfences it (removes the operator's
+	// sip.instruments.com/fenced taint and label) when it ends, so the next scenario finds the spare.
+	WaitFailover *WaitFailoverOf `yaml:"waitFailover,omitempty"`
 	// Hangup ends the named call from the runner's side.
 	Hangup string `yaml:"hangup,omitempty"`
 	// CrashFreeswitchOf crashes FreeSWITCH in the pod that carries the named call (fsctl crash), as a fault would:
@@ -485,6 +489,12 @@ type Blackout struct {
 	ForMs int    `yaml:"forMs"`
 }
 
+// WaitFailoverOf is WaitFailover's settings: the call whose pod must come back on another node.
+type WaitFailoverOf struct {
+	Of        string `yaml:"of"`
+	TimeoutMs int    `yaml:"timeoutMs,omitempty"`
+}
+
 // WaitNode waits for the node that carries call Of to be State: Ready or NotReady.
 type WaitNode struct {
 	Of        string `yaml:"of"`
@@ -574,6 +584,7 @@ func (a *Action) Kind() string {
 	add(a.ExpectRollStuck != nil, "expectRollStuck")
 	add(a.BlackoutNodeOf != nil, "blackoutNodeOf")
 	add(a.WaitNode != nil, "waitNode")
+	add(a.WaitFailover != nil, "waitFailover")
 	add(a.Hangup != "", "hangup")
 	add(a.CrashFreeswitchOf != "", "crashFreeswitchOf")
 	add(a.RecoverOn != "", "recoverOn")
@@ -995,6 +1006,10 @@ func (s *Scenario) validateActions(calls map[string]bool) error { //nolint:gocyc
 			}
 			if a.WaitNode.State != "Ready" && a.WaitNode.State != "NotReady" {
 				return fmt.Errorf("%s: waitNode.state must be Ready or NotReady", label)
+			}
+		case a.WaitFailover != nil:
+			if !calls[a.WaitFailover.Of] {
+				return fmt.Errorf("%s: waitFailover.of names no call %q", label, a.WaitFailover.Of)
 			}
 		}
 	}

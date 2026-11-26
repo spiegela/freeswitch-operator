@@ -160,6 +160,72 @@ groups:
           summary: "KamailioCluster {{ $labels.namespace }}/{{ $labels.name }} leaves a fleet out of its dispatcher list"
           description: A fleet in spec.dispatch is missing, has no spec.dispatcher, or reuses another's setID; its condition says which.
 
+      - alert: FreeswitchMemberSuspect
+        expr: max by (kind, namespace, name, pod) (freeswitch_operator_member_health{state="Suspect"}) == 1
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.pod }} of {{ $labels.namespace }}/{{ $labels.name }} has been Suspect for 2 minutes"
+          description: >
+            A health signal is failing (freeswitch_operator_member_signal says which: NodeLost, NotReady or
+            SIPUnreachable), but not enough of them to call it Failed. The member's status.members[].health has the
+            detail.
+
+      - alert: FreeswitchMemberFailedNotFailedOver
+        expr: max by (kind, namespace, name, pod) (freeswitch_operator_member_failover_held) == 1
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.pod }} of {{ $labels.namespace }}/{{ $labels.name }} has Failed and is not being failed over"
+          description: >
+            Its signals agree it has failed, and the operator is holding back: failover mode Detect, a pod that has
+            never been ready, or another failover still under way (status.members[].health.message says which).
+            Calls it had are lost; new calls go to the rest of the fleet. To fail it over by hand, annotate the pod
+            sip.instruments.com/fail-over=true.
+
+      - alert: FreeswitchFailedOver
+        expr: sum by (kind, namespace, name, trigger) (increase(freeswitch_operator_failovers_total{result="ok"}[30m])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.namespace }}/{{ $labels.name }} failed a member over ({{ $labels.trigger }})"
+          description: >
+            The operator fenced the member's node (label and taint sip.instruments.com/fenced; the node's annotation
+            sip.instruments.com/fenced-by says why) and started the pod on another node. Find out what happened to
+            the node. Once it is sound, remove the taint and the label sip.instruments.com/fenced so it can serve
+            as a spare again.
+
+      - alert: FreeswitchFailoverStuck
+        expr: freeswitch_operator_failover_in_progress == 1
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "The failover in {{ $labels.namespace }}/{{ $labels.name }} has not brought its member back"
+          description: >
+            The replacement pod hasn't become ready 5 minutes after the failover: often there is no spare node to
+            run it on (every other edge node runs a member or is fenced). The fleet is a member short until it does,
+            and automatic failover of any other member waits for it: add a spare node, or fail a member over by
+            hand.
+
+      - alert: FreeswitchFailoverErrors
+        expr: sum by (kind, namespace, name) (increase(freeswitch_operator_failovers_total{result="error"}[10m])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "The operator could not fail over a member of {{ $labels.namespace }}/{{ $labels.name }}"
+          description: >
+            Fencing the node or deleting the pod failed ({{ $value | humanize }} times in 10 minutes); it retries.
+            See the operator's logs and the fleet's FailoverFailed events.
+
+      - alert: FreeswitchHealthSignalBlind
+        expr: count by (kind, namespace, name, signal) (freeswitch_operator_member_signal{counted="false"} == 1) > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "The {{ $labels.signal }} signal fails for every member of {{ $labels.namespace }}/{{ $labels.name }}"
+          description: >
+            A signal failing everywhere at once is taken to be the observer's problem and doesn't count, so failover
+            can't use it. For SIPUnreachable, the operator's pods probably can't reach the edge nodes' SIP port (a
+            security group or network policy); for NodeLost, the control plane can't hear from any edge node.
+
       - alert: FreeswitchOperatorDown
         expr: absent(up{job="freeswitch-operator"} == 1)
         for: 10m

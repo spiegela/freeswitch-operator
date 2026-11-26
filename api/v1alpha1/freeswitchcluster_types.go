@@ -50,6 +50,24 @@ const (
 	// DispatcherUpdatedAtAnnotation records when the dispatcher list's content last changed (RFC 3339), written in
 	// the same update as the list, so the reload delay is measured from the change itself.
 	DispatcherUpdatedAtAnnotation = "sip.instruments.com/dispatcher-updated-at"
+	// FailOverAnnotation, set to "true" on a FreeSWITCH pod by a person, has the operator fail that member over now,
+	// whatever spec.failover.mode says and whatever its health: fence its node, delete the pod at once, and let the
+	// StatefulSet start it again on another node. Any other value ("false" included) does nothing.
+	FailOverAnnotation = "sip.instruments.com/fail-over"
+	// FirstReadyAnnotation is set by the operator on a FreeSWITCH pod the first time it sees the pod ready (RFC 3339).
+	// Only a pod that has been ready is failed over automatically, or counts as NotReady: one that never was (a bad
+	// configuration, a broken image) would fail the same way on any node.
+	FirstReadyAnnotation = "sip.instruments.com/first-ready"
+	// FencedLabel marks a node fenced: the operator puts it on a node when it fails over a member there. No fleet
+	// pod is scheduled to the node again (each fleet's pods have node affinity against it), and every SIPAddressPool
+	// that may fence takes its addresses off the node. The operator never removes it; a person does, once the node
+	// is known to be sound (kubectl label node <node> sip.instruments.com/fenced-), or the node is replaced.
+	FencedLabel = "sip.instruments.com/fenced"
+	// FencedTaint (effect NoSchedule) is put on a fenced node beside FencedLabel, to keep other pods off it too.
+	// Remove it with the label (kubectl taint node <node> sip.instruments.com/fenced-).
+	FencedTaint = "sip.instruments.com/fenced"
+	// FencedByAnnotation records on a fenced node which member's failover fenced it, when, and why.
+	FencedByAnnotation = "sip.instruments.com/fenced-by"
 )
 
 // ExternalAddressSource says where a FreeSWITCH pod's public address comes from.
@@ -85,6 +103,123 @@ const (
 	// MemberDraining means the pod is terminating: it takes no new calls and waits for live calls to end.
 	MemberDraining MemberState = "Draining"
 )
+
+// FailoverMode says what the operator does about a member it finds Failed.
+// +kubebuilder:validation:Enum=Detect;Automatic
+type FailoverMode string
+
+const (
+	// FailoverDetect reports each member's health (status, metrics, events) and acts only on pods annotated
+	// sip.instruments.com/fail-over.
+	FailoverDetect FailoverMode = "Detect"
+	// FailoverAutomatic also fails over a member found Failed, one member at a time.
+	FailoverAutomatic FailoverMode = "Automatic"
+)
+
+// HealthState is the operator's verdict on one member.
+type HealthState string
+
+const (
+	// HealthHealthy means no health signal is failing.
+	HealthHealthy HealthState = "Healthy"
+	// HealthSuspect means at least one signal is failing, but not enough of them, or not for long enough, to call
+	// the member Failed.
+	HealthSuspect HealthState = "Suspect"
+	// HealthFailed means spec.failover.signalsRequired signals have failed together for failAfterSeconds.
+	HealthFailed HealthState = "Failed"
+)
+
+// HealthSignalType is one independent view of a member's health.
+type HealthSignalType string
+
+const (
+	// SignalNodeLost means the control plane has lost the member's node: its Ready condition is Unknown (the kubelet
+	// stopped reporting) or False, or the Node is gone.
+	SignalNodeLost HealthSignalType = "NodeLost"
+	// SignalNotReady means a pod that has been ready is unready on a node the control plane still hears from: the
+	// kubelet's own checks of FreeSWITCH fail, or the container is restarting.
+	SignalNotReady HealthSignalType = "NotReady"
+	// SignalSIPUnreachable means the operator's SIP OPTIONS probes to the member's SIP port go unanswered.
+	SignalSIPUnreachable HealthSignalType = "SIPUnreachable"
+)
+
+// FailoverTrigger says what started a failover.
+type FailoverTrigger string
+
+const (
+	// FailoverTriggerAutomatic is a failover the operator started on its own (spec.failover.mode Automatic).
+	FailoverTriggerAutomatic FailoverTrigger = "Automatic"
+	// FailoverTriggerManual is a failover a person asked for with the sip.instruments.com/fail-over annotation.
+	FailoverTriggerManual FailoverTrigger = "Manual"
+)
+
+// FailoverSpec configures how the operator watches each member's health and what it does about a member that has
+// failed. Three independent signals feed the verdict: the node (the control plane's view of the kubelet), the
+// pod's readiness (the kubelet's checks of FreeSWITCH itself), and SIP OPTIONS probes the operator sends to each
+// member. A signal that fails for every member of a fleet of two or more at once is taken to be the observer's
+// problem rather than the members', and doesn't count. Failing over a member fences its node (the
+// sip.instruments.com/fenced taint), so no fleet pod lands there again and address pools take their addresses off
+// it, then deletes the pod at once: the StatefulSet starts it again on another node, normally the spare. Calls up on
+// the failed member are lost.
+type FailoverSpec struct {
+	// mode is Detect (report health; fail over only pods a person annotates sip.instruments.com/fail-over) or
+	// Automatic (also fail over a member found Failed, one at a time, and only one that has been ready).
+	// +kubebuilder:default=Detect
+	// +optional
+	Mode FailoverMode `json:"mode,omitempty"`
+	// signalsRequired is how many independent signals must fail together before a member is Failed. With 2, a node
+	// whose kubelet is lost but whose FreeSWITCH still answers SIP stays Suspect; with 1, any one signal is enough.
+	// The readiness signal doesn't count while the node is lost (the node's loss is what makes the pod unready), so
+	// 2 is the most there can be.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=2
+	// +kubebuilder:default=2
+	// +optional
+	SignalsRequired int32 `json:"signalsRequired,omitempty"`
+	// failAfterSeconds is how long that many signals must keep failing before the member is Failed.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=3600
+	// +kubebuilder:default=15
+	// +optional
+	FailAfterSeconds *int32 `json:"failAfterSeconds,omitempty"`
+	// notReadySeconds is how long a pod that has been ready must stay unready before readiness counts as a failing
+	// signal, so a brief blip doesn't make a member Suspect.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=3600
+	// +kubebuilder:default=20
+	// +optional
+	NotReadySeconds *int32 `json:"notReadySeconds,omitempty"`
+	// sipProbe configures the operator's SIP OPTIONS probes. Any SIP response counts as an answer (a 403 from an ACL
+	// or a 503 while busy too): the probe asks whether FreeSWITCH's SIP stack is alive and reachable, not whether it
+	// would take a call.
+	// +optional
+	SIPProbe SIPProbeSpec `json:"sipProbe,omitzero"`
+}
+
+// SIPProbeSpec configures the SIP OPTIONS probes the operator sends to each member, over the fleet's dispatcher
+// transport (UDP unless spec.dispatcher says tcp) to its SIP port. The operator's pods must be able to reach the
+// edge nodes' SIP port, as Kamailio's do.
+// +kubebuilder:validation:XValidation:rule="self.timeoutSeconds <= self.periodSeconds",message="timeoutSeconds must not exceed periodSeconds"
+type SIPProbeSpec struct {
+	// periodSeconds between probes of each member.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=300
+	// +kubebuilder:default=5
+	// +optional
+	PeriodSeconds int32 `json:"periodSeconds,omitempty"`
+	// timeoutSeconds each probe waits for an answer, retransmitting over UDP as a SIP client would.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=60
+	// +kubebuilder:default=2
+	// +optional
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
+	// failureThreshold is how many probes in a row must go unanswered before the signal fails.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:default=3
+	// +optional
+	FailureThreshold int32 `json:"failureThreshold,omitempty"`
+}
 
 // SIPSpec configures the SIP side of each FreeSWITCH node.
 type SIPSpec struct {
@@ -370,6 +505,10 @@ type FreeswitchClusterSpec struct {
 	// metrics, when set, runs a Prometheus exporter beside FreeSWITCH in each pod.
 	// +optional
 	Metrics *FreeswitchMetricsSpec `json:"metrics,omitempty"`
+	// failover configures health monitoring of each member and failover to a spare node. Unset means mode Detect
+	// with the defaults: health is reported, and only pods annotated sip.instruments.com/fail-over are failed over.
+	// +optional
+	Failover *FailoverSpec `json:"failover,omitempty"`
 }
 
 // Member is one FreeSWITCH pod as the operator sees it.
@@ -390,6 +529,67 @@ type Member struct {
 	// revision of the pod template the pod runs.
 	// +optional
 	Revision string `json:"revision,omitempty"`
+}
+
+// FreeswitchMember is one FreeSWITCH pod as the operator sees it, with its health.
+type FreeswitchMember struct {
+	Member `json:",inline"`
+	// health is the operator's verdict on the member, from its signals.
+	// +optional
+	Health *MemberHealth `json:"health,omitempty"`
+}
+
+// MemberHealth is the operator's verdict on one member and the signals behind it.
+type MemberHealth struct {
+	// state is Healthy, Suspect or Failed.
+	State HealthState `json:"state"`
+	// signals failing now. A signal still within its grace period (notReadySeconds, the probe's failureThreshold)
+	// isn't listed yet.
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Signals []HealthSignal `json:"signals,omitempty"`
+	// message says why the member is in its state, and what the operator will or won't do about it.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// HealthSignal is one failing view of a member.
+type HealthSignal struct {
+	// type of signal: NodeLost, NotReady or SIPUnreachable.
+	Type HealthSignalType `json:"type"`
+	// since is when the problem the signal reports began.
+	Since metav1.Time `json:"since"`
+	// counted is false when the signal fails for every member of the fleet at once and so doesn't count toward
+	// Failed.
+	Counted bool `json:"counted"`
+	// message gives the detail: the node's condition, the last probe's error.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// FailoverRecord describes the fleet's latest failover.
+type FailoverRecord struct {
+	// pod failed over.
+	Pod string `json:"pod"`
+	// podUID of the pod that was deleted, so its replacement can be told apart.
+	PodUID string `json:"podUID"`
+	// node the pod ran on, which the operator fenced.
+	// +optional
+	Node string `json:"node,omitempty"`
+	// trigger is Automatic or Manual.
+	Trigger FailoverTrigger `json:"trigger"`
+	// reason gives the signals or the request behind the failover.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// startedAt is when the operator fenced the node and deleted the pod.
+	StartedAt metav1.Time `json:"startedAt"`
+	// completedAt is when the replacement pod became ready, or when the fleet was scaled down past the pod.
+	// +optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+	// replacementNode is where the replacement pod runs.
+	// +optional
+	ReplacementNode string `json:"replacementNode,omitempty"`
 }
 
 // FreeswitchClusterStatus defines the observed state of FreeswitchCluster.
@@ -422,7 +622,7 @@ type FreeswitchClusterStatus struct {
 	// +listType=map
 	// +listMapKey=pod
 	// +optional
-	Members []Member `json:"members,omitempty"`
+	Members []FreeswitchMember `json:"members,omitempty"`
 
 	// dispatcherHash is the content hash of the dispatcher list last written.
 	// +optional
@@ -436,9 +636,13 @@ type FreeswitchClusterStatus struct {
 	// +optional
 	DispatcherUpdatedAt *metav1.Time `json:"dispatcherUpdatedAt,omitempty"`
 
+	// lastFailover is the fleet's latest failover. Another automatic failover waits until its replacement is ready
+	// (however long that takes: a failover with nowhere to go must not fence node after node); a manual one doesn't.
+	// +optional
+	LastFailover *FailoverRecord `json:"lastFailover,omitempty"`
 	// conditions: Ready (every member ready and current), Available (at least one member takes calls),
-	// Progressing (a rolling update is under way)
-	// and Degraded (fewer ready members than replicas).
+	// Progressing (a rolling update is under way), Degraded (fewer ready members than replicas) and MembersHealthy
+	// (no member Suspect or Failed).
 	// +listType=map
 	// +listMapKey=type
 	// +optional

@@ -1,9 +1,10 @@
 # Call tracking and failover
 
-**Call tracking works on any cluster today; failover doesn't exist yet.** With call tracking on, each FreeSWITCH node
-records every live call leg in a PostgreSQL that the whole fleet shares. Failover
-(on the [roadmap](../README.md#roadmap)) will use those records to move a lost node's calls to a spare. This
-page covers setting tracking up and what failover still needs.
+**Call tracking works on any cluster today; failover moves a lost member but not yet its calls.** With call tracking
+on, each FreeSWITCH node records every live call leg in a PostgreSQL that the whole fleet shares. The operator's
+[failover](freeswitch-fleet.md#health-and-failover) already fences a Failed member's node and starts its pod on a
+spare; recovery (on the [roadmap](../README.md#roadmap)) will use those records to move its calls there too. This
+page covers setting tracking up and what recovery still needs.
 
 ## What it takes
 
@@ -183,9 +184,10 @@ PostgreSQL's log should show no refused statements beyond the `create index` one
 
 When a node is lost, the plan is:
 
-1. **Fence it.** Its address is unbound before anything else happens, and can never come back to it. This happens
-   automatically only where the pool's fencing is `Authoritative` ([address pools](address-pools.md)).
-2. **Move its addresses to a spare.**
+1. **Fence it.** Its address is unbound before anything else happens, and can never come back to it. The operator
+   labels and taints the node fenced, and a pool takes its addresses back only where the pool may fence: its fencing is
+   `Authoritative`, or it sets `allowAdvisoryFencing` ([address pools](address-pools.md)).
+2. **Move its addresses to a spare.** The operator deletes the pod, which comes back on the spare.
 3. **Recover its calls on the spare.** FreeSWITCH rebuilds each tracked leg from its row. It sends each far end a
    re-INVITE built from the leg's saved dialog (Contact, Via, route), from the moved address, and bridges the legs
    again.
@@ -227,12 +229,14 @@ Not built yet:
 
 - **Nothing runs `sofia recover`.** FreeSWITCH doesn't recover on startup. Until something does, the bench runs it
   by hand.
-- **Nothing moves a lost node's address.** Dead-node detection, fencing and the address move are still to be
-  built. A lost node's rows stay in `recovery` until something recovers them.
+A lost node's rows stay in `recovery` until something recovers them.
 
-Until then, a node's calls drop when it dies: FreeSWITCH ends them at its media timeout, and nothing tells the
-backend. New calls go elsewhere, within Kamailio's 5 s failover at first, then with no delay once the dispatcher's
-probes have taken the node out. sipbench's `node-lost-mid-call` checks that: it takes a call's node off the network
-for two minutes (tc drop filters on the node's own interface) and checks the rest of the fleet keeps taking calls.
-It records the lost call as the baseline for failover.
+Built: dead-node detection, fencing and the move ([failover](freeswitch-fleet.md#health-and-failover)). The
+replacement comes up on the spare with the failed member's address when the spare holds none of its own, so a
+`sofia recover` there would take exactly that member's calls. Until something runs it, a node's calls drop when it
+dies: FreeSWITCH ends them at its media timeout, and nothing tells the backend. New calls go elsewhere, within
+Kamailio's 5 s failover at first, then with no delay once the dispatcher's probes have taken the node out.
+sipbench's `node-lost-mid-call` checks that: it takes a call's node off the network for two minutes (tc drop
+filters on the node's own interface), checks the rest of the fleet keeps taking calls, and waits for the operator
+to fail the member over to the spare. It records the lost call as the baseline for recovery.
 

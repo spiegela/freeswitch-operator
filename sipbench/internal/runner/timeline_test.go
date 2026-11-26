@@ -43,6 +43,8 @@ type fakeFleet struct {
 	// address it comes back with.
 	spare       string
 	moveAddress string
+	// unfenced are the nodes unfenced.
+	unfenced []string
 }
 
 type fakeBlackout struct {
@@ -151,6 +153,13 @@ func (f *fakeFleet) Blackout(_ context.Context, pod string) (fleet.BlackoutState
 		st.Phase = "Succeeded"
 	}
 	return st, nil
+}
+
+func (f *fakeFleet) Unfence(_ context.Context, node string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unfenced = append(f.unfenced, node)
+	return false, nil
 }
 
 func (f *fakeFleet) NodeReady(_ context.Context, node string) (bool, error) {
@@ -369,6 +378,13 @@ func TestTimelineBlacksOutTheCallsNode(t *testing.T) {
 		t.Skip("places real calls over loopback")
 	}
 	f := newFakeFleet()
+	// Once the node is dark, the operator fails edge-0 over to the spare, n3.
+	f.next = func(_ int, s fleet.Status) fleet.Status {
+		if len(f.blackouts) > 0 {
+			s.Members[0].Node = "n3"
+		}
+		return s
+	}
 	r := withFleet(startMock(t, longRoute), f)
 	r.cfg.BlackoutImage = "sipbench:test"
 	r.cfg.Caps[scenario.BlackoutCapability] = true
@@ -384,9 +400,13 @@ calls:
 actions:
   - {afterAnswered: a, afterMs: 300, blackoutNodeOf: {of: a, forMs: 1500}}
   - {waitNode: {of: a, state: NotReady, timeoutMs: 1000}}
+  - {waitFailover: {of: a, timeoutMs: 1000}}
   - {waitNode: {of: a, state: Ready, timeoutMs: 3000}}
   - {hangup: a}
 `)
+	if len(f.unfenced) != 1 || f.unfenced[0] != "n0" {
+		t.Errorf("unfenced %v, want the dark node n0 once it was back", f.unfenced)
+	}
 	if len(f.blackouts) != 1 || f.blackouts["sipbench-blackout-0"].node != "n0" {
 		t.Errorf("blackouts %v, want one on n0 (the node at the call's source)", f.blackouts)
 	}
@@ -394,7 +414,7 @@ actions:
 		t.Errorf("deleted %v, want the blackout pod", f.deleted)
 	}
 	tl := strings.Join(res.Timeline, "\n  ")
-	for _, want := range []string{"n0 is dark for 1.5s", "node n0 (call a) is NotReady", "node n0 (call a) is Ready",
+	for _, want := range []string{"n0 is dark for 1.5s", "node n0 (call a) is NotReady", "failed over from n0 to n3", "node n0 (call a) is Ready",
 		"blackout sipbench-blackout-0 on n0: restored eth0"} {
 		if !strings.Contains(tl, want) {
 			t.Errorf("timeline lacks %q:\n  %s", want, tl)

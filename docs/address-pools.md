@@ -36,13 +36,14 @@ spec:
   #   addresses: [192.168.1.240, …]
   # static:                         # planned. Routed to the nodes by something else (BGP, keepalived, by hand)
   #   addresses: [198.51.100.10, …]
+  # allowAdvisoryFencing: false    # let failover take addresses off a fenced node with Advisory fencing (below)
 status:
   datapath: NAT                     # NAT | Local, from the provider
   fencing: Authoritative            # Authoritative | Advisory, from the provider
   addresses:
     - id: eipalloc-…
       address: 203.0.113.10
-      state: Bound                  # Free | Bound | Idle | Conflict | Error
+      state: Bound                  # Free | Bound | Idle | Fenced | Conflict | Error
       node: ip-10-0-1-23
       nodeID: i-0abc…
       claimedBy: [{kind: FreeswitchCluster, namespace: telephony, name: edge, pod: edge-1}]
@@ -78,6 +79,10 @@ The planner's rules, the same for every provider:
   node. With none left, the pool is `Degraded` and the node's pods wait without an address (unready, when
   `required`). A pod is the last claimant of one address only, the one it holds: a pod moved to a node that kept an
   idle address of its own takes that one, and forgets the one it left.
+- A node fenced by a [failover](freeswitch-fleet.md#health-and-failover) (labeled `sip.instruments.com/fenced`) is
+  treated as failed: its pods' claims don't count and it gets no address. Its addresses are unbound and reused if
+  the pool may fence (below); otherwise each stays on the node, `Fenced`: unused, never moved, with a message saying
+  why.
 - An address the pool bound to a node that has left the cluster is unbound and reused. One bound outside the cluster
   that the pool didn't put there is a `Conflict`, left alone.
 - An address the provider can't report on is an `Error`, and its node keeps it, so a provider outage doesn't make
@@ -152,8 +157,10 @@ Kamailio dispatches to it there, and peers only ever signal through Kamailio.
 **Fencing: what unbinding guarantees.** `Authoritative` means one API call takes the address off a node whether or
 not the node is alive (AWS's `DisassociateAddress`). `Advisory` means a node cut off from the cluster but not from the
 network may go on holding the address (MetalLB stops announcing it from that node, but the node's own interface
-still has it). Failover (on the [roadmap](../README.md#roadmap)) will move addresses on its own only for
-`Authoritative` pools, unless a pool opts in.
+still has it). A pool may fence, taking a fenced node's addresses back for failover, when its provider's fencing is
+`Authoritative` or when it sets `allowAdvisoryFencing`: set that only where a fenced node can't still be answering
+for the address (on kind, where a fenced node is one the bench took off the network, or where something else
+powers the node off).
 
 **Rules for every provider.**
 - The operator never allocates or releases an address: peers allow-list them, so the pool is a fixed list. It only

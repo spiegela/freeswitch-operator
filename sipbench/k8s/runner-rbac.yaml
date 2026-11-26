@@ -2,10 +2,10 @@
 # rolling-update-live-call, bad-config-stops-roll, pool-media-address, node-lost-mid-call, crash-recovers-own-calls,
 # moved-call-in-dialog): read the FreeswitchCluster and roll it, read the KamailioClusters to see whether those
 # dispatching to it hold its list, read its pods' external addresses, evict them or delete them at once, run fs_cli
-# in them, edit the ConfigMaps it reads and put them back, cordon and uncordon nodes and read whether they are
-# ready, and, for "node-blackout", start a pod on an edge node that takes the node off the network for a while (host
-# network, root, NET_ADMIN: a bench-only power, for a namespace that admits privileged pods), read its log and
-# delete it. Only the runner Job uses this account.
+# in them, edit the ConfigMaps it reads and put them back, cordon and uncordon nodes, read whether they are ready and
+# unfence them after a failover, and, for "node-blackout", start a pod on an edge node that takes the node off the
+# network for a while (host network, root, NET_ADMIN: a bench-only power, for a namespace that admits privileged
+# pods), read its log and delete it. Only the runner Job uses this account.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -69,7 +69,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["nodes"]
-    verbs: ["get", "patch"]
+    verbs: ["get", "patch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

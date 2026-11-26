@@ -38,13 +38,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
 	"github.com/spiegela/freeswitch-operator/internal/addresspool"
@@ -68,8 +71,17 @@ type FreeswitchClusterReconciler struct {
 
 	// NewNotifier builds the Kamailio notifier for spec.dispatcher.jsonrpcURL. Nil disables notification.
 	NewNotifier NotifierFactory
+	// APIReader reads straight from the API server, for the reads a stale cache would make fail (fencing a node);
+	// nil means the Client.
+	APIReader client.Reader
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
+	// SIPProbes reads the SIP prober's results; nil means no SIP signal.
+	SIPProbes SIPProbeResults
+	// ProbeEvents, when set, delivers fleets whose SIP signal changed (the SIP prober's Events).
+	ProbeEvents <-chan event.GenericEvent
+	// Recorder records events on the fleet; nil records none.
+	Recorder events.EventRecorder
 
 	configHashes configHasher
 }
@@ -80,7 +92,8 @@ type FreeswitchClusterReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;patch;delete
-// +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=sip.instruments.com,resources=sipaddresspools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch
@@ -146,7 +159,8 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	pods := podList.Items
 	slices.SortFunc(pods, func(a, b corev1.Pod) int { return strings.Compare(a.Name, b.Name) })
 
-	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods); err != nil {
+	nodes, err := r.syncPods(ctx, cfg, pods)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -188,6 +202,9 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	r.fillStatus(&fsc, cfg, sts, pods, decision, status)
+	// A failover that failed is retried, but the status is written first, so it goes on showing the fleet.
+	healthAfter, failoverErr := r.syncHealth(ctx, &fsc, fleet, cfg, pods, nodes, status)
+	requeue = minPositive(requeue, healthAfter)
 	if confErr != nil {
 		gen := fsc.Generation
 		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionDegraded, Status: metav1.ConditionTrue, Reason: "ConfigInvalid", Message: confErr.Error(), ObservedGeneration: gen})
@@ -201,17 +218,40 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		fsc.Status = *status
 		if err := r.Status().Update(ctx, &fsc); err != nil {
 			if apierrors.IsConflict(err) {
+				if failoverErr != nil {
+					// Retried on the failover's error (and logged), which writes the status again too.
+					return ctrl.Result{}, failoverErr
+				}
 				return ctrl.Result{RequeueAfter: time.Second}, nil
 			}
-			return ctrl.Result{}, err
+			return ctrl.Result{}, errors.Join(err, failoverErr)
 		}
+	}
+	if failoverErr != nil {
+		return ctrl.Result{}, failoverErr
 	}
 	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
-func (r *FreeswitchClusterReconciler) now() time.Time {
-	if r.Now != nil {
-		return r.Now()
+// syncPods reads the pods' nodes, and writes on each pod its external address and whether it has been ready. It
+// returns the nodes (podNodes), for the fleet's health.
+func (r *FreeswitchClusterReconciler) syncPods(ctx context.Context, cfg settings, pods []corev1.Pod) (map[string]*corev1.Node, error) {
+	nodes, err := podNodes(ctx, r.Client, pods)
+	if err != nil {
+		return nil, err
+	}
+	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods, nodes); err != nil {
+		return nil, err
+	}
+	return nodes, markFirstReady(ctx, r.Client, pods, r.now())
+}
+
+func (r *FreeswitchClusterReconciler) now() time.Time { return nowFrom(r.Now) }
+
+// nowFrom is the time from a clock that may be nil, meaning time.Now.
+func nowFrom(clock func() time.Time) time.Time {
+	if clock != nil {
+		return clock()
 	}
 	return time.Now()
 }
@@ -385,10 +425,10 @@ func templateHash(t *corev1.PodTemplateSpec) (string, error) {
 
 // syncExternalAddresses writes each pod's external address annotation: its node's ExternalIP, or the address the
 // fleet's SIPAddressPool has bound to its node, with the bind address when it has one. FreeSWITCH and Kamailio pods
-// both read them from their downward-API volume.
-func syncExternalAddresses(ctx context.Context, c client.Client, source sipv1alpha1.ExternalAddressSource, poolName string, pods []corev1.Pod) error {
+// both read them from their downward-API volume. nodes are the pods' nodes by name (podNodes), read for NodeExternalIP.
+func syncExternalAddresses(ctx context.Context, c client.Client, src sipv1alpha1.ExternalAddressSource, poolName string, pods []corev1.Pod, nodes map[string]*corev1.Node) error {
 	var pool sipv1alpha1.SIPAddressPool
-	if source == sipv1alpha1.ExternalAddressAddressPool {
+	if src == sipv1alpha1.ExternalAddressAddressPool {
 		// A missing pool binds nothing, so every pod goes without.
 		if err := c.Get(ctx, types.NamespacedName{Name: poolName}, &pool); client.IgnoreNotFound(err) != nil {
 			return err
@@ -400,16 +440,13 @@ func syncExternalAddresses(ctx context.Context, c client.Client, source sipv1alp
 			continue
 		}
 		want, wantBind := "", ""
-		switch source {
+		switch src {
 		case sipv1alpha1.ExternalAddressNodeExternalIP:
-			var node corev1.Node
-			if err := c.Get(ctx, types.NamespacedName{Name: p.Spec.NodeName}, &node); err != nil {
-				if apierrors.IsNotFound(err) {
-					continue
-				}
-				return err
+			node := nodes[p.Spec.NodeName]
+			if node == nil {
+				continue
 			}
-			want = nodeExternalAddress(&node)
+			want = nodeExternalAddress(node)
 		case sipv1alpha1.ExternalAddressAddressPool:
 			// The pool hands out an address with a bind address only once the node has it on an interface.
 			if b := addresspool.BindingForNode(&pool.Status, p.Spec.NodeName); b != nil {
@@ -611,7 +648,10 @@ func onlyListNotLoaded(err error) bool {
 
 func (r *FreeswitchClusterReconciler) fillStatus(fsc *sipv1alpha1.FreeswitchCluster, cfg settings, sts *appsv1.StatefulSet, pods []corev1.Pod, decision rolloutDecision, status *sipv1alpha1.FreeswitchClusterStatus) {
 	members, ready, updated := fleetMembers(pods, sts.Status.UpdateRevision)
-	status.Members = members
+	status.Members = make([]sipv1alpha1.FreeswitchMember, len(members))
+	for i, m := range members {
+		status.Members[i] = sipv1alpha1.FreeswitchMember{Member: m}
+	}
 	status.Replicas = int32(len(pods))
 	status.ReadyReplicas = ready
 	status.UpdatedReplicas = updated
@@ -716,7 +756,11 @@ func (r *FreeswitchClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return out
 	})
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr)
+	if r.ProbeEvents != nil {
+		b = b.WatchesRawSource(source.Channel(r.ProbeEvents, &handler.EnqueueRequestForObject{}))
+	}
+	return b.
 		For(&sipv1alpha1.FreeswitchCluster{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).

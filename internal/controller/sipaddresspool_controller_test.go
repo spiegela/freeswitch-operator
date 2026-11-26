@@ -89,7 +89,7 @@ var _ = Describe("SIPAddressPool controller", func() {
 	syncFleet := func(w world) {
 		var pods corev1.PodList
 		Expect(k8sClient.List(ctx, &pods, client.InNamespace(w.ns))).To(Succeed())
-		Expect(syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items)).To(Succeed())
+		Expect(syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items, nil)).To(Succeed())
 	}
 
 	It("binds an address to each node running a pod of a fleet that uses the pool, and the pods advertise it", func() {
@@ -156,6 +156,37 @@ var _ = Describe("SIPAddressPool controller", func() {
 		Expect(annotation(w.ns, "edge-1")).To(Equal("203.0.113.21"))
 	})
 
+	It("takes its address off a node a failover fenced, and the failed-over pod comes back with one on the spare", func() {
+		w := setup("203.0.113.30", "203.0.113.31", "203.0.113.32")
+		a, b := node(w, "a"), node(w, "b")
+		Expect(k8sClient.Create(ctx, fsPod(w.ns, "edge-0", a, "r1"))).To(Succeed())
+		Expect(k8sClient.Create(ctx, fsPod(w.ns, "edge-1", b, "r1"))).To(Succeed())
+		reconcilePool(w)
+		id1 := fmt.Sprintf("eipalloc-%d1", poolCounter)
+		Expect(w.fake.BoundTo(id1)).To(Equal(b))
+
+		By("the failover fences b and deletes edge-1, which the StatefulSet starts on the spare")
+		Expect(fenceNode(ctx, k8sClient, k8sClient, b, "test")).To(Succeed())
+		var p corev1.Pod
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: w.ns, Name: "edge-1"}, &p)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, &p, client.GracePeriodSeconds(0))).To(Succeed())
+		spare := node(w, "spare")
+		Expect(k8sClient.Create(ctx, fsPod(w.ns, "edge-1", spare, "r1"))).To(Succeed())
+
+		w.fake.ResetCalls()
+		reconcilePool(w)
+		Expect(w.fake.CallLog()).To(Equal([]string{"unbind " + id1, "bind " + id1 + " " + spare}), "b's address follows its pod")
+		_, pool := reconcilePool(w)
+		Expect(addresspool.BindingForNode(&pool.Status, spare)).To(HaveField("Address", "203.0.113.31"))
+		Expect(addresspool.BindingForNode(&pool.Status, b)).To(BeNil())
+
+		By("a pod scheduled to the fenced node anyway gets no address there")
+		Expect(k8sClient.Create(ctx, fsPod(w.ns, "edge-2", b, "r1"))).To(Succeed())
+		w.fake.ResetCalls()
+		reconcilePool(w)
+		Expect(w.fake.CallLog()).To(BeEmpty())
+	})
+
 	It("serves a Kamailio fleet and a FreeSWITCH fleet from one pool", func() {
 		w := setup("203.0.113.60", "203.0.113.61")
 		proxyNode, mediaNode := node(w, "proxy"), node(w, "media")
@@ -182,7 +213,7 @@ var _ = Describe("SIPAddressPool controller", func() {
 
 		var pods corev1.PodList
 		Expect(k8sClient.List(ctx, &pods, client.InNamespace(w.ns), client.MatchingLabels{sipv1alpha1.KamailioClusterLabel: "proxy"})).To(Succeed())
-		Expect(syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items)).To(Succeed())
+		Expect(syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items, nil)).To(Succeed())
 		Expect(addresspool.BindingForNode(&pool.Status, proxyNode)).NotTo(BeNil())
 		Expect(annotation(w.ns, "proxy-0")).To(Equal(addresspool.BindingForNode(&pool.Status, proxyNode).Address))
 		Expect(annotation(w.ns, "proxy-0")).NotTo(BeEmpty())

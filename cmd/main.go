@@ -34,6 +34,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -188,10 +189,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The SIP prober sends OPTIONS to every FreeSWITCH member for the fleets' health verdicts; on the leader only.
+	prober := &controller.SIPProber{Client: mgr.GetClient(), Events: make(chan event.GenericEvent, 128)}
+	if err := mgr.Add(prober); err != nil {
+		setupLog.Error(err, "Failed to add the SIP prober")
+		os.Exit(1)
+	}
 	if err := (&controller.FreeswitchClusterReconciler{
 		Client:      mgr.GetClient(),
+		APIReader:   mgr.GetAPIReader(),
 		Scheme:      mgr.GetScheme(),
 		NewNotifier: controller.NewJSONRPCNotifier,
+		SIPProbes:   prober,
+		ProbeEvents: prober.Events,
+		Recorder:    mgr.GetEventRecorder("freeswitch-operator"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "freeswitchcluster")
 		os.Exit(1)

@@ -58,6 +58,7 @@ type settings struct {
 	reloadDelaySecs int32
 	liveness        *sipv1alpha1.LivenessSpec          // nil: no liveness probe
 	metrics         *sipv1alpha1.FreeswitchMetricsSpec // nil: no exporter; otherwise with defaults applied
+	failover        failoverSettings
 }
 
 func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
@@ -117,6 +118,7 @@ func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
 			out.metrics.EventSocket.Port = 8021
 		}
 	}
+	out.failover = resolveFailover(s.Failover)
 	if l := s.Liveness; l != nil {
 		out.liveness = &sipv1alpha1.LivenessSpec{PeriodSeconds: 30, TimeoutSeconds: 15, FailureThreshold: 10}
 		if l.PeriodSeconds != 0 {
@@ -324,12 +326,15 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		NodeSelector:                  fsc.Spec.NodeSelector,
 		Tolerations:                   fsc.Spec.Tolerations,
 		ImagePullSecrets:              fsc.Spec.ImagePullSecrets,
-		Affinity: &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
-			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
-				LabelSelector: &metav1.LabelSelector{MatchLabels: selectorLabels(fsc)},
-				TopologyKey:   corev1.LabelHostname,
-			}},
-		}},
+		Affinity: &corev1.Affinity{
+			NodeAffinity: avoidFencedNodes(),
+			PodAntiAffinity: &corev1.PodAntiAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+					LabelSelector: &metav1.LabelSelector{MatchLabels: selectorLabels(fsc)},
+					TopologyKey:   corev1.LabelHostname,
+				}},
+			},
+		},
 		Containers:     []corev1.Container{container},
 		InitContainers: slices.Concat(addressWaitContainers(fsc, cfg), exporterContainers(cfg.metrics)),
 		Volumes:        volumes,

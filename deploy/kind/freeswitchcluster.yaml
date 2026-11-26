@@ -56,6 +56,10 @@ spec:
     # Built from this tree and loaded into kind (hack/kind.sh); in production, pin a published image by digest.
     exporterImage: freeswitch-exporter:dev
     exporterImagePullPolicy: Never
+  failover:
+    # The third edge node is the spare a Failed member's pod moves to (sipbench's node-lost-mid-call takes a
+    # member's node dark and waits for it).
+    mode: Automatic
   dispatcher:
     setID: 1
     configMapName: edge-dispatcher
