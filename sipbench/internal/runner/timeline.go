@@ -697,10 +697,13 @@ func (t *timeline) waitFailover(ctx context.Context, w *scenario.WaitFailoverOf)
 }
 
 // activeElsewhere waits until a pod of m's name takes calls on another node than m's. It returns the pod as last
-// seen, and whether it was there at all.
+// seen, and whether it was there at the last look.
 func (t *timeline) activeElsewhere(ctx context.Context, m fleet.Member, timeout time.Duration) (cur fleet.Member, present bool, err error) {
 	err = t.poll(ctx, timeout, func(s fleet.Status) (bool, error) {
-		cur, present = s.Member(m.Pod)
+		var seen fleet.Member
+		if seen, present = s.Member(m.Pod); present {
+			cur = seen
+		}
 		return present && cur.State == fleet.MemberActive && cur.Node != "" && cur.Node != m.Node, nil
 	})
 	return cur, present, err

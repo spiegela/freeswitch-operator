@@ -202,10 +202,8 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	r.fillStatus(&fsc, cfg, sts, pods, decision, status)
-	healthAfter, err := r.syncHealth(ctx, &fsc, fleet, cfg, pods, nodes, status)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
+	// A failover that failed is retried, but the status is written first, so it goes on showing the fleet.
+	healthAfter, failoverErr := r.syncHealth(ctx, &fsc, fleet, cfg, pods, nodes, status)
 	requeue = minPositive(requeue, healthAfter)
 	if confErr != nil {
 		gen := fsc.Generation
@@ -224,6 +222,9 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			}
 			return ctrl.Result{}, err
 		}
+	}
+	if failoverErr != nil {
+		return ctrl.Result{}, failoverErr
 	}
 	return ctrl.Result{RequeueAfter: requeue}, nil
 }

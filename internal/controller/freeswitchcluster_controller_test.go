@@ -519,6 +519,7 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(k8sClient.Update(ctx, fresh)).To(Succeed())
 		err := r.persistFailover(ctx, stale, &sipv1alpha1.FailoverRecord{Pod: "edge-1", StartedAt: metav1.Now()})
 		Expect(apierrors.IsConflict(err)).To(BeTrue(), "got %v", err)
+		Expect(stale.Status.LastFailover).To(BeNil(), "left as it was")
 		Expect(fleet().Status.LastFailover).To(BeNil())
 
 		By("in mode Automatic, the node is fenced and the pod deleted at once, and the record survives a status update that conflicts")

@@ -9,13 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
@@ -559,5 +562,90 @@ func TestSIPProber(t *testing.T) {
 	step()
 	if _, ok := p.Result(pod.UID); ok {
 		t.Fatal("a result for a pod that has gone")
+	}
+}
+
+func failoverTestClient(t *testing.T, funcs interceptor.Funcs) (client.Client, *sipv1alpha1.FreeswitchCluster, corev1.Pod, *corev1.Node) {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = sipv1alpha1.AddToScheme(scheme)
+	fsc := &sipv1alpha1.FreeswitchCluster{ObjectMeta: metav1.ObjectMeta{Name: "edge", Namespace: "telephony"}}
+	pod := hpod("edge-0", "a")
+	pod.Namespace = "telephony"
+	pod.Annotations[sipv1alpha1.FailOverAnnotation] = "true"
+	node := hnode("a", corev1.ConditionTrue, t0.Add(-time.Hour))
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(fsc, &pod, node).WithStatusSubresource(fsc).
+		WithInterceptorFuncs(funcs).Build()
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(fsc), fsc); err != nil {
+		t.Fatal(err)
+	}
+	return c, fsc, pod, node
+}
+
+// A failover that fails is reported on the member and returned, with the rest of the status filled in, so the fleet's
+// status goes on being written while the failover is retried.
+func TestFailoverErrorKeepsStatus(t *testing.T) {
+	refuseNodes := interceptor.Funcs{Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+		if _, ok := obj.(*corev1.Node); ok {
+			return errors.New("node patch refused")
+		}
+		return c.Patch(ctx, obj, patch, opts...)
+	}}
+	c, fsc, pod, node := failoverTestClient(t, refuseNodes)
+	r := &FreeswitchClusterReconciler{Client: c, Now: func() time.Time { return t0 }}
+	status := fsc.Status.DeepCopy()
+	status.Members = []sipv1alpha1.FreeswitchMember{{Member: sipv1alpha1.Member{Pod: "edge-0"}}}
+	_, err := r.syncHealth(context.Background(), fsc, fleetRef{kind: kindFreeswitch, namespace: "telephony", name: "edge"},
+		resolve(fsc), []corev1.Pod{pod}, map[string]*corev1.Node{"a": node}, status)
+	if err == nil || !strings.Contains(err.Error(), "node patch refused") {
+		t.Fatalf("err %v", err)
+	}
+	if status.LastFailover == nil || status.LastFailover.Pod != "edge-0" || status.LastFailover.CompletedAt != nil {
+		t.Errorf("record %+v", status.LastFailover)
+	}
+	if h := status.Members[0].Health; h == nil || !strings.Contains(h.Message, "failover failed, retrying") {
+		t.Errorf("health %+v", h)
+	}
+}
+
+// Resuming a failover whose pod is already gone (a cache that hadn't caught up still listed it) does nothing more:
+// it isn't counted or announced again.
+func TestResumeAlreadyCarriedOut(t *testing.T) {
+	c, fsc, pod, _ := failoverTestClient(t, interceptor.Funcs{})
+	r := &FreeswitchClusterReconciler{Client: c, Now: func() time.Time { return t0 }}
+	fleet := fleetRef{kind: kindFreeswitch, namespace: "telephony", name: "edge-resume"}
+	ok := func() float64 {
+		return testutil.ToFloat64(failovers.WithLabelValues(fleet.labels(string(sipv1alpha1.FailoverTriggerManual), reloadOK)...))
+	}
+	if deleted, err := r.failOver(context.Background(), fsc, &pod, sipv1alpha1.FailoverTriggerManual, "asked", t0); err != nil || !deleted {
+		t.Fatalf("first: deleted %v, err %v", deleted, err)
+	}
+	before := ok()
+	d := failoverDecision{target: &pod, trigger: sipv1alpha1.FailoverTriggerManual, reason: "asked", resume: true}
+	r.carryOut(context.Background(), fsc, fleet, &d, fsc.Status.DeepCopy(), t0)
+	if d.err != nil || ok() != before {
+		t.Errorf("err %v; failovers ok %v, was %v", d.err, ok(), before)
+	}
+}
+
+// The label marks a fence, so the record of why goes with it: a node left tainted after a person removed only the
+// label gets the new failover's record.
+func TestFenceRecordGoesWithLabel(t *testing.T) {
+	c, _, _, node := failoverTestClient(t, interceptor.Funcs{})
+	ctx := context.Background()
+	node.Spec.Taints = []corev1.Taint{fencedTaint}
+	node.Annotations = map[string]string{sipv1alpha1.FencedByAnnotation: "an old failover"}
+	if err := c.Update(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	if err := fenceNode(ctx, c, c, "a", "this failover"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(node), node); err != nil {
+		t.Fatal(err)
+	}
+	if !nodeFenced(node) || len(node.Spec.Taints) != 1 || node.Annotations[sipv1alpha1.FencedByAnnotation] != "this failover" {
+		t.Errorf("labels %v taints %v annotations %v", node.Labels, node.Spec.Taints, node.Annotations)
 	}
 }

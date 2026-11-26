@@ -297,6 +297,8 @@ type failoverDecision struct {
 	// resume: target is the pod of the last failover, recorded but not carried out (an error, or a restart, part way
 	// through), so it is finished rather than recorded again.
 	resume bool
+	// err is why the target's failover failed, once it has been tried.
+	err error
 }
 
 // failoverInProgress reports whether the fleet's last failover is still waiting for its replacement. It waits for as

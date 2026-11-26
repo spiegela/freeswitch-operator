@@ -196,7 +196,7 @@ A failover:
 is written before the node is fenced, and only over the copy of the fleet the decision was made from (one written
 since may hold a failover still under way), so a failover is never started twice. If fencing or deleting fails, or
 the operator restarts part way through, the next reconcile finishes the recorded failover, whatever the pod's health
-by then. **The operator never unfences:** once someone has found out what happened to the node and it is sound,
+by then; while it keeps failing, the member's health says why and the rest of the status stays current. **The operator never unfences:** once someone has found out what happened to the node and it is sound,
 removing the label and the taint makes it a spare again (the label is what the operator reads):
 
 ```bash

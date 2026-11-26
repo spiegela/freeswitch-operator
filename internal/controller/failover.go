@@ -53,49 +53,16 @@ func markFirstReady(ctx context.Context, c client.Client, pods []corev1.Pod, now
 
 // syncHealth decides each member's health, records it in the status (members, lastFailover, the MembersHealthy
 // condition) and the metrics, and fails over at most one member. It returns how soon the fleet should be looked at
-// again for health's sake, or zero.
+// again for health's sake, or zero, and a failover that failed: the status is filled in all the same, so the caller
+// writes it before returning the error.
 func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, fleet fleetRef, cfg settings, pods []corev1.Pod, nodes map[string]*corev1.Node, status *sipv1alpha1.FreeswitchClusterStatus) (time.Duration, error) {
-	log := logf.FromContext(ctx)
 	now := r.now()
 
 	verdicts := evaluateHealth(healthInput{pods: pods, nodes: nodes, sip: r.SIPProbes, cfg: cfg.failover, now: now})
 	r.completeFailover(fsc, cfg.replicas, pods, status.LastFailover, now)
 
-	var recheck time.Duration
 	decision := decideFailover(verdicts, cfg.failover.mode, status.LastFailover)
-	if t := decision.target; t != nil && !decision.resume {
-		// The record goes in first: once it is in, a crash or an error part way through only resumes this failover,
-		// and never starts another. It is written only over the fleet this decision was made from.
-		rec := &sipv1alpha1.FailoverRecord{
-			Pod: t.Name, PodUID: string(t.UID), Node: t.Spec.NodeName, Trigger: decision.trigger,
-			Reason: truncate(decision.reason, 1024), StartedAt: metav1.NewTime(now),
-		}
-		switch err := r.persistFailover(ctx, fsc, rec); {
-		case apierrors.IsConflict(err):
-			// Decided from a copy of the fleet the cache hadn't caught up with, which may not hold the last
-			// failover: decide again from a fresh one.
-			log.V(1).Info("fleet changed since it was read; deciding its failover again", "pod", t.Name)
-			decision.target, recheck = nil, time.Second
-		case err != nil:
-			recordFailover(fleet, decision.trigger, err)
-			return 0, fmt.Errorf("recording the failover of %s: %w", t.Name, err)
-		default:
-			status.LastFailover = rec.DeepCopy()
-		}
-	}
-	if t := decision.target; t != nil {
-		log.Info("failing over member", "pod", t.Name, "node", t.Spec.NodeName, "trigger", decision.trigger,
-			"reason", decision.reason, "resumed", decision.resume)
-		err := r.failOver(ctx, fsc, t, decision.trigger, decision.reason, now)
-		recordFailover(fleet, decision.trigger, err)
-		if err != nil {
-			r.event(fsc, corev1.EventTypeWarning, "FailoverFailed", "Failover", "could not fail over %s (retrying): %v", t.Name, err)
-			return 0, fmt.Errorf("failing over %s: %w", t.Name, err)
-		}
-		r.event(fsc, corev1.EventTypeWarning, "FailingOver", "Failover",
-			"%s failover of %s: fenced node %s and deleted the pod to start it on another node; %s",
-			decision.trigger, t.Name, t.Spec.NodeName, truncate(decision.reason, 512))
-	}
+	recheck := r.carryOut(ctx, fsc, fleet, &decision, status, now)
 
 	suspect, failed, verdictRecheck := r.attachHealth(fsc, verdicts, decision, status)
 	recheck = minPositive(recheck, verdictRecheck)
@@ -106,7 +73,58 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 	if len(suspect) > 0 || len(failed) > 0 || inProgress || decision.target != nil {
 		recheck = minPositive(recheck, healthRecheck)
 	}
-	return recheck, nil
+	return recheck, decision.err
+}
+
+// carryOut records a decision's failover, then fences and deletes. It returns how soon to look again, or zero. A
+// failover decided from a stale copy of the fleet is dropped (target nil) and decided again in a second. An error is
+// kept in the decision (err), for the member's health to report.
+func (r *FreeswitchClusterReconciler) carryOut(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, fleet fleetRef, d *failoverDecision, status *sipv1alpha1.FreeswitchClusterStatus, now time.Time) time.Duration {
+	t := d.target
+	if t == nil {
+		return 0
+	}
+	log := logf.FromContext(ctx)
+	if !d.resume {
+		// The record goes in first: once it is in, a crash or an error part way through only resumes this failover,
+		// and never starts another. It is written only over the fleet this decision was made from.
+		rec := &sipv1alpha1.FailoverRecord{
+			Pod: t.Name, PodUID: string(t.UID), Node: t.Spec.NodeName, Trigger: d.trigger,
+			Reason: truncate(d.reason, 1024), StartedAt: metav1.NewTime(now),
+		}
+		switch err := r.persistFailover(ctx, fsc, rec); {
+		case apierrors.IsConflict(err):
+			// Decided from a copy of the fleet the cache hadn't caught up with, which may not hold the last
+			// failover: decide again from a fresh one.
+			log.V(1).Info("fleet changed since it was read; deciding its failover again", "pod", t.Name)
+			d.target = nil
+			return time.Second
+		case err != nil:
+			recordFailover(fleet, d.trigger, err)
+			d.err = fmt.Errorf("recording the failover of %s: %w", t.Name, err)
+			return 0
+		default:
+			status.LastFailover = rec.DeepCopy()
+		}
+	}
+	deleted, err := r.failOver(ctx, fsc, t, d.trigger, d.reason, now)
+	if err != nil {
+		recordFailover(fleet, d.trigger, err)
+		r.event(fsc, corev1.EventTypeWarning, "FailoverFailed", "Failover", "could not fail over %s (retrying): %v", t.Name, err)
+		d.err = fmt.Errorf("failing over %s: %w", t.Name, err)
+		return 0
+	}
+	if d.resume && !deleted {
+		// Carried out already: the pod is gone, and the cache that still listed it hadn't caught up.
+		log.V(1).Info("failover already carried out", "pod", t.Name)
+		return 0
+	}
+	log.Info("failed over member", "pod", t.Name, "node", t.Spec.NodeName, "trigger", d.trigger, "reason", d.reason, "resumed", d.resume)
+	recordFailover(fleet, d.trigger, nil)
+	r.event(fsc, corev1.EventTypeWarning, "FailingOver", "Failover",
+		"%s failover of %s: fenced node %s and deleted the pod to start it on another node; %s",
+		d.trigger, t.Name, t.Spec.NodeName, truncate(d.reason, 512))
+	return 0
 }
 
 // podNodes fetches the nodes the pods run on, by name. A node that is gone is left out.
@@ -133,9 +151,13 @@ func podNodes(ctx context.Context, c client.Reader, pods []corev1.Pod) (map[stri
 // the fleet has changed since it was read: the decision to fail over was made from that copy, and one written since
 // may hold a failover still under way. The record is what keeps another automatic failover waiting.
 func (r *FreeswitchClusterReconciler) persistFailover(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, rec *sipv1alpha1.FailoverRecord) error {
-	patch := client.MergeFromWithOptions(fsc.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	base := fsc.DeepCopy()
 	fsc.Status.LastFailover = rec.DeepCopy()
-	return r.Status().Patch(ctx, fsc, patch)
+	if err := r.Status().Patch(ctx, fsc, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+		fsc.Status.LastFailover = base.Status.LastFailover
+		return err
+	}
+	return nil
 }
 
 // completeFailover marks the latest failover done once a new pod of the same name is ready, or once the fleet has
@@ -182,6 +204,9 @@ func (r *FreeswitchClusterReconciler) attachHealth(fsc *sipv1alpha1.FreeswitchCl
 		h := v.health
 		if decision.target != nil && decision.target.Name == m.Pod {
 			h.Message = "failing over: " + string(decision.trigger)
+			if decision.err != nil {
+				h.Message = "failover failed, retrying: " + truncate(decision.err.Error(), 512)
+			}
 		} else if why, ok := decision.held[m.Pod]; ok {
 			h.Message = "Failed, not failed over: " + why
 		}
@@ -237,20 +262,24 @@ func membersHealthyCondition(gen int64, suspect, failed []string, last *sipv1alp
 }
 
 // failOver fences the pod's node, then deletes the pod at once (no drain: its calls are lost anyway). The
-// StatefulSet starts it again, and the taint keeps it off the fenced node.
-func (r *FreeswitchClusterReconciler) failOver(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, p *corev1.Pod, trigger sipv1alpha1.FailoverTrigger, reason string, now time.Time) error {
+// StatefulSet starts it again, and the fenced label keeps it off the fenced node. deleted is false when the pod was
+// already gone.
+func (r *FreeswitchClusterReconciler) failOver(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, p *corev1.Pod, trigger sipv1alpha1.FailoverTrigger, reason string, now time.Time) (deleted bool, err error) {
 	if p.Spec.NodeName != "" {
 		by := fmt.Sprintf("%s failover of FreeswitchCluster %s/%s pod %s at %s: %s",
 			trigger, fsc.Namespace, fsc.Name, p.Name, now.UTC().Format(time.RFC3339), reason)
 		if err := fenceNode(ctx, r.apiReader(), r.Client, p.Spec.NodeName, truncate(by, 1024)); err != nil {
-			return fmt.Errorf("fencing node %s: %w", p.Spec.NodeName, err)
+			return false, fmt.Errorf("fencing node %s: %w", p.Spec.NodeName, err)
 		}
 	}
 	uid := p.UID
-	if err := r.Delete(ctx, p, client.Preconditions{UID: &uid}, client.GracePeriodSeconds(0)); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("deleting pod: %w", err)
+	switch err := r.Delete(ctx, p, client.Preconditions{UID: &uid}, client.GracePeriodSeconds(0)); {
+	case apierrors.IsNotFound(err):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("deleting pod: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 func (r *FreeswitchClusterReconciler) apiReader() client.Reader {
@@ -262,7 +291,7 @@ func (r *FreeswitchClusterReconciler) apiReader() client.Reader {
 
 // fenceNode labels a node sip.instruments.com/fenced=true, which marks it fenced (fleets keep off it by node affinity,
 // and pools treat it as failed), taints it sip.instruments.com/fenced:NoSchedule to keep other pods off, and records
-// why. A node already fenced keeps its first record. A node
+// why. A node already fenced (labeled) keeps its first record. A node
 // that is gone needs no fence. The node is read from reader, the API server rather than a cache where it can: a node
 // just lost is being changed by the node lifecycle controller, and a stale copy only conflicts.
 func fenceNode(ctx context.Context, reader client.Reader, c client.Client, name, by string) error {
@@ -280,10 +309,10 @@ func fenceNode(ctx context.Context, reader client.Reader, c client.Client, name,
 		patch := client.MergeFromWithOptions(n.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		if !tainted {
 			n.Spec.Taints = append(n.Spec.Taints, fencedTaint)
-			metav1.SetMetaDataAnnotation(&n.ObjectMeta, sipv1alpha1.FencedByAnnotation, by)
 		}
 		if !labeled {
 			metav1.SetMetaDataLabel(&n.ObjectMeta, sipv1alpha1.FencedLabel, fencedValue)
+			metav1.SetMetaDataAnnotation(&n.ObjectMeta, sipv1alpha1.FencedByAnnotation, by)
 		}
 		return client.IgnoreNotFound(c.Patch(ctx, &n, patch))
 	})
