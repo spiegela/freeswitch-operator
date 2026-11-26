@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,10 +14,6 @@ import (
 
 	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
 )
-
-// failoverTimeout is how long a failover counts as under way when its replacement doesn't become ready: another
-// automatic failover waits that long at most.
-const failoverTimeout = 10 * time.Minute
 
 // failoverSettings is spec.failover with every default applied.
 type failoverSettings struct {
@@ -115,8 +112,10 @@ type verdict struct {
 //     makes it unready, so it would be the same signal twice.
 //   - SIPUnreachable: the prober's last failureThreshold probes went unanswered.
 //
-// A signal failing for every member of a fleet of two or more doesn't count: more likely the observer (the
-// operator's network, the control plane) than every member at once, and failing them all over wouldn't help.
+// A signal failing for every member that has been ready, when there are two or more of them, doesn't count: more
+// likely the observer (the operator's network, the control plane) than every member at once, and failing them all
+// over wouldn't help. Members that have never been ready (starting, or crash-looping on a bad configuration) are
+// left out of that test, so one that never worked can't hide a real failure of another.
 // A member is Failed once signalsRequired counted signals have failed together for failAfterSeconds.
 func evaluateHealth(in healthInput) []verdict {
 	var out []verdict
@@ -146,18 +145,17 @@ func evaluateHealth(in healthInput) []verdict {
 		out = append(out, v)
 	}
 
-	// Discount a signal that fails for every member.
+	// Discount a signal that fails for every member that has been ready.
+	var observed []*verdict
+	for i := range out {
+		if out[i].eligible {
+			observed = append(observed, &out[i])
+		}
+	}
 	discounted := map[sipv1alpha1.HealthSignalType]bool{}
-	if len(out) >= 2 {
+	if len(observed) >= 2 {
 		for _, typ := range []sipv1alpha1.HealthSignalType{sipv1alpha1.SignalNodeLost, sipv1alpha1.SignalNotReady, sipv1alpha1.SignalSIPUnreachable} {
-			all := true
-			for i := range out {
-				if !slices.ContainsFunc(out[i].signals, func(s signal) bool { return s.typ == typ }) {
-					all = false
-					break
-				}
-			}
-			discounted[typ] = all
+			discounted[typ] = !slices.ContainsFunc(observed, func(v *verdict) bool { return !v.has(typ) })
 		}
 	}
 
@@ -197,6 +195,16 @@ func evaluateHealth(in healthInput) []verdict {
 		}
 	}
 	return out
+}
+
+// has reports whether one of the member's failing signals is of type typ.
+func (v *verdict) has(typ sipv1alpha1.HealthSignalType) bool {
+	return slices.ContainsFunc(v.signals, func(s signal) bool { return s.typ == typ })
+}
+
+// hasCounted reports whether a counted signal of type typ is failing.
+func (v *verdict) hasCounted(typ sipv1alpha1.HealthSignalType) bool {
+	return slices.ContainsFunc(v.signals, func(s signal) bool { return s.typ == typ && s.counted })
 }
 
 // nodeLostSignal reports whether the control plane has lost the pod's node.
@@ -288,21 +296,35 @@ type failoverDecision struct {
 	held map[string]string
 }
 
-// failoverInProgress reports whether the fleet's last failover is still waiting for its replacement.
-func failoverInProgress(last *sipv1alpha1.FailoverRecord, now time.Time) bool {
-	return last != nil && last.CompletedAt == nil && now.Sub(last.StartedAt.Time) < failoverTimeout
+// failoverInProgress reports whether the fleet's last failover is still waiting for its replacement. It waits for as
+// long as that takes: a replacement that never becomes ready most likely has nowhere to go (no spare node), and
+// failing over another member then would only fence another node.
+func failoverInProgress(last *sipv1alpha1.FailoverRecord) bool {
+	return last != nil && last.CompletedAt == nil
+}
+
+// failOverRequested reports whether a person asked for the pod's failover: the annotation set to true.
+func failOverRequested(p *corev1.Pod) bool {
+	v, ok := p.Annotations[sipv1alpha1.FailOverAnnotation]
+	if !ok {
+		return false
+	}
+	asked, err := strconv.ParseBool(v)
+	return err == nil && asked
 }
 
 // decideFailover picks at most one member to fail over:
-//   - A pod a person annotated sip.instruments.com/fail-over, whatever the mode or its health (the first by name).
+//   - A pod a person annotated sip.instruments.com/fail-over=true, whatever the mode or its health (the first by
+//     name).
 //   - Otherwise, in mode Automatic and with no failover under way, the Failed member that has been ready and failed
 //     first. A Failed member that has never been ready isn't failed over: a configuration or image that never
-//     worked fails the same way on any node.
-func decideFailover(verdicts []verdict, mode sipv1alpha1.FailoverMode, last *sipv1alpha1.FailoverRecord, now time.Time) failoverDecision {
+//     worked fails the same way on any node. Nor is one shutting down (a drain, a rolling update, a scale-down),
+//     unless its node is lost: it is going anyway, and its node is likely sound.
+func decideFailover(verdicts []verdict, mode sipv1alpha1.FailoverMode, last *sipv1alpha1.FailoverRecord) failoverDecision {
 	d := failoverDecision{held: map[string]string{}}
 	for i := range verdicts {
 		p := verdicts[i].pod
-		if p.Annotations[sipv1alpha1.FailOverAnnotation] != "" {
+		if failOverRequested(p) {
 			d.target, d.trigger = p, sipv1alpha1.FailoverTriggerManual
 			d.reason = "requested with the " + sipv1alpha1.FailOverAnnotation + " annotation"
 			return d
@@ -319,8 +341,12 @@ func decideFailover(verdicts []verdict, mode sipv1alpha1.FailoverMode, last *sip
 			d.held[v.pod.Name] = "failover mode is " + string(mode) + ": annotate the pod " + sipv1alpha1.FailOverAnnotation + "=true to fail it over"
 		case !v.eligible:
 			d.held[v.pod.Name] = "the pod has never been ready, so it would fail the same way on another node"
-		case failoverInProgress(last, now):
-			d.held[v.pod.Name] = "waiting for the failover of " + last.Pod + " to finish"
+		case v.pod.DeletionTimestamp != nil && !v.hasCounted(sipv1alpha1.SignalNodeLost):
+			d.held[v.pod.Name] = "the pod is shutting down on a node that isn't lost"
+		case failoverInProgress(last):
+			d.held[v.pod.Name] = "waiting for the failover of " + last.Pod + " to finish: its replacement isn't ready " +
+				"yet (if it can't be scheduled, add a spare node; annotating a pod " + sipv1alpha1.FailOverAnnotation +
+				"=true still fails it over)"
 		default:
 			candidates = append(candidates, v)
 		}

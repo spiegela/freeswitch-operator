@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -62,9 +64,9 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 		in.sip = r.SIPProbes
 	}
 	verdicts := evaluateHealth(in)
-	r.completeFailover(fsc, pods, status.LastFailover, now)
+	r.completeFailover(fsc, cfg.replicas, pods, status.LastFailover, now)
 
-	decision := decideFailover(verdicts, cfg.failover.mode, status.LastFailover, now)
+	decision := decideFailover(verdicts, cfg.failover.mode, status.LastFailover)
 	if t := decision.target; t != nil {
 		log.Info("failing over member", "pod", t.Name, "node", t.Spec.NodeName, "trigger", decision.trigger, "reason", decision.reason)
 		err := r.failOver(ctx, fsc, t, decision.trigger, decision.reason, now)
@@ -77,13 +79,17 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 			Pod: t.Name, PodUID: string(t.UID), Node: t.Spec.NodeName, Trigger: decision.trigger,
 			Reason: truncate(decision.reason, 1024), StartedAt: metav1.NewTime(now),
 		}
+		if err := r.persistFailover(ctx, fsc, status.LastFailover); err != nil {
+			// The status update at the end of the reconcile tries again.
+			log.Error(err, "recording the failover in the status", "pod", t.Name)
+		}
 		r.event(fsc, corev1.EventTypeWarning, "FailingOver", "Failover",
 			"%s failover of %s: fenced node %s and deleted the pod to start it on another node; %s",
 			decision.trigger, t.Name, t.Spec.NodeName, truncate(decision.reason, 512))
 	}
 
 	suspect, failed, recheck := r.attachHealth(fsc, verdicts, decision, status)
-	inProgress := failoverInProgress(status.LastFailover, now)
+	inProgress := failoverInProgress(status.LastFailover)
 	meta.SetStatusCondition(&status.Conditions, membersHealthyCondition(fsc.Generation, suspect, failed, inProgress, status.LastFailover))
 	recordHealth(fleet, verdicts, decision.held, inProgress)
 
@@ -113,9 +119,27 @@ func (r *FreeswitchClusterReconciler) podNodes(ctx context.Context, pods []corev
 	return nodes, nil
 }
 
-// completeFailover marks the latest failover done once a new pod of the same name is ready.
-func (r *FreeswitchClusterReconciler) completeFailover(fsc *sipv1alpha1.FreeswitchCluster, pods []corev1.Pod, last *sipv1alpha1.FailoverRecord, now time.Time) {
+// persistFailover writes a failover's record to the status at once, with a merge patch that can't conflict. The node
+// is fenced and the pod gone by then, and the record is what keeps another automatic failover waiting, so it must not
+// be lost to a status update that conflicts at the end of the reconcile (the requeue would find nothing to record).
+func (r *FreeswitchClusterReconciler) persistFailover(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, rec *sipv1alpha1.FailoverRecord) error {
+	base := fsc.DeepCopy()
+	fsc.Status.LastFailover = rec.DeepCopy()
+	return r.Status().Patch(ctx, fsc, client.MergeFrom(base))
+}
+
+// completeFailover marks the latest failover done once a new pod of the same name is ready, or once the fleet has
+// been scaled down past the pod, so that no replacement is coming.
+func (r *FreeswitchClusterReconciler) completeFailover(fsc *sipv1alpha1.FreeswitchCluster, replicas int32, pods []corev1.Pod, last *sipv1alpha1.FailoverRecord, now time.Time) {
 	if last == nil || last.CompletedAt != nil {
+		return
+	}
+	if ord, ok := podOrdinal(statefulSetName(fsc), last.Pod); ok && ord >= int(replicas) &&
+		!slices.ContainsFunc(pods, func(p corev1.Pod) bool { return p.Name == last.Pod }) {
+		at := metav1.NewTime(now)
+		last.CompletedAt = &at
+		r.event(fsc, corev1.EventTypeNormal, "FailoverCompleted", "Failover",
+			"%s has no replacement to wait for: the fleet was scaled down to %d", last.Pod, replicas)
 		return
 	}
 	for i := range pods {
@@ -203,13 +227,23 @@ func membersHealthyCondition(gen int64, suspect, failed []string, inProgress boo
 	return cond
 }
 
+// podOrdinal is the ordinal of a StatefulSet's pod, from its name.
+func podOrdinal(sts, pod string) (int, bool) {
+	rest, ok := strings.CutPrefix(pod, sts+"-")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(rest)
+	return n, err == nil && n >= 0
+}
+
 // failOver fences the pod's node, then deletes the pod at once (no drain: its calls are lost anyway). The
 // StatefulSet starts it again, and the taint keeps it off the fenced node.
 func (r *FreeswitchClusterReconciler) failOver(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, p *corev1.Pod, trigger sipv1alpha1.FailoverTrigger, reason string, now time.Time) error {
 	if p.Spec.NodeName != "" {
 		by := fmt.Sprintf("%s failover of FreeswitchCluster %s/%s pod %s at %s: %s",
 			trigger, fsc.Namespace, fsc.Name, p.Name, now.UTC().Format(time.RFC3339), reason)
-		if err := fenceNode(ctx, r.Client, p.Spec.NodeName, truncate(by, 1024)); err != nil {
+		if err := fenceNode(ctx, r.apiReader(), r.Client, p.Spec.NodeName, truncate(by, 1024)); err != nil {
 			return fmt.Errorf("fencing node %s: %w", p.Spec.NodeName, err)
 		}
 	}
@@ -220,24 +254,44 @@ func (r *FreeswitchClusterReconciler) failOver(ctx context.Context, fsc *sipv1al
 	return nil
 }
 
-// fenceNode taints a node sip.instruments.com/fenced:NoSchedule and records why. A node already fenced keeps its
-// first record. A node that is gone needs no fence.
-func fenceNode(ctx context.Context, c client.Client, name, by string) error {
-	var n corev1.Node
-	if err := c.Get(ctx, types.NamespacedName{Name: name}, &n); err != nil {
-		return client.IgnoreNotFound(err)
+func (r *FreeswitchClusterReconciler) apiReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
 	}
-	if nodeFenced(&n) {
-		return nil
-	}
-	// The node lifecycle controller changes taints too (unreachable, not-ready): don't overwrite its change.
-	patch := client.MergeFromWithOptions(n.DeepCopy(), client.MergeFromWithOptimisticLock{})
-	n.Spec.Taints = append(n.Spec.Taints, corev1.Taint{Key: sipv1alpha1.FencedTaint, Value: "true", Effect: corev1.TaintEffectNoSchedule})
-	if n.Annotations == nil {
-		n.Annotations = map[string]string{}
-	}
-	n.Annotations[sipv1alpha1.FencedByAnnotation] = by
-	return client.IgnoreNotFound(c.Patch(ctx, &n, patch))
+	return r.Client
+}
+
+// fenceNode taints a node sip.instruments.com/fenced:NoSchedule, labels it sip.instruments.com/fenced=true (for fleets
+// whose tolerations would tolerate the taint), and records why. A node already fenced keeps its first record. A node
+// that is gone needs no fence. The node is read from reader, the API server rather than a cache where it can: a node
+// just lost is being changed by the node lifecycle controller, and a stale copy only conflicts.
+func fenceNode(ctx context.Context, reader client.Reader, c client.Client, name, by string) error {
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var n corev1.Node
+		if err := reader.Get(ctx, types.NamespacedName{Name: name}, &n); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		tainted, labeled := nodeFenced(&n), n.Labels[sipv1alpha1.FencedLabel] != ""
+		if tainted && labeled {
+			return nil
+		}
+		// The node lifecycle controller changes taints too (unreachable, not-ready): don't overwrite its change.
+		patch := client.MergeFromWithOptions(n.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		if !tainted {
+			n.Spec.Taints = append(n.Spec.Taints, corev1.Taint{Key: sipv1alpha1.FencedTaint, Value: "true", Effect: corev1.TaintEffectNoSchedule})
+			if n.Annotations == nil {
+				n.Annotations = map[string]string{}
+			}
+			n.Annotations[sipv1alpha1.FencedByAnnotation] = by
+		}
+		if !labeled {
+			if n.Labels == nil {
+				n.Labels = map[string]string{}
+			}
+			n.Labels[sipv1alpha1.FencedLabel] = "true"
+		}
+		return client.IgnoreNotFound(c.Patch(ctx, &n, patch))
+	})
 }
 
 func (r *FreeswitchClusterReconciler) event(fsc *sipv1alpha1.FreeswitchCluster, typ, reason, action, note string, args ...any) {
@@ -265,4 +319,32 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n-3] + "..."
+}
+
+// avoidFencedNodes keeps a fleet's pods off fenced nodes by node affinity (the FencedLabel) when its tolerations would
+// tolerate the FencedTaint, which would otherwise let the replacement land back on the node just fenced. It is nil
+// for every other fleet, whose pod template the taint alone keeps off fenced nodes, so they aren't rolled for it.
+func avoidFencedNodes(tolerations []corev1.Toleration) *corev1.NodeAffinity {
+	if !slices.ContainsFunc(tolerations, toleratesFenced) {
+		return nil
+	}
+	return &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+		NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{
+			Key: sipv1alpha1.FencedLabel, Operator: corev1.NodeSelectorOpDoesNotExist,
+		}}}},
+	}}
+}
+
+// toleratesFenced reports whether a toleration tolerates the FencedTaint (value true, effect NoSchedule).
+func toleratesFenced(t corev1.Toleration) bool {
+	if t.Effect != "" && t.Effect != corev1.TaintEffectNoSchedule {
+		return false
+	}
+	switch t.Key {
+	case "":
+		return t.Operator == corev1.TolerationOpExists
+	case sipv1alpha1.FencedTaint:
+		return t.Operator == corev1.TolerationOpExists || t.Value == "true"
+	}
+	return false
 }

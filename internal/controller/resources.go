@@ -326,12 +326,15 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		NodeSelector:                  fsc.Spec.NodeSelector,
 		Tolerations:                   fsc.Spec.Tolerations,
 		ImagePullSecrets:              fsc.Spec.ImagePullSecrets,
-		Affinity: &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
-			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
-				LabelSelector: &metav1.LabelSelector{MatchLabels: selectorLabels(fsc)},
-				TopologyKey:   corev1.LabelHostname,
-			}},
-		}},
+		Affinity: &corev1.Affinity{
+			NodeAffinity: avoidFencedNodes(fsc.Spec.Tolerations),
+			PodAntiAffinity: &corev1.PodAntiAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+					LabelSelector: &metav1.LabelSelector{MatchLabels: selectorLabels(fsc)},
+					TopologyKey:   corev1.LabelHostname,
+				}},
+			},
+		},
 		Containers:     []corev1.Container{container},
 		InitContainers: slices.Concat(addressWaitContainers(fsc, cfg), exporterContainers(cfg.metrics)),
 		Volumes:        volumes,

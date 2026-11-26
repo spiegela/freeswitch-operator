@@ -197,6 +197,7 @@ func main() {
 	}
 	if err := (&controller.FreeswitchClusterReconciler{
 		Client:      mgr.GetClient(),
+		APIReader:   mgr.GetAPIReader(),
 		Scheme:      mgr.GetScheme(),
 		NewNotifier: controller.NewJSONRPCNotifier,
 		SIPProbes:   prober,

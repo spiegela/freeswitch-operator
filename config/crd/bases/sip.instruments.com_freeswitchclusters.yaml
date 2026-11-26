@@ -851,11 +851,12 @@ spec:
                 type: string
               lastFailover:
                 description: |-
-                  lastFailover is the fleet's latest failover. Another automatic failover waits until its replacement is ready,
-                  or 10 minutes have passed.
+                  lastFailover is the fleet's latest failover. Another automatic failover waits until its replacement is ready
+                  (however long that takes: a failover with nowhere to go must not fence node after node); a manual one doesn't.
                 properties:
                   completedAt:
-                    description: completedAt is when the replacement pod became ready.
+                    description: completedAt is when the replacement pod became ready,
+                      or when the fleet was scaled down past the pod.
                     format: date-time
                     type: string
                   node:
@@ -892,7 +893,8 @@ spec:
               members:
                 description: members, one per pod, in name order.
                 items:
-                  description: Member is one FreeSWITCH pod as the operator sees it.
+                  description: FreeswitchMember is one FreeSWITCH pod as the operator
+                    sees it, with its health.
                   properties:
                     address:
                       description: 'address Kamailio dispatches to: the node''s private

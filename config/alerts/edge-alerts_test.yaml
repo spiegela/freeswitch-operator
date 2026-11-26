@@ -292,7 +292,8 @@ tests:
               description: >
                 The operator fenced the member's node (taint sip.instruments.com/fenced; the node's annotation
                 sip.instruments.com/fenced-by says why) and started the pod on another node. Find out what happened
-                to the node. Once it is sound, remove the taint so it can serve as a spare again.
+                to the node. Once it is sound, remove the taint and the label sip.instruments.com/fenced so it can
+                serve as a spare again.
       - eval_time: 5m
         alertname: FreeswitchFailoverStuck
         exp_alerts: []
@@ -305,7 +306,8 @@ tests:
               description: >
                 The replacement pod hasn't become ready 5 minutes after the failover: often there is no spare node
                 to run it on (every other edge node runs a member or is fenced). The fleet is a member short until it
-                does.
+                does, and automatic failover of any other member waits for it: add a spare node, or fail a member
+                over by hand.
 
   # SIP probes failing for every member: not counted, and a warning that failover is blind to them.
   - interval: 1m

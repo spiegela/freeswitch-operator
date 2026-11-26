@@ -191,6 +191,20 @@ func TestEvaluateHealth(t *testing.T) {
 			want:  "edge-0=Suspect+SIPUnreachable(uncounted) edge-1=Suspect+NotReady+SIPUnreachable(uncounted)",
 		},
 		{
+			name: "a member that has never been ready doesn't hide another's failure",
+			pods: func() []corev1.Pod {
+				p := unready(hpod("edge-0", "a"), t0.Add(-time.Minute))
+				p.Annotations = nil
+				return []corev1.Pod{p, hpod("edge-1", "b")}
+			}(),
+			nodes: map[string]*corev1.Node{
+				"a": hnode("a", corev1.ConditionTrue, t0.Add(-time.Hour)),
+				"b": hnode("b", corev1.ConditionUnknown, t0.Add(-time.Minute)),
+			},
+			sip:  fakeProbes{"edge-0-uid": sipDown(t0.Add(-time.Minute)), "edge-1-uid": sipDown(t0.Add(-time.Minute))},
+			want: "edge-0=Suspect+SIPUnreachable edge-1=Failed+NodeLost+SIPUnreachable",
+		},
+		{
 			name:  "...but a fleet of one has no one to compare with",
 			pods:  []corev1.Pod{unready(hpod("edge-0", "a"), t0.Add(-time.Minute))},
 			nodes: healthyNodes("a"),
@@ -253,6 +267,7 @@ func TestEvaluateHealthRecheck(t *testing.T) {
 func failedVerdict(p corev1.Pod, at time.Time) verdict {
 	pp := p
 	return verdict{pod: &pp, eligible: pp.Annotations[sipv1alpha1.FirstReadyAnnotation] != "", failedAt: at,
+		signals: []signal{{typ: sipv1alpha1.SignalNodeLost, since: at, counts: at, counted: true}},
 		health: sipv1alpha1.MemberHealth{State: sipv1alpha1.HealthFailed, Signals: []sipv1alpha1.HealthSignal{
 			{Type: sipv1alpha1.SignalNodeLost, Counted: true, Message: "node gone"},
 		}}}
@@ -262,42 +277,54 @@ func TestDecideFailover(t *testing.T) {
 	healthy := verdict{pod: ptrPod(hpod("edge-0", "a")), health: sipv1alpha1.MemberHealth{State: sipv1alpha1.HealthHealthy}}
 	auto, detect := sipv1alpha1.FailoverAutomatic, sipv1alpha1.FailoverDetect
 
-	d := decideFailover([]verdict{healthy, failedVerdict(hpod("edge-1", "b"), t0)}, detect, nil, t0)
+	d := decideFailover([]verdict{healthy, failedVerdict(hpod("edge-1", "b"), t0)}, detect, nil)
 	if d.target != nil || !strings.Contains(d.held["edge-1"], "Detect") {
 		t.Errorf("detect: target %v held %v", d.target, d.held)
 	}
 
-	d = decideFailover([]verdict{healthy, failedVerdict(hpod("edge-1", "b"), t0)}, auto, nil, t0)
+	d = decideFailover([]verdict{healthy, failedVerdict(hpod("edge-1", "b"), t0)}, auto, nil)
 	if d.target == nil || d.target.Name != "edge-1" || d.trigger != sipv1alpha1.FailoverTriggerAutomatic || !strings.Contains(d.reason, "NodeLost") {
 		t.Errorf("automatic: %+v", d)
 	}
 
 	// Two Failed: the earlier first, the other held.
-	d = decideFailover([]verdict{failedVerdict(hpod("edge-1", "b"), t0), failedVerdict(hpod("edge-2", "c"), t0.Add(-time.Second))}, auto, nil, t0)
+	d = decideFailover([]verdict{failedVerdict(hpod("edge-1", "b"), t0), failedVerdict(hpod("edge-2", "c"), t0.Add(-time.Second))}, auto, nil)
 	if d.target == nil || d.target.Name != "edge-2" || !strings.Contains(d.held["edge-1"], "one member at a time") {
 		t.Errorf("two failed: target %v held %v", d.target, d.held)
 	}
 
-	// A failover under way holds the next; a finished or timed-out one doesn't.
+	// A failover under way holds the next, however long it has been waiting; a finished one doesn't.
 	last := &sipv1alpha1.FailoverRecord{Pod: "edge-2", StartedAt: metav1.NewTime(t0.Add(-time.Minute))}
-	d = decideFailover([]verdict{failedVerdict(hpod("edge-1", "b"), t0)}, auto, last, t0)
+	d = decideFailover([]verdict{failedVerdict(hpod("edge-1", "b"), t0)}, auto, last)
 	if d.target != nil || !strings.Contains(d.held["edge-1"], "edge-2") {
 		t.Errorf("in progress: target %v held %v", d.target, d.held)
 	}
 	done := metav1.NewTime(t0.Add(-30 * time.Second))
 	last.CompletedAt = &done
-	if d = decideFailover([]verdict{failedVerdict(hpod("edge-1", "b"), t0)}, auto, last, t0); d.target == nil {
+	if d = decideFailover([]verdict{failedVerdict(hpod("edge-1", "b"), t0)}, auto, last); d.target == nil {
 		t.Errorf("after completion: held %v", d.held)
 	}
-	last = &sipv1alpha1.FailoverRecord{Pod: "edge-2", StartedAt: metav1.NewTime(t0.Add(-failoverTimeout))}
-	if d = decideFailover([]verdict{failedVerdict(hpod("edge-1", "b"), t0)}, auto, last, t0); d.target == nil {
-		t.Errorf("after timeout: held %v", d.held)
+	last = &sipv1alpha1.FailoverRecord{Pod: "edge-2", StartedAt: metav1.NewTime(t0.Add(-24 * time.Hour))}
+	if d = decideFailover([]verdict{failedVerdict(hpod("edge-1", "b"), t0)}, auto, last); d.target != nil || !strings.Contains(d.held["edge-1"], "spare") {
+		t.Errorf("a day stuck: target %v held %v", d.target, d.held)
+	}
+
+	// Shutting down: held, unless its node is lost.
+	draining := failedVerdict(hpod("edge-1", "b"), t0)
+	draining.pod.DeletionTimestamp = &metav1.Time{Time: t0}
+	draining.signals = []signal{{typ: sipv1alpha1.SignalSIPUnreachable, counted: true}}
+	if d = decideFailover([]verdict{draining}, auto, nil); d.target != nil || !strings.Contains(d.held["edge-1"], "shutting down") {
+		t.Errorf("draining: target %v held %v", d.target, d.held)
+	}
+	draining.signals = append(draining.signals, signal{typ: sipv1alpha1.SignalNodeLost, counted: true})
+	if d = decideFailover([]verdict{draining}, auto, nil); d.target == nil {
+		t.Errorf("terminating on a lost node: held %v", d.held)
 	}
 
 	// Never ready: held.
 	never := hpod("edge-1", "b")
 	never.Annotations = nil
-	d = decideFailover([]verdict{failedVerdict(never, t0)}, auto, nil, t0)
+	d = decideFailover([]verdict{failedVerdict(never, t0)}, auto, nil)
 	if d.target != nil || !strings.Contains(d.held["edge-1"], "never been ready") {
 		t.Errorf("never ready: target %v held %v", d.target, d.held)
 	}
@@ -306,9 +333,69 @@ func TestDecideFailover(t *testing.T) {
 	asked := hpod("edge-0", "a")
 	asked.Annotations[sipv1alpha1.FailOverAnnotation] = "true"
 	last = &sipv1alpha1.FailoverRecord{Pod: "edge-2", StartedAt: metav1.NewTime(t0)}
-	d = decideFailover([]verdict{{pod: &asked, health: sipv1alpha1.MemberHealth{State: sipv1alpha1.HealthHealthy}}}, detect, last, t0)
+	d = decideFailover([]verdict{{pod: &asked, health: sipv1alpha1.MemberHealth{State: sipv1alpha1.HealthHealthy}}}, detect, last)
 	if d.target == nil || d.target.Name != "edge-0" || d.trigger != sipv1alpha1.FailoverTriggerManual {
 		t.Errorf("manual: %+v", d)
+	}
+	// ...but only set to true.
+	for _, v := range []string{"false", "0", "no", ""} {
+		asked.Annotations[sipv1alpha1.FailOverAnnotation] = v
+		if d = decideFailover([]verdict{{pod: &asked, health: sipv1alpha1.MemberHealth{State: sipv1alpha1.HealthHealthy}}}, detect, nil); d.target != nil {
+			t.Errorf("fail-over=%q: failed over", v)
+		}
+	}
+}
+
+func TestAvoidFencedNodes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		tols  []corev1.Toleration
+		avoid bool
+	}{
+		{"none", nil, false},
+		{"another key", []corev1.Toleration{{Key: "edge", Operator: corev1.TolerationOpExists}}, false},
+		{"every taint", []corev1.Toleration{{Operator: corev1.TolerationOpExists}}, true},
+		{"every NoExecute taint", []corev1.Toleration{{Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute}}, false},
+		{"the fenced key", []corev1.Toleration{{Key: sipv1alpha1.FencedTaint, Operator: corev1.TolerationOpExists}}, true},
+		{"the fenced key and value", []corev1.Toleration{{Key: sipv1alpha1.FencedTaint, Value: "true", Effect: corev1.TaintEffectNoSchedule}}, true},
+		{"the fenced key, another value", []corev1.Toleration{{Key: sipv1alpha1.FencedTaint, Value: "false"}}, false},
+	} {
+		got := avoidFencedNodes(tc.tols)
+		if (got != nil) != tc.avoid {
+			t.Errorf("%s: affinity %v, want one: %v", tc.name, got, tc.avoid)
+		}
+		if got != nil {
+			req := got.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions[0]
+			if req.Key != sipv1alpha1.FencedLabel || req.Operator != corev1.NodeSelectorOpDoesNotExist {
+				t.Errorf("%s: %+v", tc.name, req)
+			}
+		}
+	}
+}
+
+func TestPodOrdinal(t *testing.T) {
+	for pod, want := range map[string]int{"edge-0": 0, "edge-12": 12, "edge-x": -1, "other-1": -1, "edge-": -1, "edge--1": -1} {
+		n, ok := podOrdinal("edge", pod)
+		if !ok {
+			n = -1
+		}
+		if n != want {
+			t.Errorf("%s: %d, want %d", pod, n, want)
+		}
+	}
+}
+
+func TestCompleteFailoverScaledDown(t *testing.T) {
+	r := &FreeswitchClusterReconciler{}
+	fsc := &sipv1alpha1.FreeswitchCluster{ObjectMeta: metav1.ObjectMeta{Name: "edge"}}
+	last := &sipv1alpha1.FailoverRecord{Pod: "edge-2", PodUID: "old", StartedAt: metav1.NewTime(t0.Add(-time.Hour))}
+	r.completeFailover(fsc, 3, []corev1.Pod{hpod("edge-0", "a")}, last, t0)
+	if last.CompletedAt != nil {
+		t.Fatalf("edge-2 is still wanted, yet completed")
+	}
+	r.completeFailover(fsc, 2, []corev1.Pod{hpod("edge-0", "a")}, last, t0)
+	if last.CompletedAt == nil || !last.CompletedAt.Equal(&metav1.Time{Time: t0}) {
+		t.Errorf("scaled down to 2: completedAt %v", last.CompletedAt)
 	}
 }
 

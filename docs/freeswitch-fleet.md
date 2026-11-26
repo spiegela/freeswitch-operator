@@ -154,9 +154,10 @@ start its pod on a spare.** Every fleet gets the health report, with `spec.failo
   port, as Kamailio's do.
 - **Only a pod that has been ready counts as `NotReady`** (the operator marks it `sip.instruments.com/first-ready`),
   and readiness doesn't count while the node is lost (that would be the node's loss twice).
-- **A signal failing for every member of a fleet of two or more is the observer's problem** (the operator's
-  network, the control plane), not every member's at once: it is listed but not counted, and
-  `FreeswitchHealthSignalBlind` warns.
+- **A signal failing for every member that has been ready, when two or more have, is the observer's problem**
+  (the operator's network, the control plane), not every member's at once: it is listed but not counted, and
+  `FreeswitchHealthSignalBlind` warns. A member that has never been ready (starting, or crash-looping on a bad
+  configuration) is left out of that test, so it can't hide another member's real failure.
 
 A member with no failing signal is `Healthy`; one with any is `Suspect`; one with `signalsRequired` (2) counted
 signals failing together for `failAfterSeconds` (15) is `Failed`. With 2, a node whose kubelet is lost but whose
@@ -165,23 +166,42 @@ member's verdict and signals are in `status.members[].health`, the fleet's `Memb
 transitions are events on the fleet, and [metrics and alerts](metrics.md) follow them.
 
 **Failover.** `spec.failover.mode` is `Detect` (the default: report, and act only when asked) or `Automatic`. A
-person can fail over any member in either mode by annotating its pod `sip.instruments.com/fail-over=true`. In
-`Automatic`, the operator fails over a `Failed` member on its own, with three limits: one member at a time (the next
-waits until the last failover's replacement is ready, or 10 minutes); never a pod that has never been ready (a
-configuration or image that never worked fails the same way on any node); and the earliest Failed first. A failover:
+person can fail over any member in either mode by annotating its pod `sip.instruments.com/fail-over=true` (any
+other value, `false` included, does nothing). In `Automatic`, the operator fails over a `Failed` member on its own,
+with these limits:
 
-1. Fences the member's node: the taint `sip.instruments.com/fenced:NoSchedule`, and the annotation
-   `sip.instruments.com/fenced-by` saying which member's failover, when, and why.
+- One member at a time: the next waits until the last failover's replacement is ready, however long that takes. A
+  replacement that never becomes ready most likely has nowhere to run, and failing another member over would only
+  fence another node. `FreeswitchFailoverStuck` fires after 5 minutes; add a spare, or fail a member over by hand.
+- Never a pod that has never been ready: a configuration or image that never worked fails the same way on any node.
+- Never a pod that is shutting down (a drain, a rolling update, a scale-down) unless its node is lost: it is going
+  anyway, and its node is likely sound.
+- The earliest Failed first.
+
+A failover:
+
+1. Fences the member's node: the taint `sip.instruments.com/fenced:NoSchedule`, the label
+   `sip.instruments.com/fenced=true`, and the annotation `sip.instruments.com/fenced-by` saying which member's
+   failover, when, and why.
 2. Deletes the pod at once (no grace period, no drain: its calls are lost anyway). Its endpoint goes, so the
    dispatcher list drops it and Kamailio takes it out of rotation at once, as for a drain.
-3. The StatefulSet starts the pod again; the taint keeps it off the fenced node, so it lands on the spare.
+3. The StatefulSet starts the pod again; the taint keeps it off the fenced node, so it lands on the spare. A fleet
+   whose `tolerations` would tolerate the taint (a toleration with no key and `operator: Exists`, say) gets a node
+   affinity rule against the label instead, so the same holds.
 4. Every `SIPAddressPool` that may fence takes its addresses off the fenced node and treats the node as failed
    ([address pools](address-pools.md)). The replacement gets an address on the spare as any replaced pod does: the
    failed member's own, freed by the fence, unless the spare holds an idle address of its own.
 
-`status.lastFailover` records the failover until the replacement is ready. **The operator never unfences:** once
-someone has found out what happened to the node and it is sound, `kubectl taint node <node>
-sip.instruments.com/fenced-` makes it a spare again. The operator needs `patch` on nodes for the taint.
+`status.lastFailover` records the failover until the replacement is ready (or the fleet is scaled down past it). It
+is written as soon as the pod is deleted, ahead of the rest of the status, so it isn't lost to a status update that
+conflicts. **The operator never unfences:** once someone has found out what happened to the node and it is sound,
+removing the taint and the label makes it a spare again:
+
+```bash
+kubectl taint node <node> sip.instruments.com/fenced- && kubectl label node <node> sip.instruments.com/fenced-
+```
+
+The operator needs `patch` on nodes for the taint and the label.
 
 Fencing a node takes every pool address off it, whatever fleet uses it: a Kamailio pod on a fenced node loses its
 address too.

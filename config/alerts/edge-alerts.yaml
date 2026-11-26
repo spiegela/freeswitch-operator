@@ -191,7 +191,8 @@ groups:
           description: >
             The operator fenced the member's node (taint sip.instruments.com/fenced; the node's annotation
             sip.instruments.com/fenced-by says why) and started the pod on another node. Find out what happened to
-            the node. Once it is sound, remove the taint so it can serve as a spare again.
+            the node. Once it is sound, remove the taint and the label sip.instruments.com/fenced so it can serve
+            as a spare again.
 
       - alert: FreeswitchFailoverStuck
         expr: freeswitch_operator_failover_in_progress == 1
@@ -201,7 +202,9 @@ groups:
           summary: "The failover in {{ $labels.namespace }}/{{ $labels.name }} has not brought its member back"
           description: >
             The replacement pod hasn't become ready 5 minutes after the failover: often there is no spare node to
-            run it on (every other edge node runs a member or is fenced). The fleet is a member short until it does.
+            run it on (every other edge node runs a member or is fenced). The fleet is a member short until it does,
+            and automatic failover of any other member waits for it: add a spare node, or fail a member over by
+            hand.
 
       - alert: FreeswitchFailoverErrors
         expr: sum by (kind, namespace, name) (increase(freeswitch_operator_failovers_total{result="error"}[10m])) > 0

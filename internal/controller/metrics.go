@@ -120,7 +120,8 @@ var (
 	}, withLabels("trigger", "result"))
 	failoverInProgressGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "freeswitch_operator_failover_in_progress",
-		Help: "1 while the fleet's latest failover waits for its replacement pod to be ready (up to 10 minutes).",
+		Help: "1 while the fleet's latest failover waits for its replacement pod to be ready; automatic failover of " +
+			"another member waits too.",
 	}, fleetLabels)
 	sipProbes = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "freeswitch_operator_sip_probes_total",

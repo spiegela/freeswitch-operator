@@ -50,9 +50,9 @@ const (
 	// DispatcherUpdatedAtAnnotation records when the dispatcher list's content last changed (RFC 3339), written in
 	// the same update as the list, so the reload delay is measured from the change itself.
 	DispatcherUpdatedAtAnnotation = "sip.instruments.com/dispatcher-updated-at"
-	// FailOverAnnotation, set on a FreeSWITCH pod by a person (any value), has the operator fail that member over
-	// now, whatever spec.failover.mode says and whatever its health: fence its node, delete the pod at once, and let
-	// the StatefulSet start it again on another node.
+	// FailOverAnnotation, set to "true" on a FreeSWITCH pod by a person, has the operator fail that member over now,
+	// whatever spec.failover.mode says and whatever its health: fence its node, delete the pod at once, and let the
+	// StatefulSet start it again on another node. Any other value ("false" included) does nothing.
 	FailOverAnnotation = "sip.instruments.com/fail-over"
 	// FirstReadyAnnotation is set by the operator on a FreeSWITCH pod the first time it sees the pod ready (RFC 3339).
 	// Only a pod that has been ready is failed over automatically, or counts as NotReady: one that never was (a bad
@@ -63,6 +63,10 @@ const (
 	// the node. The operator never removes it; a person does, once the node is known to be sound
 	// (kubectl taint node <node> sip.instruments.com/fenced-), or the node is replaced.
 	FencedTaint = "sip.instruments.com/fenced"
+	// FencedLabel is put on a fenced node beside FencedTaint. A fleet whose tolerations would tolerate the taint
+	// (a toleration with no key and operator Exists, say) keeps its pods off nodes with this label by node affinity
+	// instead. Remove it with the taint (kubectl label node <node> sip.instruments.com/fenced-).
+	FencedLabel = "sip.instruments.com/fenced"
 	// FencedByAnnotation records on a fenced node which member's failover fenced it, when, and why.
 	FencedByAnnotation = "sip.instruments.com/fenced-by"
 )
@@ -526,6 +530,11 @@ type Member struct {
 	// revision of the pod template the pod runs.
 	// +optional
 	Revision string `json:"revision,omitempty"`
+}
+
+// FreeswitchMember is one FreeSWITCH pod as the operator sees it, with its health.
+type FreeswitchMember struct {
+	Member `json:",inline"`
 	// health is the operator's verdict on the member, from its signals.
 	// +optional
 	Health *MemberHealth `json:"health,omitempty"`
@@ -576,7 +585,7 @@ type FailoverRecord struct {
 	Reason string `json:"reason,omitempty"`
 	// startedAt is when the operator fenced the node and deleted the pod.
 	StartedAt metav1.Time `json:"startedAt"`
-	// completedAt is when the replacement pod became ready.
+	// completedAt is when the replacement pod became ready, or when the fleet was scaled down past the pod.
 	// +optional
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
 	// replacementNode is where the replacement pod runs.
@@ -614,7 +623,7 @@ type FreeswitchClusterStatus struct {
 	// +listType=map
 	// +listMapKey=pod
 	// +optional
-	Members []Member `json:"members,omitempty"`
+	Members []FreeswitchMember `json:"members,omitempty"`
 
 	// dispatcherHash is the content hash of the dispatcher list last written.
 	// +optional
@@ -628,8 +637,8 @@ type FreeswitchClusterStatus struct {
 	// +optional
 	DispatcherUpdatedAt *metav1.Time `json:"dispatcherUpdatedAt,omitempty"`
 
-	// lastFailover is the fleet's latest failover. Another automatic failover waits until its replacement is ready,
-	// or 10 minutes have passed.
+	// lastFailover is the fleet's latest failover. Another automatic failover waits until its replacement is ready
+	// (however long that takes: a failover with nowhere to go must not fence node after node); a manual one doesn't.
 	// +optional
 	LastFailover *FailoverRecord `json:"lastFailover,omitempty"`
 	// conditions: Ready (every member ready and current), Available (at least one member takes calls),

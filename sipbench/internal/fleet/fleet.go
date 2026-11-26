@@ -144,8 +144,8 @@ type Fleet interface {
 	ExternalAddresses(ctx context.Context) (map[string]string, error)
 	// NodeReady reports whether a node's Ready condition is True.
 	NodeReady(ctx context.Context, node string) (bool, error)
-	// Unfence removes the operator's FencedTaint (and its record, FencedByAnnotation) from a node a failover
-	// fenced, and reports whether it had one.
+	// Unfence removes the operator's FencedTaint and FencedLabel (and its record, FencedByAnnotation) from a node
+	// a failover fenced, and reports whether it had either.
 	Unfence(ctx context.Context, node string) (bool, error)
 	// StartBlackout starts a pod on node that takes the node off the network for d, BlackoutDelay after it
 	// starts (sipbench blackout, from image), and returns the pod's name.
@@ -345,10 +345,11 @@ func (k *kube) Cordon(ctx context.Context, node string, unschedulable bool) erro
 	return err
 }
 
-// FencedTaint is the taint the operator puts on a node when it fails over a member there; FencedByAnnotation is its
-// record of why.
+// FencedTaint and FencedLabel are what the operator puts on a node when it fails over a member there;
+// FencedByAnnotation is its record of why.
 const (
 	FencedTaint        = "sip.instruments.com/fenced"
+	FencedLabel        = "sip.instruments.com/fenced"
 	FencedByAnnotation = "sip.instruments.com/fenced-by"
 )
 
@@ -358,10 +359,12 @@ func (k *kube) Unfence(ctx context.Context, node string) (bool, error) {
 		return false, err
 	}
 	keep := slices.DeleteFunc(slices.Clone(n.Spec.Taints), func(t corev1.Taint) bool { return t.Key == FencedTaint })
-	if len(keep) == len(n.Spec.Taints) {
+	_, labeled := n.Labels[FencedLabel]
+	if len(keep) == len(n.Spec.Taints) && !labeled {
 		return false, nil
 	}
 	n.Spec.Taints = keep
+	delete(n.Labels, FencedLabel)
 	delete(n.Annotations, FencedByAnnotation)
 	// An update, not a patch: the resourceVersion makes it fail rather than drop a taint the node lifecycle
 	// controller changed meanwhile.

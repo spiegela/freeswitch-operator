@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -480,14 +481,14 @@ var _ = Describe("FreeswitchCluster controller", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
 			return &fsc
 		}
-		member := func(name string) sipv1alpha1.Member {
+		member := func(name string) sipv1alpha1.FreeswitchMember {
 			for _, m := range fleet().Status.Members {
 				if m.Pod == name {
 					return m
 				}
 			}
 			Fail("no member " + name)
-			return sipv1alpha1.Member{}
+			return sipv1alpha1.FreeswitchMember{}
 		}
 
 		reconcileOnce(r, ns)
@@ -512,16 +513,18 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		Expect(cond.Reason).To(Equal("MemberFailed"))
 
-		By("in mode Automatic, the node is fenced and the pod deleted at once")
+		By("in mode Automatic, the node is fenced and the pod deleted at once, and the record survives a status update that conflicts")
 		fsc := fleet()
 		fsc.Spec.Failover.Mode = sipv1alpha1.FailoverAutomatic
 		Expect(k8sClient.Update(ctx, fsc)).To(Succeed())
-		reconcileOnce(r, ns)
+		conflicting := &FreeswitchClusterReconciler{Client: statusConflicts{k8sClient}, Scheme: k8sClient.Scheme(), SIPProbes: probes}
+		reconcileOnce(conflicting, ns)
 		err := k8sClient.Get(ctx, client.ObjectKeyFromObject(p1), &corev1.Pod{})
 		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "deleted with no grace period, so gone at once")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(nodeB), nodeB)).To(Succeed())
 		Expect(nodeFenced(nodeB)).To(BeTrue())
 		Expect(nodeB.Annotations[sipv1alpha1.FencedByAnnotation]).To(ContainSubstring("pod edge-1"))
+		Expect(nodeB.Labels).To(HaveKeyWithValue(sipv1alpha1.FencedLabel, "true"))
 		last := fleet().Status.LastFailover
 		Expect(last).NotTo(BeNil())
 		Expect(last.Pod).To(Equal("edge-1"))
@@ -745,4 +748,18 @@ var _ = Describe("FreeswitchCluster controller", func() {
 
 func podKey(p *corev1.Pod) types.NamespacedName {
 	return types.NamespacedName{Namespace: p.Namespace, Name: p.Name}
+}
+
+// statusConflicts is a client whose status updates all conflict, as they do when the cache is behind; status
+// patches still go through.
+type statusConflicts struct{ client.Client }
+
+func (c statusConflicts) Status() client.SubResourceWriter {
+	return conflictingStatus{c.Client.Status()}
+}
+
+type conflictingStatus struct{ client.SubResourceWriter }
+
+func (conflictingStatus) Update(_ context.Context, obj client.Object, _ ...client.SubResourceUpdateOption) error {
+	return apierrors.NewConflict(sipv1alpha1.GroupVersion.WithResource("freeswitchclusters").GroupResource(), obj.GetName(), errors.New("injected"))
 }

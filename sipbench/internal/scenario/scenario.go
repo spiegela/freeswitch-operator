@@ -396,7 +396,7 @@ type Action struct {
 	WaitNode *WaitNode `yaml:"waitNode,omitempty"`
 	// WaitFailover waits until the operator has failed over the pod that carried a call: a pod of the same name
 	// takes calls again on another node. A scenario that took a node dark unfences it (removes the operator's
-	// sip.instruments.com/fenced taint) when it ends, so the next scenario finds the spare.
+	// sip.instruments.com/fenced taint and label) when it ends, so the next scenario finds the spare.
 	WaitFailover *WaitFailoverOf `yaml:"waitFailover,omitempty"`
 	// Hangup ends the named call from the runner's side.
 	Hangup string `yaml:"hangup,omitempty"`

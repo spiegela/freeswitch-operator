@@ -71,6 +71,9 @@ type FreeswitchClusterReconciler struct {
 
 	// NewNotifier builds the Kamailio notifier for spec.dispatcher.jsonrpcURL. Nil disables notification.
 	NewNotifier NotifierFactory
+	// APIReader reads straight from the API server, for the reads a stale cache would make fail (fencing a node);
+	// nil means the Client.
+	APIReader client.Reader
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	// SIPProbes reads the SIP prober's results; nil means no SIP signal.
@@ -629,7 +632,10 @@ func onlyListNotLoaded(err error) bool {
 
 func (r *FreeswitchClusterReconciler) fillStatus(fsc *sipv1alpha1.FreeswitchCluster, cfg settings, sts *appsv1.StatefulSet, pods []corev1.Pod, decision rolloutDecision, status *sipv1alpha1.FreeswitchClusterStatus) {
 	members, ready, updated := fleetMembers(pods, sts.Status.UpdateRevision)
-	status.Members = members
+	status.Members = make([]sipv1alpha1.FreeswitchMember, len(members))
+	for i, m := range members {
+		status.Members[i] = sipv1alpha1.FreeswitchMember{Member: m}
+	}
 	status.Replicas = int32(len(pods))
 	status.ReadyReplicas = ready
 	status.UpdatedReplicas = updated

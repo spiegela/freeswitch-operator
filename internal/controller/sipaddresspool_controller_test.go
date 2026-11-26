@@ -166,7 +166,7 @@ var _ = Describe("SIPAddressPool controller", func() {
 		Expect(w.fake.BoundTo(id1)).To(Equal(b))
 
 		By("the failover fences b and deletes edge-1, which the StatefulSet starts on the spare")
-		Expect(fenceNode(ctx, k8sClient, b, "test")).To(Succeed())
+		Expect(fenceNode(ctx, k8sClient, k8sClient, b, "test")).To(Succeed())
 		var p corev1.Pod
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: w.ns, Name: "edge-1"}, &p)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, &p, client.GracePeriodSeconds(0))).To(Succeed())
