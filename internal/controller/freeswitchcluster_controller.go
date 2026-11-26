@@ -159,14 +159,8 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	pods := podList.Items
 	slices.SortFunc(pods, func(a, b corev1.Pod) int { return strings.Compare(a.Name, b.Name) })
 
-	nodes, err := podNodes(ctx, r.Client, pods)
+	nodes, err := r.syncPods(ctx, cfg, pods)
 	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods, nodes); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := markFirstReady(ctx, r.Client, pods, r.now()); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -232,6 +226,19 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 	return ctrl.Result{RequeueAfter: requeue}, nil
+}
+
+// syncPods reads the pods' nodes, and writes on each pod its external address and whether it has been ready. It
+// returns the nodes (podNodes), for the fleet's health.
+func (r *FreeswitchClusterReconciler) syncPods(ctx context.Context, cfg settings, pods []corev1.Pod) (map[string]*corev1.Node, error) {
+	nodes, err := podNodes(ctx, r.Client, pods)
+	if err != nil {
+		return nil, err
+	}
+	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods, nodes); err != nil {
+		return nil, err
+	}
+	return nodes, markFirstReady(ctx, r.Client, pods, r.now())
 }
 
 func (r *FreeswitchClusterReconciler) now() time.Time { return nowFrom(r.Now) }
