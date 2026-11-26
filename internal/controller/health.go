@@ -88,7 +88,6 @@ type signal struct {
 	since   time.Time // when the problem began
 	counts  time.Time // when it began to count: since, plus any grace
 	message string
-	counted bool // false when discounted (failing for every member)
 }
 
 // verdict is the health of one member.
@@ -96,8 +95,6 @@ type verdict struct {
 	pod     *corev1.Pod
 	health  sipv1alpha1.MemberHealth
 	signals []signal
-	// eligible: the pod has been ready, so failing it over can help.
-	eligible bool
 	// failedAt is when the member became (or becomes) Failed; zero unless it is Failed.
 	failedAt time.Time
 	// recheck is how long until the verdict could change by time alone, or zero.
@@ -124,7 +121,7 @@ func evaluateHealth(in healthInput) []verdict {
 		if p.Spec.NodeName == "" {
 			continue
 		}
-		v := verdict{pod: p, eligible: p.Annotations[sipv1alpha1.FirstReadyAnnotation] != ""}
+		v := verdict{pod: p}
 		nodeLost := false
 		if s, lost := nodeLostSignal(p, in.nodes[p.Spec.NodeName]); lost {
 			nodeLost = true
@@ -148,7 +145,7 @@ func evaluateHealth(in healthInput) []verdict {
 	// Discount a signal that fails for every member that has been ready.
 	var observed []*verdict
 	for i := range out {
-		if out[i].eligible {
+		if hasBeenReady(out[i].pod) {
 			observed = append(observed, &out[i])
 		}
 	}
@@ -162,14 +159,11 @@ func evaluateHealth(in healthInput) []verdict {
 	for i := range out {
 		v := &out[i]
 		var counted []time.Time
-		for j := range v.signals {
-			s := &v.signals[j]
-			s.counted = !discounted[s.typ]
-			if s.counted {
+		for _, s := range v.signals {
+			hs := sipv1alpha1.HealthSignal{Type: s.typ, Since: metav1.NewTime(s.since), Counted: !discounted[s.typ], Message: s.message}
+			if hs.Counted {
 				counted = append(counted, s.counts)
-			}
-			hs := sipv1alpha1.HealthSignal{Type: s.typ, Since: metav1.NewTime(s.since), Counted: s.counted, Message: s.message}
-			if !s.counted {
+			} else {
 				hs.Message = strings.TrimSpace(hs.Message + " (failing for every member, so not counted)")
 			}
 			v.health.Signals = append(v.health.Signals, hs)
@@ -204,7 +198,13 @@ func (v *verdict) has(typ sipv1alpha1.HealthSignalType) bool {
 
 // hasCounted reports whether a counted signal of type typ is failing.
 func (v *verdict) hasCounted(typ sipv1alpha1.HealthSignalType) bool {
-	return slices.ContainsFunc(v.signals, func(s signal) bool { return s.typ == typ && s.counted })
+	return slices.ContainsFunc(v.health.Signals, func(s sipv1alpha1.HealthSignal) bool { return s.Type == typ && s.Counted })
+}
+
+// hasBeenReady reports whether the operator has seen the pod ready (FirstReadyAnnotation): only a member that has
+// worked counts as NotReady, or is failed over automatically.
+func hasBeenReady(p *corev1.Pod) bool {
+	return p.Annotations[sipv1alpha1.FirstReadyAnnotation] != ""
 }
 
 // nodeLostSignal reports whether the control plane has lost the pod's node.
@@ -239,7 +239,7 @@ func nodeLostSignal(p *corev1.Pod, n *corev1.Node) (signal, bool) {
 // notReadySignal reports whether a pod that has been ready is unready, and not terminating (a draining pod is
 // unready by design). counts is when it has been unready for grace.
 func notReadySignal(p *corev1.Pod, grace time.Duration) (signal, bool) {
-	if p.DeletionTimestamp != nil || p.Annotations[sipv1alpha1.FirstReadyAnnotation] == "" {
+	if p.DeletionTimestamp != nil || !hasBeenReady(p) {
 		return signal{}, false
 	}
 	c := podCondition(p, corev1.PodReady)
@@ -339,7 +339,7 @@ func decideFailover(verdicts []verdict, mode sipv1alpha1.FailoverMode, last *sip
 		switch {
 		case mode != sipv1alpha1.FailoverAutomatic:
 			d.held[v.pod.Name] = "failover mode is " + string(mode) + ": annotate the pod " + sipv1alpha1.FailOverAnnotation + "=true to fail it over"
-		case !v.eligible:
+		case !hasBeenReady(v.pod):
 			d.held[v.pod.Name] = "the pod has never been ready, so it would fail the same way on another node"
 		case v.pod.DeletionTimestamp != nil && !v.hasCounted(sipv1alpha1.SignalNodeLost):
 			d.held[v.pod.Name] = "the pod is shutting down on a node that isn't lost"

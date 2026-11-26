@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,26 +23,27 @@ const (
 	conditionMembersHealthy = "MembersHealthy"
 
 	// healthRecheck is how often a fleet with a member that isn't Healthy, or a failover under way, is reconciled
-	// with nothing else happening.
-	healthRecheck = 10 * time.Second
+	// with nothing else happening: a safety net, since the pod, node and SIP prober events, and each verdict's own
+	// recheck, already bring every change.
+	healthRecheck = time.Minute
 
 	// fencedValue is the value of the FencedTaint and the FencedLabel.
 	fencedValue = "true"
 )
+
+// fencedTaint is the taint a failover puts on the node it fences.
+var fencedTaint = corev1.Taint{Key: sipv1alpha1.FencedTaint, Value: fencedValue, Effect: corev1.TaintEffectNoSchedule}
 
 // markFirstReady records on each ready pod when the operator first saw it ready, so that only pods that have worked
 // count as NotReady or are failed over automatically. The pods passed in are updated too.
 func markFirstReady(ctx context.Context, c client.Client, pods []corev1.Pod, now time.Time) error {
 	for i := range pods {
 		p := &pods[i]
-		if !podReady(p) || p.Annotations[sipv1alpha1.FirstReadyAnnotation] != "" {
+		if !podReady(p) || hasBeenReady(p) {
 			continue
 		}
 		patch := client.MergeFrom(p.DeepCopy())
-		if p.Annotations == nil {
-			p.Annotations = map[string]string{}
-		}
-		p.Annotations[sipv1alpha1.FirstReadyAnnotation] = now.UTC().Format(time.RFC3339)
+		metav1.SetMetaDataAnnotation(&p.ObjectMeta, sipv1alpha1.FirstReadyAnnotation, now.UTC().Format(time.RFC3339))
 		if err := c.Patch(ctx, p, patch); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
@@ -62,11 +62,7 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 	if err != nil {
 		return 0, err
 	}
-	in := healthInput{pods: pods, nodes: nodes, cfg: cfg.failover, now: now}
-	if r.SIPProbes != nil {
-		in.sip = r.SIPProbes
-	}
-	verdicts := evaluateHealth(in)
+	verdicts := evaluateHealth(healthInput{pods: pods, nodes: nodes, sip: r.SIPProbes, cfg: cfg.failover, now: now})
 	r.completeFailover(fsc, cfg.replicas, pods, status.LastFailover, now)
 
 	decision := decideFailover(verdicts, cfg.failover.mode, status.LastFailover)
@@ -93,7 +89,7 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 
 	suspect, failed, recheck := r.attachHealth(fsc, verdicts, decision, status)
 	inProgress := failoverInProgress(status.LastFailover)
-	meta.SetStatusCondition(&status.Conditions, membersHealthyCondition(fsc.Generation, suspect, failed, inProgress, status.LastFailover))
+	meta.SetStatusCondition(&status.Conditions, membersHealthyCondition(fsc.Generation, suspect, failed, status.LastFailover))
 	recordHealth(fleet, verdicts, decision.held, inProgress)
 
 	if len(suspect) > 0 || len(failed) > 0 || inProgress || decision.target != nil {
@@ -137,8 +133,7 @@ func (r *FreeswitchClusterReconciler) completeFailover(fsc *sipv1alpha1.Freeswit
 	if last == nil || last.CompletedAt != nil {
 		return
 	}
-	if ord, ok := podOrdinal(statefulSetName(fsc), last.Pod); ok && ord >= int(replicas) &&
-		!slices.ContainsFunc(pods, func(p corev1.Pod) bool { return p.Name == last.Pod }) {
+	if ordinal(last.Pod) >= int(replicas) && !slices.ContainsFunc(pods, func(p corev1.Pod) bool { return p.Name == last.Pod }) {
 		at := metav1.NewTime(now)
 		last.CompletedAt = &at
 		r.event(fsc, corev1.EventTypeNormal, "FailoverCompleted", "Failover",
@@ -209,35 +204,25 @@ func (r *FreeswitchClusterReconciler) healthEvent(fsc *sipv1alpha1.FreeswitchClu
 }
 
 // membersHealthyCondition sums up the members' health, and a failover still waiting for its replacement.
-func membersHealthyCondition(gen int64, suspect, failed []string, inProgress bool, last *sipv1alpha1.FailoverRecord) metav1.Condition {
-	cond := metav1.Condition{Type: conditionMembersHealthy, ObservedGeneration: gen}
+func membersHealthyCondition(gen int64, suspect, failed []string, last *sipv1alpha1.FailoverRecord) metav1.Condition {
+	cond := metav1.Condition{Type: conditionMembersHealthy, ObservedGeneration: gen, Status: metav1.ConditionFalse}
+	var parts []string
 	switch {
 	case len(failed) > 0:
-		cond.Status, cond.Reason = metav1.ConditionFalse, "MemberFailed"
-		cond.Message = "Failed: " + strings.Join(failed, ", ")
+		cond.Reason, parts = "MemberFailed", []string{"Failed: " + strings.Join(failed, ", ")}
 	case len(suspect) > 0:
-		cond.Status, cond.Reason = metav1.ConditionFalse, "MemberSuspect"
-		cond.Message = "Suspect: " + strings.Join(suspect, ", ")
-	case inProgress:
-		cond.Status, cond.Reason = metav1.ConditionFalse, "FailingOver"
-		cond.Message = "waiting for " + last.Pod + " to be ready again after its failover"
+		cond.Reason, parts = "MemberSuspect", []string{"Suspect: " + strings.Join(suspect, ", ")}
+	case failoverInProgress(last):
+		cond.Reason = "FailingOver"
 	default:
 		cond.Status, cond.Reason, cond.Message = metav1.ConditionTrue, "AllHealthy", "no member is Suspect or Failed"
+		return cond
 	}
-	if inProgress && cond.Reason != "FailingOver" {
-		cond.Message += "; waiting for " + last.Pod + " to be ready again after its failover"
+	if failoverInProgress(last) {
+		parts = append(parts, "waiting for "+last.Pod+" to be ready again after its failover")
 	}
+	cond.Message = strings.Join(parts, "; ")
 	return cond
-}
-
-// podOrdinal is the ordinal of a StatefulSet's pod, from its name.
-func podOrdinal(sts, pod string) (int, bool) {
-	rest, ok := strings.CutPrefix(pod, sts+"-")
-	if !ok {
-		return 0, false
-	}
-	n, err := strconv.Atoi(rest)
-	return n, err == nil && n >= 0
 }
 
 // failOver fences the pod's node, then deletes the pod at once (no drain: its calls are lost anyway). The
@@ -281,17 +266,11 @@ func fenceNode(ctx context.Context, reader client.Reader, c client.Client, name,
 		// The node lifecycle controller changes taints too (unreachable, not-ready): don't overwrite its change.
 		patch := client.MergeFromWithOptions(n.DeepCopy(), client.MergeFromWithOptimisticLock{})
 		if !tainted {
-			n.Spec.Taints = append(n.Spec.Taints, corev1.Taint{Key: sipv1alpha1.FencedTaint, Value: fencedValue, Effect: corev1.TaintEffectNoSchedule})
-			if n.Annotations == nil {
-				n.Annotations = map[string]string{}
-			}
-			n.Annotations[sipv1alpha1.FencedByAnnotation] = by
+			n.Spec.Taints = append(n.Spec.Taints, fencedTaint)
+			metav1.SetMetaDataAnnotation(&n.ObjectMeta, sipv1alpha1.FencedByAnnotation, by)
 		}
 		if !labeled {
-			if n.Labels == nil {
-				n.Labels = map[string]string{}
-			}
-			n.Labels[sipv1alpha1.FencedLabel] = fencedValue
+			metav1.SetMetaDataLabel(&n.ObjectMeta, sipv1alpha1.FencedLabel, fencedValue)
 		}
 		return client.IgnoreNotFound(c.Patch(ctx, &n, patch))
 	})
@@ -328,7 +307,7 @@ func truncate(s string, n int) string {
 // tolerate the FencedTaint, which would otherwise let the replacement land back on the node just fenced. It is nil
 // for every other fleet, whose pod template the taint alone keeps off fenced nodes, so they aren't rolled for it.
 func avoidFencedNodes(tolerations []corev1.Toleration) *corev1.NodeAffinity {
-	if !slices.ContainsFunc(tolerations, toleratesFenced) {
+	if !slices.ContainsFunc(tolerations, func(t corev1.Toleration) bool { return t.ToleratesTaint(logf.Log, &fencedTaint, false) }) {
 		return nil
 	}
 	return &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
@@ -336,18 +315,4 @@ func avoidFencedNodes(tolerations []corev1.Toleration) *corev1.NodeAffinity {
 			Key: sipv1alpha1.FencedLabel, Operator: corev1.NodeSelectorOpDoesNotExist,
 		}}}},
 	}}
-}
-
-// toleratesFenced reports whether a toleration tolerates the FencedTaint (value true, effect NoSchedule).
-func toleratesFenced(t corev1.Toleration) bool {
-	if t.Effect != "" && t.Effect != corev1.TaintEffectNoSchedule {
-		return false
-	}
-	switch t.Key {
-	case "":
-		return t.Operator == corev1.TolerationOpExists
-	case sipv1alpha1.FencedTaint:
-		return t.Operator == corev1.TolerationOpExists || t.Value == fencedValue
-	}
-	return false
 }

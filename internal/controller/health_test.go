@@ -64,6 +64,13 @@ func healthyNodes(names ...string) map[string]*corev1.Node {
 	return out
 }
 
+// lostB is a healthy node a and a node b whose kubelet was lost at since.
+func lostB(since time.Time) map[string]*corev1.Node {
+	nodes := healthyNodes("a")
+	nodes["b"] = hnode("b", corev1.ConditionUnknown, since)
+	return nodes
+}
+
 func states(vs []verdict) string {
 	parts := make([]string, 0, len(vs))
 	for _, v := range vs {
@@ -99,43 +106,31 @@ func TestEvaluateHealth(t *testing.T) {
 			want:  "edge-0=Healthy edge-1=Healthy",
 		},
 		{
-			name: "node lost and SIP down long enough: Failed",
-			pods: []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
-			nodes: map[string]*corev1.Node{
-				"a": hnode("a", corev1.ConditionTrue, t0.Add(-time.Hour)),
-				"b": hnode("b", corev1.ConditionUnknown, t0.Add(-time.Minute)),
-			},
-			sip:  fakeProbes{"edge-1-uid": sipDown(t0.Add(-40 * time.Second))},
-			want: "edge-0=Healthy edge-1=Failed+NodeLost+SIPUnreachable",
+			name:  "node lost and SIP down long enough: Failed",
+			pods:  []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
+			nodes: lostB(t0.Add(-time.Minute)),
+			sip:   fakeProbes{"edge-1-uid": sipDown(t0.Add(-40 * time.Second))},
+			want:  "edge-0=Healthy edge-1=Failed+NodeLost+SIPUnreachable",
 		},
 		{
-			name: "two signals, but the second only just began: Suspect until failAfter",
-			pods: []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
-			nodes: map[string]*corev1.Node{
-				"a": hnode("a", corev1.ConditionTrue, t0.Add(-time.Hour)),
-				"b": hnode("b", corev1.ConditionUnknown, t0.Add(-time.Minute)),
-			},
-			sip:  fakeProbes{"edge-1-uid": sipDown(t0.Add(-5 * time.Second))},
-			want: "edge-0=Healthy edge-1=Suspect+NodeLost+SIPUnreachable",
+			name:  "two signals, but the second only just began: Suspect until failAfter",
+			pods:  []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
+			nodes: lostB(t0.Add(-time.Minute)),
+			sip:   fakeProbes{"edge-1-uid": sipDown(t0.Add(-5 * time.Second))},
+			want:  "edge-0=Healthy edge-1=Suspect+NodeLost+SIPUnreachable",
 		},
 		{
-			name: "kubelet lost but FreeSWITCH answers SIP: Suspect",
-			pods: []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
-			nodes: map[string]*corev1.Node{
-				"a": hnode("a", corev1.ConditionTrue, t0.Add(-time.Hour)),
-				"b": hnode("b", corev1.ConditionUnknown, t0.Add(-time.Hour)),
-			},
-			want: "edge-0=Healthy edge-1=Suspect+NodeLost",
+			name:  "kubelet lost but FreeSWITCH answers SIP: Suspect",
+			pods:  []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
+			nodes: lostB(t0.Add(-time.Hour)),
+			want:  "edge-0=Healthy edge-1=Suspect+NodeLost",
 		},
 		{
-			name: "...and Failed when one signal is enough",
-			pods: []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
-			nodes: map[string]*corev1.Node{
-				"a": hnode("a", corev1.ConditionTrue, t0.Add(-time.Hour)),
-				"b": hnode("b", corev1.ConditionUnknown, t0.Add(-time.Hour)),
-			},
-			cfg:  &failoverSettings{signalsRequired: 1, failAfter: 15 * time.Second, notReady: 20 * time.Second},
-			want: "edge-0=Healthy edge-1=Failed+NodeLost",
+			name:  "...and Failed when one signal is enough",
+			pods:  []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
+			nodes: lostB(t0.Add(-time.Hour)),
+			cfg:   &failoverSettings{signalsRequired: 1, failAfter: 15 * time.Second, notReady: 20 * time.Second},
+			want:  "edge-0=Healthy edge-1=Failed+NodeLost",
 		},
 		{
 			name:  "FreeSWITCH hung on a sound node: NotReady and SIP down make Failed",
@@ -161,13 +156,10 @@ func TestEvaluateHealth(t *testing.T) {
 			want:  "edge-0=Healthy edge-1=Healthy",
 		},
 		{
-			name: "readiness doesn't count again while the node is lost",
-			pods: []corev1.Pod{hpod("edge-0", "a"), unready(hpod("edge-1", "b"), t0.Add(-time.Minute))},
-			nodes: map[string]*corev1.Node{
-				"a": hnode("a", corev1.ConditionTrue, t0.Add(-time.Hour)),
-				"b": hnode("b", corev1.ConditionUnknown, t0.Add(-time.Minute)),
-			},
-			want: "edge-0=Healthy edge-1=Suspect+NodeLost",
+			name:  "readiness doesn't count again while the node is lost",
+			pods:  []corev1.Pod{hpod("edge-0", "a"), unready(hpod("edge-1", "b"), t0.Add(-time.Minute))},
+			nodes: lostB(t0.Add(-time.Minute)),
+			want:  "edge-0=Healthy edge-1=Suspect+NodeLost",
 		},
 		{
 			name: "a draining pod on a lost node can still fail",
@@ -176,12 +168,9 @@ func TestEvaluateHealth(t *testing.T) {
 				p.DeletionTimestamp = &metav1.Time{Time: t0.Add(-time.Minute)}
 				return []corev1.Pod{hpod("edge-0", "a"), p}
 			}(),
-			nodes: map[string]*corev1.Node{
-				"a": hnode("a", corev1.ConditionTrue, t0.Add(-time.Hour)),
-				"b": hnode("b", corev1.ConditionUnknown, t0.Add(-time.Minute)),
-			},
-			sip:  fakeProbes{"edge-1-uid": sipDown(t0.Add(-time.Minute))},
-			want: "edge-0=Healthy edge-1=Failed+NodeLost+SIPUnreachable",
+			nodes: lostB(t0.Add(-time.Minute)),
+			sip:   fakeProbes{"edge-1-uid": sipDown(t0.Add(-time.Minute))},
+			want:  "edge-0=Healthy edge-1=Failed+NodeLost+SIPUnreachable",
 		},
 		{
 			name:  "SIP down for every member is the observer's problem",
@@ -197,12 +186,9 @@ func TestEvaluateHealth(t *testing.T) {
 				p.Annotations = nil
 				return []corev1.Pod{p, hpod("edge-1", "b")}
 			}(),
-			nodes: map[string]*corev1.Node{
-				"a": hnode("a", corev1.ConditionTrue, t0.Add(-time.Hour)),
-				"b": hnode("b", corev1.ConditionUnknown, t0.Add(-time.Minute)),
-			},
-			sip:  fakeProbes{"edge-0-uid": sipDown(t0.Add(-time.Minute)), "edge-1-uid": sipDown(t0.Add(-time.Minute))},
-			want: "edge-0=Suspect+SIPUnreachable edge-1=Failed+NodeLost+SIPUnreachable",
+			nodes: lostB(t0.Add(-time.Minute)),
+			sip:   fakeProbes{"edge-0-uid": sipDown(t0.Add(-time.Minute)), "edge-1-uid": sipDown(t0.Add(-time.Minute))},
+			want:  "edge-0=Suspect+SIPUnreachable edge-1=Failed+NodeLost+SIPUnreachable",
 		},
 		{
 			name:  "...but a fleet of one has no one to compare with",
@@ -232,10 +218,7 @@ func TestEvaluateHealth(t *testing.T) {
 			if tc.cfg != nil {
 				c = *tc.cfg
 			}
-			in := healthInput{pods: tc.pods, nodes: tc.nodes, cfg: c, now: t0}
-			if tc.sip != nil {
-				in.sip = tc.sip
-			}
+			in := healthInput{pods: tc.pods, nodes: tc.nodes, sip: tc.sip, cfg: c, now: t0}
 			if got := states(evaluateHealth(in)); got != tc.want {
 				t.Errorf("got  %s\nwant %s", got, tc.want)
 			}
@@ -266,8 +249,8 @@ func TestEvaluateHealthRecheck(t *testing.T) {
 
 func failedVerdict(p corev1.Pod, at time.Time) verdict {
 	pp := p
-	return verdict{pod: &pp, eligible: pp.Annotations[sipv1alpha1.FirstReadyAnnotation] != "", failedAt: at,
-		signals: []signal{{typ: sipv1alpha1.SignalNodeLost, since: at, counts: at, counted: true}},
+	return verdict{pod: &pp, failedAt: at,
+		signals: []signal{{typ: sipv1alpha1.SignalNodeLost, since: at, counts: at}},
 		health: sipv1alpha1.MemberHealth{State: sipv1alpha1.HealthFailed, Signals: []sipv1alpha1.HealthSignal{
 			{Type: sipv1alpha1.SignalNodeLost, Counted: true, Message: "node gone"},
 		}}}
@@ -312,11 +295,11 @@ func TestDecideFailover(t *testing.T) {
 	// Shutting down: held, unless its node is lost.
 	draining := failedVerdict(hpod("edge-1", "b"), t0)
 	draining.pod.DeletionTimestamp = &metav1.Time{Time: t0}
-	draining.signals = []signal{{typ: sipv1alpha1.SignalSIPUnreachable, counted: true}}
+	draining.health.Signals = []sipv1alpha1.HealthSignal{{Type: sipv1alpha1.SignalSIPUnreachable, Counted: true}}
 	if d = decideFailover([]verdict{draining}, auto, nil); d.target != nil || !strings.Contains(d.held["edge-1"], "shutting down") {
 		t.Errorf("draining: target %v held %v", d.target, d.held)
 	}
-	draining.signals = append(draining.signals, signal{typ: sipv1alpha1.SignalNodeLost, counted: true})
+	draining.health.Signals = append(draining.health.Signals, sipv1alpha1.HealthSignal{Type: sipv1alpha1.SignalNodeLost, Counted: true})
 	if d = decideFailover([]verdict{draining}, auto, nil); d.target == nil {
 		t.Errorf("terminating on a lost node: held %v", d.held)
 	}
@@ -373,13 +356,9 @@ func TestAvoidFencedNodes(t *testing.T) {
 	}
 }
 
-func TestPodOrdinal(t *testing.T) {
-	for pod, want := range map[string]int{"edge-0": 0, "edge-12": 12, "edge-x": -1, "other-1": -1, "edge-": -1, "edge--1": -1} {
-		n, ok := podOrdinal("edge", pod)
-		if !ok {
-			n = -1
-		}
-		if n != want {
+func TestOrdinal(t *testing.T) {
+	for pod, want := range map[string]int{"edge-0": 0, "edge-12": 12, "edge-x": -1, "edge-": -1, "edge": -1} {
+		if n := ordinal(pod); n != want {
 			t.Errorf("%s: %d, want %d", pod, n, want)
 		}
 	}
@@ -527,7 +506,7 @@ func TestSIPProber(t *testing.T) {
 	answer := false
 	p := &SIPProber{
 		Client: c, Events: make(chan event.GenericEvent, 4), Now: func() time.Time { return now },
-		Probe: func(_ context.Context, host string, port int32, transport string, _ time.Duration) error {
+		Probe: func(_ context.Context, host string, port int32, transport sipv1alpha1.DispatcherTransport, _ time.Duration) error {
 			if host != "10.0.0.1" || port != 5060 || transport != "udp" {
 				t.Errorf("probed %s:%d/%s", host, port, transport)
 			}
@@ -553,7 +532,7 @@ func TestSIPProber(t *testing.T) {
 	}
 	step()
 	r, _ := p.Result(pod.UID)
-	if !r.Failing || !r.Since.Equal(t0) || !strings.Contains(r.Message, "2 SIP OPTIONS probes") {
+	if !r.Failing || !r.Since.Equal(t0) || r.Message != "SIP OPTIONS probes unanswered: no answer" {
 		t.Fatalf("after two failures: %+v", r)
 	}
 	select {

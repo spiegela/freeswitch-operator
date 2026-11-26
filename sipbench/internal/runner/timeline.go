@@ -359,14 +359,7 @@ func (t *timeline) moveFreeswitch(ctx context.Context, call string) (string, err
 	if err := f.DeletePodNow(ctx, m.Pod); err != nil {
 		return "", fmt.Errorf("deleting %s: %w", m.Pod, err)
 	}
-	var now fleet.Member
-	err = t.poll(ctx, moveWait, func(s fleet.Status) (bool, error) {
-		cur, ok := s.Member(m.Pod)
-		if ok {
-			now = cur
-		}
-		return ok && cur.Node != "" && cur.Node != m.Node && cur.State == fleet.MemberActive, nil
-	})
+	now, _, err := t.activeElsewhere(ctx, m, moveWait)
 	if err != nil {
 		return "", fmt.Errorf("%s (call %s) not taking calls on another node than %s (now %+v): %w", m.Pod, call, m.Node, now, err)
 	}
@@ -691,12 +684,7 @@ func (t *timeline) waitFailover(ctx context.Context, w *scenario.WaitFailoverOf)
 		return "", err
 	}
 	start := time.Now()
-	var cur fleet.Member
-	var ok bool
-	err = t.poll(ctx, msOr(w.TimeoutMs, defaultFleetWait), func(s fleet.Status) (bool, error) {
-		cur, ok = s.Member(m.Pod)
-		return ok && cur.State == fleet.MemberActive && cur.Node != "" && cur.Node != m.Node, nil
-	})
+	cur, ok, err := t.activeElsewhere(ctx, m, msOr(w.TimeoutMs, defaultFleetWait))
 	if err != nil {
 		where := "gone"
 		if ok {
@@ -706,6 +694,16 @@ func (t *timeline) waitFailover(ctx context.Context, w *scenario.WaitFailoverOf)
 	}
 	return fmt.Sprintf("pod %s (call %s) failed over from %s to %s, taking calls %s after the wait began",
 		m.Pod, w.Of, m.Node, cur.Node, time.Since(start).Round(time.Second)), nil
+}
+
+// activeElsewhere waits until a pod of m's name takes calls on another node than m's. It returns the pod as last
+// seen, and whether it was there at all.
+func (t *timeline) activeElsewhere(ctx context.Context, m fleet.Member, timeout time.Duration) (cur fleet.Member, present bool, err error) {
+	err = t.poll(ctx, timeout, func(s fleet.Status) (bool, error) {
+		cur, present = s.Member(m.Pod)
+		return present && cur.State == fleet.MemberActive && cur.Node != "" && cur.Node != m.Node, nil
+	})
+	return cur, present, err
 }
 
 func (t *timeline) rollStuck(ctx context.Context, rs *scenario.RollStuck) (string, error) {
