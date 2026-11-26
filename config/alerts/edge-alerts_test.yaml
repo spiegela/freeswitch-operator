@@ -290,7 +290,7 @@ tests:
             exp_annotations:
               summary: "telephony/edge failed a member over (Automatic)"
               description: >
-                The operator fenced the member's node (taint sip.instruments.com/fenced; the node's annotation
+                The operator fenced the member's node (label and taint sip.instruments.com/fenced; the node's annotation
                 sip.instruments.com/fenced-by says why) and started the pod on another node. Find out what happened
                 to the node. Once it is sound, remove the taint and the label sip.instruments.com/fenced so it can
                 serve as a spare again.

@@ -185,7 +185,7 @@ PostgreSQL's log should show no refused statements beyond the `create index` one
 When a node is lost, the plan is:
 
 1. **Fence it.** Its address is unbound before anything else happens, and can never come back to it. The operator
-   taints the node, and a pool takes its addresses back only where the pool may fence: its fencing is
+   labels and taints the node fenced, and a pool takes its addresses back only where the pool may fence: its fencing is
    `Authoritative`, or it sets `allowAdvisoryFencing` ([address pools](address-pools.md)).
 2. **Move its addresses to a spare.** The operator deletes the pod, which comes back on the spare.
 3. **Recover its calls on the spare.** FreeSWITCH rebuilds each tracked leg from its row. It sends each far end a

@@ -65,12 +65,7 @@ type probeState struct {
 	seen        bool
 }
 
-func (p *SIPProber) now() time.Time {
-	if p.Now != nil {
-		return p.Now()
-	}
-	return time.Now()
-}
+func (p *SIPProber) now() time.Time { return nowFrom(p.Now) }
 
 // Result implements SIPProbeResults.
 func (p *SIPProber) Result(uid types.UID) (sipProbeResult, bool) {
@@ -276,7 +271,8 @@ func SIPOptions(ctx context.Context, host string, port int32, transport sipv1alp
 		return readSIPResponse(bufio.NewReader(conn), callID)
 	}
 
-	buf := make([]byte, 65535)
+	// Only a response's start line and headers are read; a bigger datagram loses only the rest of its body.
+	buf := make([]byte, 8192)
 	interval := 500 * time.Millisecond
 	for {
 		if _, err := conn.Write(req); err != nil {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -292,6 +293,20 @@ func TestDecideFailover(t *testing.T) {
 		t.Errorf("a day stuck: target %v held %v", d.target, d.held)
 	}
 
+	// A failover recorded but not carried out is finished first, whatever the pod's health now; once its pod is
+	// shutting down, there is nothing left to finish.
+	pending := hpod("edge-1", "b")
+	last = &sipv1alpha1.FailoverRecord{Pod: "edge-1", PodUID: string(pending.UID), Trigger: sipv1alpha1.FailoverTriggerManual,
+		Reason: "asked", StartedAt: metav1.NewTime(t0)}
+	d = decideFailover([]verdict{healthy, {pod: &pending}}, detect, last)
+	if d.target == nil || d.target.Name != "edge-1" || !d.resume || d.trigger != sipv1alpha1.FailoverTriggerManual || d.reason != "asked" {
+		t.Errorf("resume: %+v", d)
+	}
+	pending.DeletionTimestamp = &metav1.Time{Time: t0}
+	if d = decideFailover([]verdict{healthy, {pod: &pending}}, detect, last); d.target != nil {
+		t.Errorf("resume a pod already shutting down: %+v", d)
+	}
+
 	// Shutting down: held, unless its node is lost.
 	draining := failedVerdict(hpod("edge-1", "b"), t0)
 	draining.pod.DeletionTimestamp = &metav1.Time{Time: t0}
@@ -330,29 +345,12 @@ func TestDecideFailover(t *testing.T) {
 }
 
 func TestAvoidFencedNodes(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		tols  []corev1.Toleration
-		avoid bool
-	}{
-		{"none", nil, false},
-		{"another key", []corev1.Toleration{{Key: "edge", Operator: corev1.TolerationOpExists}}, false},
-		{"every taint", []corev1.Toleration{{Operator: corev1.TolerationOpExists}}, true},
-		{"every NoExecute taint", []corev1.Toleration{{Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute}}, false},
-		{"the fenced key", []corev1.Toleration{{Key: sipv1alpha1.FencedTaint, Operator: corev1.TolerationOpExists}}, true},
-		{"the fenced key and value", []corev1.Toleration{{Key: sipv1alpha1.FencedTaint, Value: "true", Effect: corev1.TaintEffectNoSchedule}}, true},
-		{"the fenced key, another value", []corev1.Toleration{{Key: sipv1alpha1.FencedTaint, Value: "false"}}, false},
-	} {
-		got := avoidFencedNodes(tc.tols)
-		if (got != nil) != tc.avoid {
-			t.Errorf("%s: affinity %v, want one: %v", tc.name, got, tc.avoid)
-		}
-		if got != nil {
-			req := got.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions[0]
-			if req.Key != sipv1alpha1.FencedLabel || req.Operator != corev1.NodeSelectorOpDoesNotExist {
-				t.Errorf("%s: %+v", tc.name, req)
-			}
-		}
+	terms := avoidFencedNodes().RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	want := []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{
+		Key: sipv1alpha1.FencedLabel, Operator: corev1.NodeSelectorOpDoesNotExist,
+	}}}}
+	if !equality.Semantic.DeepEqual(terms, want) {
+		t.Errorf("terms %+v", terms)
 	}
 }
 

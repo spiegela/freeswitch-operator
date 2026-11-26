@@ -168,3 +168,22 @@ func TestPoolMetrics(t *testing.T) {
 		t.Errorf("%d address series left after forgetPool", n)
 	}
 }
+
+func TestSeriesTracker(t *testing.T) {
+	vec := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_series"}, []string{"pod", "state"})
+	tr := &seriesTracker{byFleet: map[fleetRef]map[string]gaugeSeries{}}
+	a, b := fleetRef{name: "a"}, fleetRef{name: "b"}
+	tr.set(a, []gaugeSeries{{vec, []string{"a-0", "Healthy"}, 1}, {vec, []string{"a-1", "Healthy"}, 1}})
+	tr.set(b, []gaugeSeries{{vec, []string{"b-0", "Healthy"}, 1}})
+	tr.set(a, []gaugeSeries{{vec, []string{"a-0", "Healthy"}, 0}, {vec, []string{"a-0", "Failed"}, 1}})
+	if n := testutil.CollectAndCount(vec); n != 3 {
+		t.Errorf("%d series, want a-0 twice and b-0", n)
+	}
+	if v := testutil.ToFloat64(vec.WithLabelValues("a-0", "Healthy")); v != 0 {
+		t.Errorf("a-0 Healthy = %v", v)
+	}
+	tr.forget(a)
+	if len(tr.byFleet) != 1 {
+		t.Errorf("fleets tracked: %v", tr.byFleet)
+	}
+}

@@ -488,7 +488,7 @@ func TestDecideFenced(t *testing.T) {
 		in.Nodes = nodes("a", "b", "spare", "c")
 		in.Claimants = append(in.Claimants, claimant("edge-2", "c"))
 		p := Decide(in)
-		if got := summary(p); got != " | eip1:Bound@a eip2:Idle@b eip3:Bound@spare" {
+		if got := summary(p); got != " | eip1:Bound@a eip2:Fenced@b eip3:Bound@spare" {
 			t.Errorf("plan: %s", got)
 		}
 		if !strings.Contains(p.Status[1].Message, "fenced") {

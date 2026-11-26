@@ -54,40 +54,51 @@ func markFirstReady(ctx context.Context, c client.Client, pods []corev1.Pod, now
 // syncHealth decides each member's health, records it in the status (members, lastFailover, the MembersHealthy
 // condition) and the metrics, and fails over at most one member. It returns how soon the fleet should be looked at
 // again for health's sake, or zero.
-func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, fleet fleetRef, cfg settings, pods []corev1.Pod, status *sipv1alpha1.FreeswitchClusterStatus) (time.Duration, error) {
+func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, fleet fleetRef, cfg settings, pods []corev1.Pod, nodes map[string]*corev1.Node, status *sipv1alpha1.FreeswitchClusterStatus) (time.Duration, error) {
 	log := logf.FromContext(ctx)
 	now := r.now()
 
-	nodes, err := r.podNodes(ctx, pods)
-	if err != nil {
-		return 0, err
-	}
 	verdicts := evaluateHealth(healthInput{pods: pods, nodes: nodes, sip: r.SIPProbes, cfg: cfg.failover, now: now})
 	r.completeFailover(fsc, cfg.replicas, pods, status.LastFailover, now)
 
+	var recheck time.Duration
 	decision := decideFailover(verdicts, cfg.failover.mode, status.LastFailover)
-	if t := decision.target; t != nil {
-		log.Info("failing over member", "pod", t.Name, "node", t.Spec.NodeName, "trigger", decision.trigger, "reason", decision.reason)
-		err := r.failOver(ctx, fsc, t, decision.trigger, decision.reason, now)
-		recordFailover(fleet, decision.trigger, err)
-		if err != nil {
-			r.event(fsc, corev1.EventTypeWarning, "FailoverFailed", "Failover", "could not fail over %s: %v", t.Name, err)
-			return 0, fmt.Errorf("failing over %s: %w", t.Name, err)
-		}
-		status.LastFailover = &sipv1alpha1.FailoverRecord{
+	if t := decision.target; t != nil && !decision.resume {
+		// The record goes in first: once it is in, a crash or an error part way through only resumes this failover,
+		// and never starts another. It is written only over the fleet this decision was made from.
+		rec := &sipv1alpha1.FailoverRecord{
 			Pod: t.Name, PodUID: string(t.UID), Node: t.Spec.NodeName, Trigger: decision.trigger,
 			Reason: truncate(decision.reason, 1024), StartedAt: metav1.NewTime(now),
 		}
-		if err := r.persistFailover(ctx, fsc, status.LastFailover); err != nil {
-			// The status update at the end of the reconcile tries again.
-			log.Error(err, "recording the failover in the status", "pod", t.Name)
+		switch err := r.persistFailover(ctx, fsc, rec); {
+		case apierrors.IsConflict(err):
+			// Decided from a copy of the fleet the cache hadn't caught up with, which may not hold the last
+			// failover: decide again from a fresh one.
+			log.V(1).Info("fleet changed since it was read; deciding its failover again", "pod", t.Name)
+			decision.target, recheck = nil, time.Second
+		case err != nil:
+			recordFailover(fleet, decision.trigger, err)
+			return 0, fmt.Errorf("recording the failover of %s: %w", t.Name, err)
+		default:
+			status.LastFailover = rec.DeepCopy()
+		}
+	}
+	if t := decision.target; t != nil {
+		log.Info("failing over member", "pod", t.Name, "node", t.Spec.NodeName, "trigger", decision.trigger,
+			"reason", decision.reason, "resumed", decision.resume)
+		err := r.failOver(ctx, fsc, t, decision.trigger, decision.reason, now)
+		recordFailover(fleet, decision.trigger, err)
+		if err != nil {
+			r.event(fsc, corev1.EventTypeWarning, "FailoverFailed", "Failover", "could not fail over %s (retrying): %v", t.Name, err)
+			return 0, fmt.Errorf("failing over %s: %w", t.Name, err)
 		}
 		r.event(fsc, corev1.EventTypeWarning, "FailingOver", "Failover",
 			"%s failover of %s: fenced node %s and deleted the pod to start it on another node; %s",
 			decision.trigger, t.Name, t.Spec.NodeName, truncate(decision.reason, 512))
 	}
 
-	suspect, failed, recheck := r.attachHealth(fsc, verdicts, decision, status)
+	suspect, failed, verdictRecheck := r.attachHealth(fsc, verdicts, decision, status)
+	recheck = minPositive(recheck, verdictRecheck)
 	inProgress := failoverInProgress(status.LastFailover)
 	meta.SetStatusCondition(&status.Conditions, membersHealthyCondition(fsc.Generation, suspect, failed, status.LastFailover))
 	recordHealth(fleet, verdicts, decision.held, inProgress)
@@ -99,7 +110,7 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 }
 
 // podNodes fetches the nodes the pods run on, by name. A node that is gone is left out.
-func (r *FreeswitchClusterReconciler) podNodes(ctx context.Context, pods []corev1.Pod) (map[string]*corev1.Node, error) {
+func podNodes(ctx context.Context, c client.Reader, pods []corev1.Pod) (map[string]*corev1.Node, error) {
 	nodes := map[string]*corev1.Node{}
 	for i := range pods {
 		name := pods[i].Spec.NodeName
@@ -107,7 +118,7 @@ func (r *FreeswitchClusterReconciler) podNodes(ctx context.Context, pods []corev
 			continue
 		}
 		var n corev1.Node
-		if err := r.Get(ctx, types.NamespacedName{Name: name}, &n); err != nil {
+		if err := c.Get(ctx, types.NamespacedName{Name: name}, &n); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}
@@ -118,13 +129,13 @@ func (r *FreeswitchClusterReconciler) podNodes(ctx context.Context, pods []corev
 	return nodes, nil
 }
 
-// persistFailover writes a failover's record to the status at once, with a merge patch that can't conflict. The node
-// is fenced and the pod gone by then, and the record is what keeps another automatic failover waiting, so it must not
-// be lost to a status update that conflicts at the end of the reconcile (the requeue would find nothing to record).
+// persistFailover writes a failover's record to the status before anything is done, with a patch that conflicts if
+// the fleet has changed since it was read: the decision to fail over was made from that copy, and one written since
+// may hold a failover still under way. The record is what keeps another automatic failover waiting.
 func (r *FreeswitchClusterReconciler) persistFailover(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, rec *sipv1alpha1.FailoverRecord) error {
-	base := fsc.DeepCopy()
+	patch := client.MergeFromWithOptions(fsc.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	fsc.Status.LastFailover = rec.DeepCopy()
-	return r.Status().Patch(ctx, fsc, client.MergeFrom(base))
+	return r.Status().Patch(ctx, fsc, patch)
 }
 
 // completeFailover marks the latest failover done once a new pod of the same name is ready, or once the fleet has
@@ -249,8 +260,9 @@ func (r *FreeswitchClusterReconciler) apiReader() client.Reader {
 	return r.Client
 }
 
-// fenceNode taints a node sip.instruments.com/fenced:NoSchedule, labels it sip.instruments.com/fenced=true (for fleets
-// whose tolerations would tolerate the taint), and records why. A node already fenced keeps its first record. A node
+// fenceNode labels a node sip.instruments.com/fenced=true, which marks it fenced (fleets keep off it by node affinity,
+// and pools treat it as failed), taints it sip.instruments.com/fenced:NoSchedule to keep other pods off, and records
+// why. A node already fenced keeps its first record. A node
 // that is gone needs no fence. The node is read from reader, the API server rather than a cache where it can: a node
 // just lost is being changed by the node lifecycle controller, and a stale copy only conflicts.
 func fenceNode(ctx context.Context, reader client.Reader, c client.Client, name, by string) error {
@@ -259,7 +271,8 @@ func fenceNode(ctx context.Context, reader client.Reader, c client.Client, name,
 		if err := reader.Get(ctx, types.NamespacedName{Name: name}, &n); err != nil {
 			return client.IgnoreNotFound(err)
 		}
-		tainted, labeled := nodeFenced(&n), n.Labels[sipv1alpha1.FencedLabel] != ""
+		tainted := slices.ContainsFunc(n.Spec.Taints, func(t corev1.Taint) bool { return t.Key == sipv1alpha1.FencedTaint })
+		labeled := nodeFenced(&n)
 		if tainted && labeled {
 			return nil
 		}
@@ -303,13 +316,9 @@ func truncate(s string, n int) string {
 	return s[:n-3] + "..."
 }
 
-// avoidFencedNodes keeps a fleet's pods off fenced nodes by node affinity (the FencedLabel) when its tolerations would
-// tolerate the FencedTaint, which would otherwise let the replacement land back on the node just fenced. It is nil
-// for every other fleet, whose pod template the taint alone keeps off fenced nodes, so they aren't rolled for it.
-func avoidFencedNodes(tolerations []corev1.Toleration) *corev1.NodeAffinity {
-	if !slices.ContainsFunc(tolerations, func(t corev1.Toleration) bool { return t.ToleratesTaint(logf.Log, &fencedTaint, false) }) {
-		return nil
-	}
+// avoidFencedNodes keeps a fleet's pods off fenced nodes by node affinity against the FencedLabel. The taint alone
+// wouldn't: a fleet's tolerations, or ones added at admission, may tolerate it.
+func avoidFencedNodes() *corev1.NodeAffinity {
 	return &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 		NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{
 			Key: sipv1alpha1.FencedLabel, Operator: corev1.NodeSelectorOpDoesNotExist,

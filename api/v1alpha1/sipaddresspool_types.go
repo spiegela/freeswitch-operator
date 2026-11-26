@@ -35,10 +35,10 @@ type SIPAddressPoolSpec struct {
 	MetalLB *MetalLBPool `json:"metalLB,omitempty"`
 
 	// allowAdvisoryFencing lets the pool take its addresses off a fenced node (one carrying the
-	// sip.instruments.com/fenced taint, after a failover) when its provider's fencing is Advisory, as MetalLB's is:
+	// sip.instruments.com/fenced label, after a failover) when its provider's fencing is Advisory, as MetalLB's is:
 	// a node cut off from the cluster but not from the network may go on answering for the address until it is
 	// stopped. Authoritative pools always take their addresses off a fenced node. Without it, an Advisory pool leaves
-	// the address on the fenced node, unused, until the taint is removed or the node leaves the cluster.
+	// the address on the fenced node, Fenced and unused, until the label is removed or the node leaves the cluster.
 	// +optional
 	AllowAdvisoryFencing bool `json:"allowAdvisoryFencing,omitempty"`
 }
@@ -132,7 +132,7 @@ const (
 )
 
 // PoolAddressState is where one of a pool's addresses stands.
-// +kubebuilder:validation:Enum=Free;Bound;Idle;Conflict;Error
+// +kubebuilder:validation:Enum=Free;Bound;Idle;Fenced;Conflict;Error
 type PoolAddressState string
 
 const (
@@ -143,6 +143,10 @@ const (
 	// PoolAddressIdle means the address is bound to a node with no pod using the pool, such as a spare. It stays
 	// there until a node that needs an address finds no free one.
 	PoolAddressIdle PoolAddressState = "Idle"
+	// PoolAddressFenced means the address is bound to a node a failover fenced, and the pool may not take it off
+	// (its provider's fencing is Advisory, and it doesn't set allowAdvisoryFencing), since the node may still answer
+	// for it. It stays there, unused and never moved, until the node is unfenced or leaves the cluster.
+	PoolAddressFenced PoolAddressState = "Fenced"
 	// PoolAddressConflict means the address is bound to something outside the cluster that the pool didn't bind it
 	// to. The operator leaves it alone.
 	PoolAddressConflict PoolAddressState = "Conflict"

@@ -159,7 +159,11 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	pods := podList.Items
 	slices.SortFunc(pods, func(a, b corev1.Pod) int { return strings.Compare(a.Name, b.Name) })
 
-	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods); err != nil {
+	nodes, err := podNodes(ctx, r.Client, pods)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods, nodes); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := markFirstReady(ctx, r.Client, pods, r.now()); err != nil {
@@ -204,7 +208,7 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	r.fillStatus(&fsc, cfg, sts, pods, decision, status)
-	healthAfter, err := r.syncHealth(ctx, &fsc, fleet, cfg, pods, status)
+	healthAfter, err := r.syncHealth(ctx, &fsc, fleet, cfg, pods, nodes, status)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -230,9 +234,12 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
-func (r *FreeswitchClusterReconciler) now() time.Time {
-	if r.Now != nil {
-		return r.Now()
+func (r *FreeswitchClusterReconciler) now() time.Time { return nowFrom(r.Now) }
+
+// nowFrom is the time from a clock that may be nil, meaning time.Now.
+func nowFrom(clock func() time.Time) time.Time {
+	if clock != nil {
+		return clock()
 	}
 	return time.Now()
 }
@@ -406,8 +413,8 @@ func templateHash(t *corev1.PodTemplateSpec) (string, error) {
 
 // syncExternalAddresses writes each pod's external address annotation: its node's ExternalIP, or the address the
 // fleet's SIPAddressPool has bound to its node, with the bind address when it has one. FreeSWITCH and Kamailio pods
-// both read them from their downward-API volume.
-func syncExternalAddresses(ctx context.Context, c client.Client, src sipv1alpha1.ExternalAddressSource, poolName string, pods []corev1.Pod) error {
+// both read them from their downward-API volume. nodes are the pods' nodes by name (podNodes), read for NodeExternalIP.
+func syncExternalAddresses(ctx context.Context, c client.Client, src sipv1alpha1.ExternalAddressSource, poolName string, pods []corev1.Pod, nodes map[string]*corev1.Node) error {
 	var pool sipv1alpha1.SIPAddressPool
 	if src == sipv1alpha1.ExternalAddressAddressPool {
 		// A missing pool binds nothing, so every pod goes without.
@@ -423,14 +430,11 @@ func syncExternalAddresses(ctx context.Context, c client.Client, src sipv1alpha1
 		want, wantBind := "", ""
 		switch src {
 		case sipv1alpha1.ExternalAddressNodeExternalIP:
-			var node corev1.Node
-			if err := c.Get(ctx, types.NamespacedName{Name: p.Spec.NodeName}, &node); err != nil {
-				if apierrors.IsNotFound(err) {
-					continue
-				}
-				return err
+			node := nodes[p.Spec.NodeName]
+			if node == nil {
+				continue
 			}
-			want = nodeExternalAddress(&node)
+			want = nodeExternalAddress(node)
 		case sipv1alpha1.ExternalAddressAddressPool:
 			// The pool hands out an address with a bind address only once the node has it on an interface.
 			if b := addresspool.BindingForNode(&pool.Status, p.Spec.NodeName); b != nil {

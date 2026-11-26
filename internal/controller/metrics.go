@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -187,6 +189,46 @@ type fleetObservation struct {
 	now             time.Time
 }
 
+// gaugeSeries is one series of a gauge vector, and its value.
+type gaugeSeries struct {
+	vec    *prometheus.GaugeVec
+	labels []string
+	value  float64
+}
+
+// seriesTracker sets each fleet's series of some gauge vectors to exactly those it is given, and deletes only the
+// ones it set before and no longer is, so that a scrape never finds a series missing while it is replaced. (Pod
+// names are reused by replacements, and a member's signals come and go, so the series can't be deleted by pod.)
+type seriesTracker struct {
+	mu      sync.Mutex
+	byFleet map[fleetRef]map[string]gaugeSeries
+}
+
+var healthSeries = &seriesTracker{byFleet: map[fleetRef]map[string]gaugeSeries{}}
+
+func (t *seriesTracker) set(f fleetRef, want []gaugeSeries) {
+	now := make(map[string]gaugeSeries, len(want))
+	for _, s := range want {
+		s.vec.WithLabelValues(s.labels...).Set(s.value)
+		now[fmt.Sprintf("%p\x00%s", s.vec, strings.Join(s.labels, "\x00"))] = s
+	}
+	t.mu.Lock()
+	before := t.byFleet[f]
+	t.byFleet[f] = now
+	t.mu.Unlock()
+	for k, s := range before {
+		if _, ok := now[k]; !ok {
+			s.vec.DeleteLabelValues(s.labels...)
+		}
+	}
+}
+
+func (t *seriesTracker) forget(f fleetRef) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.byFleet, f)
+}
+
 // drains remembers when each draining pod started, by fleet and pod UID, so the drain's length can be observed
 // once the pod is gone. It is the operator's own memory: a drain under way when the operator restarts is timed
 // from its deletion all the same (the start comes from the pod), but one that ends while no operator runs is
@@ -334,14 +376,12 @@ func forgetFleet(f fleetRef) {
 		v.DeletePartialMatch(f.partial())
 	}
 	drains.forget(f)
+	healthSeries.forget(f)
 }
 
-// recordHealth replaces a fleet's member health series from one reconcile. Pod names are reused by replacements,
-// so the series are rebuilt rather than deleted by name.
+// recordHealth sets a fleet's member health series from one reconcile.
 func recordHealth(f fleetRef, verdicts []verdict, held map[string]string, inProgress bool) {
-	memberHealth.DeletePartialMatch(f.partial())
-	memberSignal.DeletePartialMatch(f.partial())
-	memberFailoverHeld.DeletePartialMatch(f.partial())
+	var want []gaugeSeries
 	for i := range verdicts {
 		v := &verdicts[i]
 		for _, st := range []sipv1alpha1.HealthState{sipv1alpha1.HealthHealthy, sipv1alpha1.HealthSuspect, sipv1alpha1.HealthFailed} {
@@ -349,15 +389,16 @@ func recordHealth(f fleetRef, verdicts []verdict, held map[string]string, inProg
 			if v.health.State == st {
 				val = 1
 			}
-			memberHealth.WithLabelValues(f.labels(v.pod.Name, string(st))...).Set(val)
+			want = append(want, gaugeSeries{memberHealth, f.labels(v.pod.Name, string(st)), val})
 		}
 		for _, s := range v.health.Signals {
-			memberSignal.WithLabelValues(f.labels(v.pod.Name, string(s.Type), strconv.FormatBool(s.Counted))...).Set(1)
+			want = append(want, gaugeSeries{memberSignal, f.labels(v.pod.Name, string(s.Type), strconv.FormatBool(s.Counted)), 1})
 		}
 		if _, ok := held[v.pod.Name]; ok {
-			memberFailoverHeld.WithLabelValues(f.labels(v.pod.Name)...).Set(1)
+			want = append(want, gaugeSeries{memberFailoverHeld, f.labels(v.pod.Name), 1})
 		}
 	}
+	healthSeries.set(f, want)
 	v := 0.0
 	if inProgress {
 		v = 1
@@ -382,7 +423,7 @@ func recordPoolCall(pool, call string, err error) {
 func recordPool(pool string, addrs []sipv1alpha1.PoolAddress, waiting int) {
 	counts := map[sipv1alpha1.PoolAddressState]int{
 		sipv1alpha1.PoolAddressFree: 0, sipv1alpha1.PoolAddressBound: 0, sipv1alpha1.PoolAddressIdle: 0,
-		sipv1alpha1.PoolAddressConflict: 0, sipv1alpha1.PoolAddressError: 0,
+		sipv1alpha1.PoolAddressFenced: 0, sipv1alpha1.PoolAddressConflict: 0, sipv1alpha1.PoolAddressError: 0,
 	}
 	awaiting := 0
 	for i := range addrs {

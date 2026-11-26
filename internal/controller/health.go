@@ -294,6 +294,9 @@ type failoverDecision struct {
 	reason  string
 	// held explains, by pod, why a Failed member isn't failed over now.
 	held map[string]string
+	// resume: target is the pod of the last failover, recorded but not carried out (an error, or a restart, part way
+	// through), so it is finished rather than recorded again.
+	resume bool
 }
 
 // failoverInProgress reports whether the fleet's last failover is still waiting for its replacement. It waits for as
@@ -314,6 +317,8 @@ func failOverRequested(p *corev1.Pod) bool {
 }
 
 // decideFailover picks at most one member to fail over:
+//   - The pod of the last failover, if it is still there and not shutting down: the failover was recorded but not
+//     carried out, and is finished whatever the pod's health is now.
 //   - A pod a person annotated sip.instruments.com/fail-over=true, whatever the mode or its health (the first by
 //     name).
 //   - Otherwise, in mode Automatic and with no failover under way, the Failed member that has been ready and failed
@@ -322,6 +327,14 @@ func failOverRequested(p *corev1.Pod) bool {
 //     unless its node is lost: it is going anyway, and its node is likely sound.
 func decideFailover(verdicts []verdict, mode sipv1alpha1.FailoverMode, last *sipv1alpha1.FailoverRecord) failoverDecision {
 	d := failoverDecision{held: map[string]string{}}
+	if failoverInProgress(last) {
+		for i := range verdicts {
+			if p := verdicts[i].pod; string(p.UID) == last.PodUID && p.DeletionTimestamp == nil {
+				d.target, d.trigger, d.reason, d.resume = p, last.Trigger, last.Reason, true
+				return d
+			}
+		}
+	}
 	for i := range verdicts {
 		p := verdicts[i].pod
 		if failOverRequested(p) {
@@ -376,7 +389,7 @@ func signalSummary(signals []sipv1alpha1.HealthSignal) string {
 	return strings.Join(parts, "; ")
 }
 
-// nodeFenced reports whether a failover has fenced the node.
+// nodeFenced reports whether a failover has fenced the node: the FencedLabel is what marks it.
 func nodeFenced(n *corev1.Node) bool {
-	return slices.ContainsFunc(n.Spec.Taints, func(t corev1.Taint) bool { return t.Key == sipv1alpha1.FencedTaint })
+	return n.Labels[sipv1alpha1.FencedLabel] != ""
 }

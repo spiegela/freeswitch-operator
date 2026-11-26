@@ -327,7 +327,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		Tolerations:                   fsc.Spec.Tolerations,
 		ImagePullSecrets:              fsc.Spec.ImagePullSecrets,
 		Affinity: &corev1.Affinity{
-			NodeAffinity: avoidFencedNodes(fsc.Spec.Tolerations),
+			NodeAffinity: avoidFencedNodes(),
 			PodAntiAffinity: &corev1.PodAntiAffinity{
 				RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
 					LabelSelector: &metav1.LabelSelector{MatchLabels: selectorLabels(fsc)},

@@ -58,15 +58,14 @@ const (
 	// Only a pod that has been ready is failed over automatically, or counts as NotReady: one that never was (a bad
 	// configuration, a broken image) would fail the same way on any node.
 	FirstReadyAnnotation = "sip.instruments.com/first-ready"
-	// FencedTaint is the taint the operator puts on a node when it fails over a member there (effect NoSchedule):
-	// no fleet pod is scheduled to the node again, and every SIPAddressPool that may fence takes its addresses off
-	// the node. The operator never removes it; a person does, once the node is known to be sound
-	// (kubectl taint node <node> sip.instruments.com/fenced-), or the node is replaced.
-	FencedTaint = "sip.instruments.com/fenced"
-	// FencedLabel is put on a fenced node beside FencedTaint. A fleet whose tolerations would tolerate the taint
-	// (a toleration with no key and operator Exists, say) keeps its pods off nodes with this label by node affinity
-	// instead. Remove it with the taint (kubectl label node <node> sip.instruments.com/fenced-).
+	// FencedLabel marks a node fenced: the operator puts it on a node when it fails over a member there. No fleet
+	// pod is scheduled to the node again (each fleet's pods have node affinity against it), and every SIPAddressPool
+	// that may fence takes its addresses off the node. The operator never removes it; a person does, once the node
+	// is known to be sound (kubectl label node <node> sip.instruments.com/fenced-), or the node is replaced.
 	FencedLabel = "sip.instruments.com/fenced"
+	// FencedTaint (effect NoSchedule) is put on a fenced node beside FencedLabel, to keep other pods off it too.
+	// Remove it with the label (kubectl taint node <node> sip.instruments.com/fenced-).
+	FencedTaint = "sip.instruments.com/fenced"
 	// FencedByAnnotation records on a fenced node which member's failover fenced it, when, and why.
 	FencedByAnnotation = "sip.instruments.com/fenced-by"
 )

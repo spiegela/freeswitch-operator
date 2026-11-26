@@ -43,7 +43,7 @@ status:
   addresses:
     - id: eipalloc-…
       address: 203.0.113.10
-      state: Bound                  # Free | Bound | Idle | Conflict | Error
+      state: Bound                  # Free | Bound | Idle | Fenced | Conflict | Error
       node: ip-10-0-1-23
       nodeID: i-0abc…
       claimedBy: [{kind: FreeswitchCluster, namespace: telephony, name: edge, pod: edge-1}]
@@ -79,9 +79,10 @@ The planner's rules, the same for every provider:
   node. With none left, the pool is `Degraded` and the node's pods wait without an address (unready, when
   `required`). A pod is the last claimant of one address only, the one it holds: a pod moved to a node that kept an
   idle address of its own takes that one, and forgets the one it left.
-- A node fenced by a [failover](freeswitch-fleet.md#health-and-failover) (tainted `sip.instruments.com/fenced`) is
+- A node fenced by a [failover](freeswitch-fleet.md#health-and-failover) (labeled `sip.instruments.com/fenced`) is
   treated as failed: its pods' claims don't count and it gets no address. Its addresses are unbound and reused if
-  the pool may fence (below); otherwise each stays on the node, unused, never moved, with a message saying why.
+  the pool may fence (below); otherwise each stays on the node, `Fenced`: unused, never moved, with a message saying
+  why.
 - An address the pool bound to a node that has left the cluster is unbound and reused. One bound outside the cluster
   that the pool didn't put there is a `Conflict`, left alone.
 - An address the provider can't report on is an `Error`, and its node keeps it, so a provider outage doesn't make

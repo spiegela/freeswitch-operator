@@ -180,28 +180,30 @@ with these limits:
 
 A failover:
 
-1. Fences the member's node: the taint `sip.instruments.com/fenced:NoSchedule`, the label
-   `sip.instruments.com/fenced=true`, and the annotation `sip.instruments.com/fenced-by` saying which member's
-   failover, when, and why.
+1. Fences the member's node: the label `sip.instruments.com/fenced=true`, which marks it fenced, the taint
+   `sip.instruments.com/fenced:NoSchedule`, which keeps other workloads off it, and the annotation
+   `sip.instruments.com/fenced-by` saying which member's failover, when, and why.
 2. Deletes the pod at once (no grace period, no drain: its calls are lost anyway). Its endpoint goes, so the
    dispatcher list drops it and Kamailio takes it out of rotation at once, as for a drain.
-3. The StatefulSet starts the pod again; the taint keeps it off the fenced node, so it lands on the spare. A fleet
-   whose `tolerations` would tolerate the taint (a toleration with no key and `operator: Exists`, say) gets a node
-   affinity rule against the label instead, so the same holds.
+3. The StatefulSet starts the pod again. Every fleet's pods have a node affinity rule against the label, so it
+   lands on the spare whatever the fleet's `tolerations` (a toleration with no key and `operator: Exists` would
+   tolerate the taint).
 4. Every `SIPAddressPool` that may fence takes its addresses off the fenced node and treats the node as failed
    ([address pools](address-pools.md)). The replacement gets an address on the spare as any replaced pod does: the
    failed member's own, freed by the fence, unless the spare holds an idle address of its own.
 
 `status.lastFailover` records the failover until the replacement is ready (or the fleet is scaled down past it). It
-is written as soon as the pod is deleted, ahead of the rest of the status, so it isn't lost to a status update that
-conflicts. **The operator never unfences:** once someone has found out what happened to the node and it is sound,
-removing the taint and the label makes it a spare again:
+is written before the node is fenced, and only over the copy of the fleet the decision was made from (one written
+since may hold a failover still under way), so a failover is never started twice. If fencing or deleting fails, or
+the operator restarts part way through, the next reconcile finishes the recorded failover, whatever the pod's health
+by then. **The operator never unfences:** once someone has found out what happened to the node and it is sound,
+removing the label and the taint makes it a spare again (the label is what the operator reads):
 
 ```bash
 kubectl taint node <node> sip.instruments.com/fenced- && kubectl label node <node> sip.instruments.com/fenced-
 ```
 
-The operator needs `patch` on nodes for the taint and the label.
+The operator needs `patch` on nodes for the label and the taint.
 
 Fencing a node takes every pool address off it, whatever fleet uses it: a Kamailio pod on a fenced node loses its
 address too.

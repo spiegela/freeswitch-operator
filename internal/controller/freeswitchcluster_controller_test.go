@@ -513,13 +513,21 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		Expect(cond.Reason).To(Equal("MemberFailed"))
 
+		By("a failover's record is written only over the copy of the fleet it was decided from")
+		stale, fresh := fleet(), fleet()
+		fresh.Annotations = map[string]string{"test": "changed"}
+		Expect(k8sClient.Update(ctx, fresh)).To(Succeed())
+		err := r.persistFailover(ctx, stale, &sipv1alpha1.FailoverRecord{Pod: "edge-1", StartedAt: metav1.Now()})
+		Expect(apierrors.IsConflict(err)).To(BeTrue(), "got %v", err)
+		Expect(fleet().Status.LastFailover).To(BeNil())
+
 		By("in mode Automatic, the node is fenced and the pod deleted at once, and the record survives a status update that conflicts")
 		fsc := fleet()
 		fsc.Spec.Failover.Mode = sipv1alpha1.FailoverAutomatic
 		Expect(k8sClient.Update(ctx, fsc)).To(Succeed())
 		conflicting := &FreeswitchClusterReconciler{Client: statusConflicts{k8sClient}, Scheme: k8sClient.Scheme(), SIPProbes: probes}
 		reconcileOnce(conflicting, ns)
-		err := k8sClient.Get(ctx, client.ObjectKeyFromObject(p1), &corev1.Pod{})
+		err = k8sClient.Get(ctx, client.ObjectKeyFromObject(p1), &corev1.Pod{})
 		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "deleted with no grace period, so gone at once")
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(nodeB), nodeB)).To(Succeed())
 		Expect(nodeFenced(nodeB)).To(BeTrue())

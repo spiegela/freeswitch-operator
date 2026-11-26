@@ -89,7 +89,7 @@ var _ = Describe("SIPAddressPool controller", func() {
 	syncFleet := func(w world) {
 		var pods corev1.PodList
 		Expect(k8sClient.List(ctx, &pods, client.InNamespace(w.ns))).To(Succeed())
-		Expect(syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items)).To(Succeed())
+		Expect(syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items, nil)).To(Succeed())
 	}
 
 	It("binds an address to each node running a pod of a fleet that uses the pool, and the pods advertise it", func() {
@@ -213,7 +213,7 @@ var _ = Describe("SIPAddressPool controller", func() {
 
 		var pods corev1.PodList
 		Expect(k8sClient.List(ctx, &pods, client.InNamespace(w.ns), client.MatchingLabels{sipv1alpha1.KamailioClusterLabel: "proxy"})).To(Succeed())
-		Expect(syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items)).To(Succeed())
+		Expect(syncExternalAddresses(ctx, k8sClient, sipv1alpha1.ExternalAddressAddressPool, w.pool, pods.Items, nil)).To(Succeed())
 		Expect(addresspool.BindingForNode(&pool.Status, proxyNode)).NotTo(BeNil())
 		Expect(annotation(w.ns, "proxy-0")).To(Equal(addresspool.BindingForNode(&pool.Status, proxyNode).Address))
 		Expect(annotation(w.ns, "proxy-0")).NotTo(BeEmpty())

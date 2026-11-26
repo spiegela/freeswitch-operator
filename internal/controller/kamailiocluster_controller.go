@@ -143,7 +143,14 @@ func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	pods := podList.Items
 	slices.SortFunc(pods, func(a, b corev1.Pod) int { return strings.Compare(a.Name, b.Name) })
 
-	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods); err != nil {
+	var nodes map[string]*corev1.Node
+	if cfg.addressSource == sipv1alpha1.ExternalAddressNodeExternalIP {
+		var err error
+		if nodes, err = podNodes(ctx, r.Client, pods); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	if err := syncExternalAddresses(ctx, r.Client, cfg.addressSource, cfg.addressPool, pods, nodes); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.ensureRouteNames(ctx, &kc, pods); err != nil {

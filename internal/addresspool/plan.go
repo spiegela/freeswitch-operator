@@ -42,7 +42,7 @@ type Input struct {
 	// Refused are nodes the pool must not bind a new address to, with why (an AWS Secondary pool on a node whose VPC
 	// CNI manages the same interface's secondary addresses). They wait; an address already bound there stays.
 	Refused map[string]string
-	// Fenced are nodes a failover has fenced (the sip.instruments.com/fenced taint). Their pods' claims don't count,
+	// Fenced are nodes a failover has fenced (the sip.instruments.com/fenced label). Their pods' claims don't count,
 	// they are given no address, and the addresses on them are taken off when MayFence, and held there otherwise.
 	Fenced map[string]bool
 	// MayFence says the pool takes its addresses off fenced nodes: its provider's fencing is Authoritative, or the
@@ -77,7 +77,7 @@ type Plan struct {
 //   - A node with a pod using the pool and no address gets one: first a Free or Idle address one of its pods used
 //     last, then any Free address, then any Idle one (taken off its idle node), each in spec order.
 //   - A fenced node is treated as failed: its pods' claims don't count and it gets no address. An address on it is
-//     unbound when the pool may fence, and otherwise held there, Idle but never moved to another node, since the
+//     unbound when the pool may fence, and otherwise left there, Fenced, never moved to another node, since the
 //     node may still answer for it.
 func Decide(in Input) Plan {
 	pl := newPlanner(in)
@@ -173,7 +173,6 @@ type planner struct {
 	status       []sipv1alpha1.PoolAddress
 	steps        [][]Step
 	notReady     []string        // by address: why a bound address isn't to be handed out yet
-	held         []bool          // by address: on a fenced node the pool may not fence, so not to be moved
 	served       map[string]bool // nodes that hold a Bound address
 	waiting      map[string]string
 }
@@ -183,8 +182,7 @@ func newPlanner(in Input) *planner {
 		in: in, nodeByID: map[string]string{}, nodeIDByName: map[string]string{},
 		claims: map[string][]sipv1alpha1.AddressClaim{}, prev: map[string]sipv1alpha1.PoolAddress{},
 		status: make([]sipv1alpha1.PoolAddress, len(in.Observed)), steps: make([][]Step, len(in.Observed)),
-		notReady: make([]string, len(in.Observed)), held: make([]bool, len(in.Observed)),
-		served: map[string]bool{}, waiting: map[string]string{},
+		notReady: make([]string, len(in.Observed)), served: map[string]bool{}, waiting: map[string]string{},
 	}
 	for _, n := range in.Nodes {
 		if n.ID != "" {
@@ -229,10 +227,9 @@ func (pl *planner) observe(i int, a Address) {
 			pl.steps[i] = append(pl.steps[i], Step{Unbind: true, Address: a})
 			st.State = sipv1alpha1.PoolAddressFree
 		case inCluster && pl.in.Fenced[node]:
-			st.State, st.Node, st.NodeID, st.BindAddress = sipv1alpha1.PoolAddressIdle, node, a.NodeID, a.BindIP
+			st.State, st.Node, st.NodeID, st.BindAddress = sipv1alpha1.PoolAddressFenced, node, a.NodeID, a.BindIP
 			st.Message = "on fenced node " + node + ", which may still answer for it (the provider's fencing is " +
-				"Advisory): held there until the node is unfenced or leaves the cluster, or the pool sets allowAdvisoryFencing"
-			pl.held[i] = true
+				"Advisory): left there until the node is unfenced or leaves the cluster, or the pool sets allowAdvisoryFencing"
 		case inCluster && len(pl.claims[node]) > 0 && !pl.served[node]:
 			pl.served[node] = true
 			st.State, st.Node, st.NodeID, st.BindAddress = sipv1alpha1.PoolAddressBound, node, a.NodeID, a.BindIP
@@ -292,7 +289,7 @@ func (pl *planner) assign() {
 func (pl *planner) pick(node string, sticky bool) int {
 	for _, state := range []sipv1alpha1.PoolAddressState{sipv1alpha1.PoolAddressFree, sipv1alpha1.PoolAddressIdle} {
 		for i := range pl.status {
-			if pl.status[i].State == state && !pl.held[i] && (!sticky || pl.usedBefore(i, node)) {
+			if pl.status[i].State == state && (!sticky || pl.usedBefore(i, node)) {
 				return i
 			}
 		}
@@ -352,8 +349,8 @@ func AwaitingAgent(a *sipv1alpha1.PoolAddress) bool {
 }
 
 // NodeBindAddresses returns the bind addresses a pool gives a node's interface: those of its addresses on the node
-// that are bound, idle or unreadable, claimed or not, so a node keeps an address while a provider can't answer and
-// has it before a pod claims it.
+// that are bound, idle, fenced or unreadable, claimed or not, so a node keeps an address while a provider can't answer
+// and has it before a pod claims it.
 func NodeBindAddresses(status *sipv1alpha1.SIPAddressPoolStatus, node string) []string {
 	var out []string
 	for _, a := range status.Addresses {
@@ -361,7 +358,7 @@ func NodeBindAddresses(status *sipv1alpha1.SIPAddressPoolStatus, node string) []
 			continue
 		}
 		switch a.State {
-		case sipv1alpha1.PoolAddressBound, sipv1alpha1.PoolAddressIdle, sipv1alpha1.PoolAddressError:
+		case sipv1alpha1.PoolAddressBound, sipv1alpha1.PoolAddressIdle, sipv1alpha1.PoolAddressFenced, sipv1alpha1.PoolAddressError:
 			out = append(out, a.BindAddress)
 		}
 	}
