@@ -54,17 +54,41 @@ func TestReadyDestinationsKeepsOnlyReadyNonTerminating(t *testing.T) {
 	}
 }
 
-// A starting pod's address is admitted to Kamailio while it recovers its calls, before it is ready.
+// A starting pod's address is admitted to Kamailio while it recovers its calls, before it is ready: its own IP once
+// the kubelet reports it, its node's internal address from the moment it is placed.
 func TestStartingHosts(t *testing.T) {
-	eps := []discoveryv1.EndpointSlice{{
-		Endpoints: []discoveryv1.Endpoint{
-			endpoint("10.0.1.40", "edge-3", "n4", false, false), // starting
-			endpoint("10.0.1.10", "edge-0", "n1", true, false),
-			endpoint("10.0.1.20", "edge-1", "n2", false, true), // draining
-			endpoint("10.0.1.30", "edge-2", "n3", false, false),
-		},
-	}, {Endpoints: []discoveryv1.Endpoint{endpoint("10.0.1.40", "edge-3", "n4", false, false)}}}
-	if got, want := startingHosts(eps), []string{"10.0.1.30", "10.0.1.40"}; !reflect.DeepEqual(got, want) {
+	node := func(name string, addrs ...corev1.NodeAddress) *corev1.Node {
+		return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}, Status: corev1.NodeStatus{Addresses: addrs}}
+	}
+	internal := func(a string) corev1.NodeAddress { return corev1.NodeAddress{Type: corev1.NodeInternalIP, Address: a} }
+	nodes := map[string]*corev1.Node{
+		"n1": node("n1", internal("10.0.1.10")),
+		"n3": node("n3", internal("10.0.1.30")),
+		"n4": node("n4", internal("10.0.1.40"), corev1.NodeAddress{Type: corev1.NodeExternalIP, Address: "203.0.113.4"}),
+		"n5": node("n5", internal("10.0.1.50")),
+	}
+	pod := func(name, nodeName string, ready bool, ip string) corev1.Pod {
+		p := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: corev1.PodSpec{NodeName: nodeName, HostNetwork: true}}
+		if ready {
+			p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+		}
+		if ip != "" {
+			p.Status.PodIPs = []corev1.PodIP{{IP: ip}}
+		}
+		return p
+	}
+	draining := pod("edge-1", "n2", false, "10.0.1.20")
+	draining.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	unscheduled := pod("edge-5", "", false, "")
+	pods := []corev1.Pod{
+		pod("edge-0", "n1", true, "10.0.1.10"),
+		draining,
+		pod("edge-2", "n3", false, "10.0.1.30"), // started, its IP reported
+		pod("edge-3", "n4", false, ""),          // placed, not started: its node's internal address
+		unscheduled,
+		pod("edge-6", "gone", false, ""), // its node is unknown
+	}
+	if got, want := startingHosts(pods, nodes), []string{"10.0.1.30", "10.0.1.40"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }

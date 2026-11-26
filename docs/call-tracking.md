@@ -247,8 +247,11 @@ a call recovered on another node loses its media. FreeSWITCH's own requests foll
 Kamailio. Where Kamailio has a bind address, that route names Kamailio's pod rather than its node
 ([Kamailio](kamailio.md#routing)), so it still reaches Kamailio when Kamailio was replaced elsewhere. A FreeSWITCH
 on a node new to the fleet sends from that node's address, which Kamailio's `trustedPeers` check would drop until
-its dispatcher list names the node (`reloadDelaySeconds` later): the operator admits the address over JSON-RPC as
-soon as it writes the list. sipbench's
+its dispatcher list names the node, which it does only once the pod is ready, after recovery. So while a pod starts
+with `spec.recovery`, from the moment it is placed on a node, the operator admits its address to every Kamailio
+sending to the fleet, over JSON-RPC: the pod's IP once the kubelet reports it, its node's internal address before
+that. It publishes the addresses on the fleet's dispatcher list ConfigMap (`sip.instruments.com/starting-addresses`),
+where each KamailioCluster dispatching to the fleet reads them. sipbench's
 `moved-call-in-dialog` checks a move on kind: it cordons a call's node, deletes the pod, crashes FreeSWITCH under its
 drain (a crash alone would only restart it in place, where it recovers its own calls), deletes the pod at once, and
 checks the replacement, which comes up on the spare node with the moved pod's address, recovered the

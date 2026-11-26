@@ -285,6 +285,16 @@ var _ = Describe("KamailioCluster controller", func() {
 		for url, n := range notifiers {
 			Expect(n.inactive).To(Equal([]string{"1 sip:10.0.1.20:5060"}), url)
 		}
+
+		By("a fleet's pods starting with recovery are admitted on every ready Kamailio, ahead of any list naming them")
+		var fleetList corev1.ConfigMap
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: edge.Spec.Dispatcher.ConfigMapName}, &fleetList)).To(Succeed())
+		fleetList.Annotations[sipv1alpha1.StartingAddressesAnnotation] = "10.0.1.40,10.0.1.50"
+		Expect(k8sClient.Update(ctx, &fleetList)).To(Succeed())
+		reconcileProxy(r, ns)
+		for url, n := range notifiers {
+			Expect(n.admitted).To(ContainElements("10.0.1.40", "10.0.1.50"), url)
+		}
 	})
 
 	It("replaces one outdated Kamailio pod at a time", func() {

@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 )
 
@@ -30,21 +31,33 @@ type destination struct {
 	Node string
 }
 
-// startingHosts are the addresses of the endpoints neither ready nor terminating: pods still starting. With
-// spec.recovery, such a pod recovers its calls before it turns ready, and their re-INVITEs reach Kamailio from its
-// node's address before the dispatcher list names it.
-func startingHosts(endpointSlices []discoveryv1.EndpointSlice) []string {
+// startingHosts are the addresses of the pods that are starting: placed on a node, neither ready nor shutting down.
+// With spec.recovery, such a pod recovers its calls before it turns ready, and their re-INVITEs reach Kamailio from
+// its address before the dispatcher list names it. That is the pod's IP once the kubelet reports it, and before then
+// its node's internal addresses (the pods use the host network): the scheduler places a pod well before FreeSWITCH
+// starts, so Kamailio can know the address before the first re-INVITE, rather than once the EndpointSlice has it.
+func startingHosts(pods []corev1.Pod, nodes map[string]*corev1.Node) []string {
 	var out []string
-	for _, s := range endpointSlices {
-		for _, ep := range s.Endpoints {
-			ready := ep.Conditions.Ready != nil && *ep.Conditions.Ready
-			terminating := ep.Conditions.Terminating != nil && *ep.Conditions.Terminating
-			if ready || terminating {
-				continue
+	add := func(a string) {
+		if a != "" && !slices.Contains(out, a) {
+			out = append(out, a)
+		}
+	}
+	for i := range pods {
+		p := &pods[i]
+		if p.Spec.NodeName == "" || p.DeletionTimestamp != nil || podReady(p) {
+			continue
+		}
+		if len(p.Status.PodIPs) > 0 {
+			for _, ip := range p.Status.PodIPs {
+				add(ip.IP)
 			}
-			for _, a := range ep.Addresses {
-				if !slices.Contains(out, a) {
-					out = append(out, a)
+			continue
+		}
+		if n := nodes[p.Spec.NodeName]; n != nil && p.Spec.HostNetwork {
+			for _, a := range n.Status.Addresses {
+				if a.Type == corev1.NodeInternalIP {
+					add(a.Address)
 				}
 			}
 		}

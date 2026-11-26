@@ -430,9 +430,10 @@ func (r *KamailioClusterReconciler) ensureStatefulSet(ctx context.Context, kc *s
 
 // dispatchSet is one fleet's set, as its FreeswitchCluster publishes it.
 type dispatchSet struct {
-	cluster string
-	setID   int32
-	list    string // the fleet's own dispatcher.list
+	cluster  string
+	setID    int32
+	list     string   // the fleet's own dispatcher.list
+	starting []string // its pods starting with spec.recovery (StartingAddressesAnnotation), to admit
 }
 
 // loadSets reads each fleet in spec.dispatch, in order. A fleet that can't be used is left out and described in
@@ -465,6 +466,9 @@ func (r *KamailioClusterReconciler) loadSets(ctx context.Context, kc *sipv1alpha
 			// Only the FreeswitchCluster's own list: a ConfigMap of that name it doesn't control isn't its.
 			if metav1.IsControlledBy(&cm, &fsc) {
 				s.list = cm.Data[dispatcherListKey]
+				if a := cm.Annotations[sipv1alpha1.StartingAddressesAnnotation]; a != "" {
+					s.starting = strings.Split(a, ",")
+				}
 			}
 		} else if !apierrors.IsNotFound(err) {
 			return nil, nil, err
@@ -556,6 +560,19 @@ func (r *KamailioClusterReconciler) syncDispatcher(ctx context.Context, kc *sipv
 						log.Error(err, "could not mark destination inactive", "set", s.setID, "uri", uri)
 					}
 				}
+			}
+		}
+	}
+	if notifier != nil {
+		// The fleets' pods recovering calls as they start re-invite them before the list names them; admitted again on
+		// each look while they start, and the entries outlive the start (kamailioAdmittedTable).
+		var starting []string
+		for _, s := range sets {
+			starting = append(starting, s.starting...)
+		}
+		if len(starting) > 0 {
+			if err := notifier.Admit(ctx, starting); err != nil {
+				log.Error(err, "could not admit the fleets' starting pods to Kamailio", "addresses", starting)
 			}
 		}
 	}

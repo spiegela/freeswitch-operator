@@ -50,6 +50,11 @@ const (
 	// DispatcherUpdatedAtAnnotation records when the dispatcher list's content last changed (RFC 3339), written in
 	// the same update as the list, so the reload delay is measured from the change itself.
 	DispatcherUpdatedAtAnnotation = "sip.instruments.com/dispatcher-updated-at"
+	// StartingAddressesAnnotation lists, comma-separated, on a fleet's dispatcher list ConfigMap, the addresses of its
+	// pods that are starting with spec.recovery. Such a pod re-invites the calls it recovers before it is ready, so
+	// before the list names it, and every Kamailio sending to the fleet admits these addresses past its trusted-peer
+	// check. Written by the operator; absent when no pod is starting.
+	StartingAddressesAnnotation = "sip.instruments.com/starting-addresses"
 	// FailOverAnnotation, set to "true" on a FreeSWITCH pod by a person, has the operator fail that member over now,
 	// whatever spec.failover.mode says and whatever its health: fence its node, delete the pod at once, and let the
 	// StatefulSet start it again on another node. Any other value ("false" included) does nothing.
