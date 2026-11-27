@@ -364,7 +364,7 @@ spec:
                   with the defaults: health is reported, and only pods annotated sip.instruments.com/fail-over are failed over.
                 properties:
                   failAfterSeconds:
-                    default: 15
+                    default: 5
                     description: failAfterSeconds is how long that many signals must
                       keep failing before the member is Failed.
                     format: int32
@@ -415,7 +415,7 @@ spec:
                         minimum: 1
                         type: integer
                       periodSeconds:
-                        default: 5
+                        default: 2
                         description: periodSeconds between probes of each member.
                         format: int32
                         maximum: 300

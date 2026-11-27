@@ -80,6 +80,9 @@ type FreeswitchClusterReconciler struct {
 	SIPProbes SIPProbeResults
 	// ProbeEvents, when set, delivers fleets whose SIP signal changed (the SIP prober's Events).
 	ProbeEvents <-chan event.GenericEvent
+	// NodeLeases reads when each node's lease was last seen renewed; nil means a node is lost only by its Ready
+	// condition. Its Events go on ProbeEvents too.
+	NodeLeases NodeLeaseResults
 	// Recorder records events on the fleet; nil records none.
 	Recorder events.EventRecorder
 
@@ -93,6 +96,7 @@ type FreeswitchClusterReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=services;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;patch;delete
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=sip.instruments.com,resources=sipaddresspools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete

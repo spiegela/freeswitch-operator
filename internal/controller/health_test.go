@@ -30,6 +30,14 @@ var t0 = time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
 
 type fakeProbes map[types.UID]sipProbeResult
 
+// fakeLeases is when each node's lease was last seen renewed, with the default grace (15 s).
+type fakeLeases map[string]time.Time
+
+func (f fakeLeases) Renewal(node string) (time.Time, time.Duration, bool) {
+	seen, ok := f[node]
+	return seen, nodeLeaseGrace(defaultNodeLeaseDuration), ok
+}
+
 func (f fakeProbes) Result(uid types.UID) (sipProbeResult, bool) {
 	r, ok := f[uid]
 	return r, ok
@@ -93,17 +101,18 @@ func states(vs []verdict) string {
 }
 
 func TestEvaluateHealth(t *testing.T) {
-	cfg := resolveFailover(nil) // 2 signals, 15 s, notReady 20 s
+	cfg := resolveFailover(nil) // 2 signals, 5 s, notReady 20 s
 	sipDown := func(since time.Time) sipProbeResult {
 		return sipProbeResult{Failing: true, Since: since, Message: "no answer"}
 	}
 	cases := []struct {
-		name  string
-		pods  []corev1.Pod
-		nodes map[string]*corev1.Node
-		sip   fakeProbes
-		cfg   *failoverSettings
-		want  string
+		name   string
+		pods   []corev1.Pod
+		nodes  map[string]*corev1.Node
+		sip    fakeProbes
+		leases fakeLeases
+		cfg    *failoverSettings
+		want   string
 	}{
 		{
 			name:  "all healthy",
@@ -122,7 +131,7 @@ func TestEvaluateHealth(t *testing.T) {
 			name:  "two signals, but the second only just began: Suspect until failAfter",
 			pods:  []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
 			nodes: lostB(t0.Add(-time.Minute)),
-			sip:   fakeProbes{"edge-1-uid": sipDown(t0.Add(-5 * time.Second))},
+			sip:   fakeProbes{"edge-1-uid": sipDown(t0.Add(-2 * time.Second))},
 			want:  "edge-0=Healthy edge-1=Suspect+NodeLost+SIPUnreachable",
 		},
 		{
@@ -211,6 +220,38 @@ func TestEvaluateHealth(t *testing.T) {
 			want:  "edge-0=Healthy edge-1=Failed+NodeLost+SIPUnreachable",
 		},
 		{
+			name:   "kubelet's lease lapsed and SIP down: Failed while the node is still Ready",
+			pods:   []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
+			nodes:  healthyNodes("a", "b"),
+			leases: fakeLeases{"a": t0, "b": t0.Add(-30 * time.Second)},
+			sip:    fakeProbes{"edge-1-uid": sipDown(t0.Add(-25 * time.Second))},
+			want:   "edge-0=Healthy edge-1=Failed+NodeLost+SIPUnreachable",
+		},
+		{
+			name:   "a lease renewed within its grace isn't a signal",
+			pods:   []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
+			nodes:  healthyNodes("a", "b"),
+			leases: fakeLeases{"a": t0, "b": t0.Add(-14 * time.Second)},
+			sip:    fakeProbes{"edge-1-uid": sipDown(t0.Add(-25 * time.Second))},
+			want:   "edge-0=Healthy edge-1=Suspect+SIPUnreachable",
+		},
+		{
+			name:   "a lapsed lease counts from its grace's end: Suspect until failAfter after that",
+			pods:   []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
+			nodes:  healthyNodes("a", "b"),
+			leases: fakeLeases{"a": t0, "b": t0.Add(-17 * time.Second)},
+			sip:    fakeProbes{"edge-1-uid": sipDown(t0.Add(-25 * time.Second))},
+			want:   "edge-0=Healthy edge-1=Suspect+NodeLost+SIPUnreachable",
+		},
+		{
+			name:   "every lease lapsed is the observer's problem",
+			pods:   []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
+			nodes:  healthyNodes("a", "b"),
+			leases: fakeLeases{"a": t0.Add(-time.Minute), "b": t0.Add(-time.Minute)},
+			sip:    fakeProbes{"edge-1-uid": sipDown(t0.Add(-time.Minute))},
+			want:   "edge-0=Suspect+NodeLost(uncounted) edge-1=Suspect+NodeLost(uncounted)+SIPUnreachable",
+		},
+		{
 			name:  "SIP probes still within failureThreshold aren't a signal",
 			pods:  []corev1.Pod{hpod("edge-0", "a"), hpod("edge-1", "b")},
 			nodes: healthyNodes("a", "b"),
@@ -224,7 +265,7 @@ func TestEvaluateHealth(t *testing.T) {
 			if tc.cfg != nil {
 				c = *tc.cfg
 			}
-			in := healthInput{pods: tc.pods, nodes: tc.nodes, sip: tc.sip, cfg: c, now: t0}
+			in := healthInput{pods: tc.pods, nodes: tc.nodes, sip: tc.sip, leases: tc.leases, cfg: c, now: t0}
 			if got := states(evaluateHealth(in)); got != tc.want {
 				t.Errorf("got  %s\nwant %s", got, tc.want)
 			}
@@ -241,14 +282,14 @@ func TestEvaluateHealthRecheck(t *testing.T) {
 	if vs[0].recheck != 15*time.Second {
 		t.Errorf("recheck %s", vs[0].recheck)
 	}
-	// Two signals, the later one 5 s old: Failed 10 s from now.
+	// Two signals, the later one 2 s old: Failed 3 s from now.
 	vs = evaluateHealth(healthInput{
 		pods:  []corev1.Pod{hpod("edge-0", "a")},
 		nodes: map[string]*corev1.Node{"a": hnode("a", corev1.ConditionUnknown, t0.Add(-time.Minute))},
-		sip:   fakeProbes{"edge-0-uid": {Failing: true, Since: t0.Add(-5 * time.Second)}},
+		sip:   fakeProbes{"edge-0-uid": {Failing: true, Since: t0.Add(-2 * time.Second)}},
 		cfg:   cfg, now: t0,
 	})
-	if vs[0].health.State != sipv1alpha1.HealthSuspect || vs[0].recheck != 10*time.Second {
+	if vs[0].health.State != sipv1alpha1.HealthSuspect || vs[0].recheck != 3*time.Second {
 		t.Errorf("state %s recheck %s", vs[0].health.State, vs[0].recheck)
 	}
 }
@@ -400,8 +441,8 @@ func ptrPod(p corev1.Pod) *corev1.Pod { return &p }
 
 func TestResolveFailover(t *testing.T) {
 	d := resolveFailover(nil)
-	if d.mode != sipv1alpha1.FailoverDetect || d.signalsRequired != 2 || d.failAfter != 15*time.Second ||
-		d.notReady != 20*time.Second || d.probePeriod != 5*time.Second || d.probeTimeout != 2*time.Second || d.probeThreshold != 3 {
+	if d.mode != sipv1alpha1.FailoverDetect || d.signalsRequired != 2 || d.failAfter != 5*time.Second ||
+		d.notReady != 20*time.Second || d.probePeriod != 2*time.Second || d.probeTimeout != 2*time.Second || d.probeThreshold != 3 {
 		t.Errorf("defaults: %+v", d)
 	}
 	zero := int32(0)
@@ -704,11 +745,13 @@ func TestManualFailoverKeepsCallsWithRecovery(t *testing.T) {
 		name      string
 		recovery  bool
 		node      corev1.ConditionStatus
+		lapsed    bool
 		keepCalls bool
 	}{
-		{"recovery, node ready", true, corev1.ConditionTrue, true},
-		{"no recovery", false, corev1.ConditionTrue, false},
-		{"node not ready", true, corev1.ConditionUnknown, false},
+		{"recovery, node ready", true, corev1.ConditionTrue, false, true},
+		{"no recovery", false, corev1.ConditionTrue, false, false},
+		{"node not ready", true, corev1.ConditionUnknown, false, false},
+		{"node ready, but its lease lapsed", true, corev1.ConditionTrue, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var graces []*int64
@@ -716,7 +759,10 @@ func TestManualFailoverKeepsCallsWithRecovery(t *testing.T) {
 			if tc.recovery {
 				fsc.Spec.Recovery = &sipv1alpha1.RecoverySpec{}
 			}
-			r := &FreeswitchClusterReconciler{Client: c, Now: func() time.Time { return t0 }}
+			r := &FreeswitchClusterReconciler{Client: c, Now: func() time.Time { return t0 }, NodeLeases: fakeLeases{"a": t0}}
+			if tc.lapsed {
+				r.NodeLeases = fakeLeases{"a": t0.Add(-time.Minute)}
+			}
 			status := fsc.Status.DeepCopy()
 			nodes := map[string]*corev1.Node{"a": hnode("a", tc.node, t0.Add(-time.Hour))}
 			fleet := fleetRef{kind: kindFreeswitch, namespace: "telephony", name: "edge"}
@@ -773,5 +819,35 @@ func TestForceKeptCallsFailover(t *testing.T) {
 	}
 	if wait := r.forceKeptCallsFailover(ctx, fsc, []corev1.Pod{pod}, last, t0.Add(30*time.Second)); wait != 0 || len(graces) != 1 || graces[0] == nil || *graces[0] != 0 {
 		t.Fatalf("after the wait: wait %v, deletes %v", wait, graces)
+	}
+}
+
+// Of a lapsed lease and a node not Ready, the signal reported is the one that counts first.
+func TestNodeLostSignalEarliest(t *testing.T) {
+	p := hpod("edge-0", "a")
+	notReadyLong := hnode("a", corev1.ConditionUnknown, t0.Add(-time.Hour))
+	notReadyNow := hnode("a", corev1.ConditionUnknown, t0)
+	lapsed := fakeLeases{"a": t0.Add(-time.Minute)}
+	for name, tc := range map[string]struct {
+		node   *corev1.Node
+		leases NodeLeaseResults
+		lost   bool
+		lease  bool
+	}{
+		"ready, lease renewing":           {node: healthyNodes("a")["a"], leases: fakeLeases{"a": t0}},
+		"ready, no lease seen":            {node: healthyNodes("a")["a"], leases: fakeLeases{}},
+		"ready, no lease watch":           {node: healthyNodes("a")["a"]},
+		"ready, lease lapsed":             {node: healthyNodes("a")["a"], leases: lapsed, lost: true, lease: true},
+		"not ready long before the lapse": {node: notReadyLong, leases: lapsed, lost: true},
+		"lapsed before not ready":         {node: notReadyNow, leases: lapsed, lost: true, lease: true},
+		"node gone":                       {leases: lapsed, lost: true},
+	} {
+		s, lost := nodeLostSignal(&p, tc.node, tc.leases, t0)
+		if lost != tc.lost || (lost && strings.Contains(s.message, "lease") != tc.lease) {
+			t.Errorf("%s: lost %v, signal %+v", name, lost, s)
+		}
+		if tc.lease && (!s.since.Equal(t0.Add(-time.Minute)) || !s.counts.Equal(t0.Add(-45*time.Second))) {
+			t.Errorf("%s: since %v counts %v", name, s.since, s.counts)
+		}
 	}
 }

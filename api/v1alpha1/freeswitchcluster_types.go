@@ -161,9 +161,9 @@ const (
 )
 
 // FailoverSpec configures how the operator watches each member's health and what it does about a member that has
-// failed. Three independent signals feed the verdict: the node (the control plane's view of the kubelet), the
-// pod's readiness (the kubelet's checks of FreeSWITCH itself), and SIP OPTIONS probes the operator sends to each
-// member. A signal that fails for every member of a fleet of two or more at once is taken to be the observer's
+// failed. Three independent signals feed the verdict: the node (its kubelet's lease, and the control plane's view
+// of it), the pod's readiness (the kubelet's checks of FreeSWITCH itself), and SIP OPTIONS probes the operator sends
+// to each member. A signal that fails for every member of a fleet of two or more at once is taken to be the observer's
 // problem rather than the members', and doesn't count. Failing over a member fences its node (the
 // sip.instruments.com/fenced taint), so no fleet pod lands there again and address pools take their addresses off
 // it, then deletes the pod at once: the StatefulSet starts it again on another node, normally the spare. Calls up on
@@ -186,7 +186,7 @@ type FailoverSpec struct {
 	// failAfterSeconds is how long that many signals must keep failing before the member is Failed.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=3600
-	// +kubebuilder:default=15
+	// +kubebuilder:default=5
 	// +optional
 	FailAfterSeconds *int32 `json:"failAfterSeconds,omitempty"`
 	// notReadySeconds is how long a pod that has been ready must stay unready before readiness counts as a failing
@@ -211,7 +211,7 @@ type SIPProbeSpec struct {
 	// periodSeconds between probes of each member.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=300
-	// +kubebuilder:default=5
+	// +kubebuilder:default=2
 	// +optional
 	PeriodSeconds int32 `json:"periodSeconds,omitempty"`
 	// timeoutSeconds each probe waits for an answer, retransmitting over UDP as a SIP client would.

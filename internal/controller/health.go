@@ -28,8 +28,8 @@ type failoverSettings struct {
 
 func resolveFailover(f *sipv1alpha1.FailoverSpec) failoverSettings {
 	out := failoverSettings{
-		mode: sipv1alpha1.FailoverDetect, signalsRequired: 2, failAfter: 15 * time.Second, notReady: 20 * time.Second,
-		probePeriod: 5 * time.Second, probeTimeout: 2 * time.Second, probeThreshold: 3,
+		mode: sipv1alpha1.FailoverDetect, signalsRequired: 2, failAfter: 5 * time.Second, notReady: 20 * time.Second,
+		probePeriod: 2 * time.Second, probeTimeout: 2 * time.Second, probeThreshold: 3,
 	}
 	if f == nil {
 		return out
@@ -75,11 +75,12 @@ type SIPProbeResults interface {
 
 // healthInput is everything a fleet's health verdict is decided from.
 type healthInput struct {
-	pods  []corev1.Pod
-	nodes map[string]*corev1.Node // by name; a pod's node missing from it is gone
-	sip   SIPProbeResults         // nil: no SIP signal
-	cfg   failoverSettings
-	now   time.Time
+	pods   []corev1.Pod
+	nodes  map[string]*corev1.Node // by name; a pod's node missing from it is gone
+	sip    SIPProbeResults         // nil: no SIP signal
+	leases NodeLeaseResults        // nil: nodes are lost only by their Ready condition
+	cfg    failoverSettings
+	now    time.Time
 }
 
 // signal is one failing view of a member, as evaluated.
@@ -102,8 +103,10 @@ type verdict struct {
 }
 
 // evaluateHealth decides each scheduled pod's health. Signals:
-//   - NodeLost: the pod's node is gone, or its Ready condition isn't True (the node lifecycle controller sets it
-//     Unknown once the kubelet stops renewing its lease), since the condition last changed.
+//   - NodeLost: the pod's node is gone; or its kubelet hasn't renewed the node's lease for a renew interval and a
+//     half (nodeLeaseGrace), counting from the last renewal seen; or its Ready condition isn't True, since the
+//     condition last changed. The lease lapses well before the node lifecycle controller, which waits its
+//     node-monitor-grace-period after the last renewal, marks the node NotReady.
 //   - NotReady: a pod that has been ready (FirstReadyAnnotation), isn't terminating, and runs on a node that isn't
 //     lost, has been unready for notReadySeconds. It doesn't count while the node is lost: the node's loss is what
 //     makes it unready, so it would be the same signal twice.
@@ -123,7 +126,7 @@ func evaluateHealth(in healthInput) []verdict {
 		}
 		v := verdict{pod: p}
 		nodeLost := false
-		if s, lost := nodeLostSignal(p, in.nodes[p.Spec.NodeName]); lost {
+		if s, lost := nodeLostSignal(p, in.nodes[p.Spec.NodeName], in.leases, in.now); lost {
 			nodeLost = true
 			v.signals = append(v.signals, s)
 		}
@@ -207,8 +210,37 @@ func hasBeenReady(p *corev1.Pod) bool {
 	return p.Annotations[sipv1alpha1.FirstReadyAnnotation] != ""
 }
 
-// nodeLostSignal reports whether the control plane has lost the pod's node.
-func nodeLostSignal(p *corev1.Pod, n *corev1.Node) (signal, bool) {
+// nodeLostSignal reports whether the pod's node is lost: gone, its lease lapsed, or not Ready. Of a lapsed lease
+// and a node not Ready, the one that counts first is reported.
+func nodeLostSignal(p *corev1.Pod, n *corev1.Node, leases NodeLeaseResults, now time.Time) (signal, bool) {
+	cond, lost := nodeConditionSignal(p, n)
+	if n == nil {
+		return cond, lost
+	}
+	if lease, lapsed := nodeLeaseSignal(n.Name, leases, now); lapsed && (!lost || lease.counts.Before(cond.counts)) {
+		return lease, true
+	}
+	return cond, lost
+}
+
+// nodeLeaseSignal reports whether the node's kubelet has stopped renewing its lease: no renewal seen for the
+// lease's grace. It began at the last renewal seen, and counts from the grace's end.
+func nodeLeaseSignal(node string, leases NodeLeaseResults, now time.Time) (signal, bool) {
+	if leases == nil {
+		return signal{}, false
+	}
+	seen, grace, ok := leases.Renewal(node)
+	if !ok || now.Sub(seen) < grace {
+		return signal{}, false
+	}
+	// Fixed for as long as the lease stays lapsed, so the member's status, which shows it, doesn't change each time.
+	msg := fmt.Sprintf("node %s's kubelet hasn't renewed its lease since %s", node, seen.UTC().Format(time.RFC3339))
+	return signal{typ: sipv1alpha1.SignalNodeLost, since: seen, counts: seen.Add(grace), message: msg}, true
+}
+
+// nodeConditionSignal reports whether the control plane has lost the pod's node: it is gone, or its Ready
+// condition isn't True.
+func nodeConditionSignal(p *corev1.Pod, n *corev1.Node) (signal, bool) {
 	if n == nil {
 		since := p.CreationTimestamp.Time
 		if c := podCondition(p, corev1.PodReady); c != nil && c.Status != corev1.ConditionTrue {

@@ -6,8 +6,8 @@ description: >
   two minutes (no packet in or out, ARP included, as if it had lost power), longer than FreeSWITCH's media
   timeout and long enough for Kubernetes to mark the node NotReady. The rest of the fleet keeps taking calls: one
   placed as the node goes dark is set up within Kamailio's 5 s failover, and one placed 30 s later, once the
-  dispatcher's probes have taken the node out, without any. The operator finds the member Failed (its node lost
-  and its SIP unanswered), fences the node and starts the pod on the spare edge node, with the member's address.
+  dispatcher's probes have taken the node out, without any. The operator finds the member Failed (its node's lease
+  lapsed and its SIP unanswered) well before Kubernetes marks the node NotReady, fences the node and starts the pod on the spare edge node, with the member's address.
   There FreeSWITCH recovers the call on start (spec.recovery), before the pod turns ready and while the node is
   still dark: the recovery must take exactly the call's two legs, and the call must have audio both ways again,
   through to the runner's hangup, whose BYE must reach the backend through the spare. When the node comes back the
@@ -32,15 +32,15 @@ calls:
     expect:
       status: 200
       tonesHeard: [1000]
-      # Silent from the node going dark until the call is recovered on the spare: NotReady (up to 50 s on kind),
-      # failAfterSeconds (15 s), the pod's start there and the wait for its profiles: 70 s on kind. A call whose audio
-      # never came back would be silent on to its hangup, 45 s after the recovery.
-      maxAudioGapMs: 100000
+      # Silent from the node going dark until the call is recovered on the spare: the node's lease lapsing (10 to 15 s
+      # after it goes dark), failAfterSeconds (5 s), the pod's start there and the wait for its profiles. A call whose
+      # audio never came back would be silent on to its hangup, 45 s after the recovery.
+      maxAudioGapMs: 45000
       endedBy: local
       backend:
         answered: true
         tonesHeard: [600]
-        maxAudioGapMs: 100000
+        maxAudioGapMs: 45000
         endedBy: remote
   # Placed as the node goes dark: Kamailio may still pick it, and must fail over within 5 s.
   - id: b
@@ -58,8 +58,8 @@ calls:
         tonesHeard: [600]
         otherNodeThan: a
   # Placed once the dispatcher's probes have taken the node out (two missed: a probe every 10 s, each failing after
-  # 5 s, so 15 to 25 s), and before Kubernetes marks the node NotReady (about 50 s on kind), so the probes alone
-  # are tested: no failover delay. The operator's dispatcher reloads in between must keep the node out.
+  # 5 s, so 15 to 25 s), likely while the member is being failed over, so the probes alone are tested: no failover
+  # delay. The operator's dispatcher reloads in between must keep the node out.
   - id: c
     to: agent
     startAfter: dark
@@ -80,10 +80,10 @@ actions:
     afterAnswered: a
     afterMs: 10000
     blackoutNodeOf: {of: a, forMs: 120000}
-  - waitNode: {of: a, state: NotReady, timeoutMs: 120000}
-  # NotReady takes the node lifecycle controller up to 50 s; then failAfterSeconds (15 s), then a pod start on the
-  # spare. All within the two minutes the node is dark.
-  - waitFailover: {of: a, timeoutMs: 110000}
+  # The operator finds the node lost once its lease lapses, 10 to 15 s after it goes dark, before the node lifecycle
+  # controller marks it NotReady (up to 50 s on kind); then failAfterSeconds (5 s), then a pod start on the spare.
+  # Waiting for NotReady would take longer than this allows.
+  - waitFailover: {of: a, timeoutMs: 45000}
   - expectRecovered: a
   # Long enough after recovery for audio both ways to show, well inside the media timeout (60 s).
   - afterMs: 45000

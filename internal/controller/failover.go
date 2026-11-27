@@ -59,7 +59,7 @@ func markFirstReady(ctx context.Context, c client.Client, pods []corev1.Pod, now
 func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, fleet fleetRef, cfg settings, pods []corev1.Pod, nodes map[string]*corev1.Node, status *sipv1alpha1.FreeswitchClusterStatus) (time.Duration, error) {
 	now := r.now()
 
-	verdicts := evaluateHealth(healthInput{pods: pods, nodes: nodes, sip: r.SIPProbes, cfg: cfg.failover, now: now})
+	verdicts := evaluateHealth(healthInput{pods: pods, nodes: nodes, sip: r.SIPProbes, leases: r.NodeLeases, cfg: cfg.failover, now: now})
 	r.completeFailover(fsc, cfg.replicas, pods, status.LastFailover, now)
 
 	decision := decideFailover(verdicts, cfg.failover.mode, status.LastFailover)
@@ -114,7 +114,7 @@ func (r *FreeswitchClusterReconciler) carryOut(ctx context.Context, fsc *sipv1al
 			status.LastFailover = rec.DeepCopy()
 		}
 	}
-	keepCalls := d.trigger == sipv1alpha1.FailoverTriggerManual && cfg.recovery && nodeReady(nodes[t.Spec.NodeName])
+	keepCalls := d.trigger == sipv1alpha1.FailoverTriggerManual && cfg.recovery && r.nodeUp(nodes[t.Spec.NodeName], now)
 	if keepCalls && status.LastFailover != nil {
 		// The drain learns of the failover from the annotation in a downward-API file, which the kubelet stops
 		// refreshing once the pod is being deleted: give it time to write the annotation first. The pod's calls go on
@@ -351,6 +351,15 @@ func (r *FreeswitchClusterReconciler) forceKeptCallsFailover(ctx context.Context
 		return 0
 	}
 	return 0
+}
+
+// nodeUp reports whether the node's kubelet is up: the node Ready, and its lease not lapsed.
+func (r *FreeswitchClusterReconciler) nodeUp(n *corev1.Node, now time.Time) bool {
+	if !nodeReady(n) {
+		return false
+	}
+	_, lapsed := nodeLeaseSignal(n.Name, r.NodeLeases, now)
+	return !lapsed
 }
 
 // nodeReady reports whether the node's kubelet says it is Ready.

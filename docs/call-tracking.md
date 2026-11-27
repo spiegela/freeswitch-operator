@@ -281,9 +281,11 @@ Not built yet:
 
 With failover and `spec.recovery`, a lost node's calls move: the operator fences the node and starts the member on
 the spare, the pool gives it the member's address, and FreeSWITCH recovers the calls as it starts there, before its
-pod turns ready. A call is silent from the node's loss until then: 70 s on kind (the node NotReady after about
-45 s, Failed 15 s later, then the pod's start on the spare). New calls go elsewhere meanwhile, within
-Kamailio's 5 s failover at first, then with no delay once the dispatcher's probes have taken the node out.
+pod turns ready. A call is silent from the node's loss until then: about 23 s on kind (the node's lease lapsed
+10 s after it went dark, the member was Failed 5 s later, and its pod was ready on the spare 12 s after that),
+where waiting for Kubernetes to mark the node NotReady, 47 s after it went dark, made it about 70 s. New calls go
+elsewhere meanwhile, within Kamailio's 5 s failover at first, then with no delay once the dispatcher's probes have
+taken the node out.
 sipbench's `node-lost-mid-call` checks it: it takes a call's node off the network for two minutes (tc drop filters
 on the node's own interface), checks the rest of the fleet keeps taking calls, waits for the operator to fail the
 member over to the spare, and checks the call is back there with audio both ways.
