@@ -48,6 +48,8 @@ func run() error {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lv}))
 	slog.SetDefault(log) // the SIP and media libraries log through the default logger
+	// MOCK_SIP_DEBUG=true writes every SIP message sent and received to stderr.
+	sip.SIPDebug = os.Getenv("MOCK_SIP_DEBUG") == "true"
 
 	cfg := &mock.Config{Routes: map[string]mock.Route{}}
 	if *cfgPath != "" {

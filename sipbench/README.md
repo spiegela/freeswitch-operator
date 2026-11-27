@@ -67,7 +67,7 @@ Each of `-edge`, `-mock`, `-esl`, `-esl-password`, `-target`, `-caps`, `-run` an
 summary to stderr. A variable set to the empty string counts as set,
 so `SIPBENCH_ESL=""` turns the event socket off rather than falling back to `freeswitch:8021`.
 
-Set `SIPBENCH_SIP_DEBUG=true` with `-log-level debug` to log every SIP message the runner sends and receives.
+Set `SIPBENCH_SIP_DEBUG=true` with `-log-level debug` to log every SIP message the runner sends and receives. The mock backend does the same with `MOCK_SIP_DEBUG=true` (`kubectl -n telephony set env deploy/mockbackend MOCK_SIP_DEBUG=true`).
 
 ## Results
 
@@ -264,6 +264,7 @@ the RFC 4475 or ETSI texts.
 | `crashFreeswitchOf: <call>` | crash FreeSWITCH in the call's pod (`fsctl crash`: no drain, its calls left in the recovery table); done once the kubelet has restarted it and it is ready, and fails if it doesn't crash. Needs `call-recovery` |
 | `expectRecovered: <call>` | check the recovery on start in the call's pod (the operator's postStart hook, which runs `sofia recover`; it writes what it did to `/run/freeswitch-operator/recovered`); waits for it, and fails unless it took exactly the legs of the scenario's live calls on that pod. Needs `call-recovery` |
 | `moveFreeswitchOf: <call>` | move the call's pod to a spare edge node, as a lost node's would move: cordon its node, delete the pod, crash FreeSWITCH under its drain (so the kubelet doesn't restart it in place, where it would recover the calls itself), then delete the pod at once; done once the replacement takes calls on another node, and fails unless the pod has an external address and the replacement holds the same one. Needs `spare-node` and `call-recovery` |
+| `failOverOf: <call>` | ask the operator to fail over the call's member now, as a person would: annotate its pod `sip.instruments.com/fail-over=true`; done at once (`waitFailover` waits for the replacement). The operator fences the node, which the runner unfences when the scenario ends. Needs `spare-node` |
 | `uncordon: {}` | uncordon every node this scenario cordoned |
 | `rollFleet: {}` | set `SIPBENCH_ROLL` on the fleet's pod template, so the operator rolls every pod |
 | `breakConfig: {configMap, key, replace or match, with}` | edit a ConfigMap the fleet reads: the first `replace` (literal text) or the first match of `match` (a Go regular expression; `with` may use `$1`) |
@@ -279,7 +280,8 @@ A call's pod is found from where the mock received the INVITE: the fleet runs on
 member's address. Whatever happens, a scenario ends with its cordoned nodes uncordoned and its edited ConfigMaps
 put back. Every action but `hangup` needs the `fleet` capability, and a scenario using them must say
 `requires: [fleet]`; `blackoutNodeOf` also needs `node-blackout`, `crashFreeswitchOf` and `expectRecovered` `call-recovery`, and
-`moveFreeswitchOf` both `spare-node` and `call-recovery`. The runner's access is in `k8s/runner-rbac.yaml`.
+`moveFreeswitchOf` both `spare-node` and `call-recovery`, and `failOverOf` `spare-node`. The runner's access is in
+`k8s/runner-rbac.yaml`.
 Results carry a `timeline` of what each action did and when.
 
 `blackoutNodeOf` can't reach a node from the runner's pod, so it runs `sipbench blackout` on the node: a pod placed

@@ -140,8 +140,29 @@ sipbench:dev	"$KIND" load docker-image --name "$CLUSTER" sipbench:dev
 EOT
 }
 
+# kind masquerades pod traffic to anything outside the pod network, the nodes' own addresses included, as an EKS
+# pool with the VPC CNI doesn't. That bites the bench: a backend pod's request to a FreeSWITCH node (a BYE, a REFER)
+# leaves a conntrack entry from the backend's node address, and FreeSWITCH's next call to that backend then clashes
+# with it, so conntrack moves FreeSWITCH's source port (5080 becomes, say, 39557) and the backend stamps that port
+# in the Via. FreeSWITCH keeps the stamped Via (sip_recover_via) and resends it with a call it recovers, and the
+# backend answers that call's re-INVITE at the old port, which nothing holds any more: the call is lost. So let pod
+# traffic reach the nodes unmasqueraded, ahead of kind's masquerade agent (after kube-proxy's own rules, which
+# masquerade only what they mark). Idempotent; a node restarted by docker needs it again (deploy reapplies it).
+nodes_unmasqueraded() {
+  local pods nodes node
+  pods=$("${KUBECTL[@]}" -n kube-system get configmap kube-proxy -o jsonpath='{.data.config\.conf}' \
+    | awk '$1 == "clusterCIDR:" {print $2}')
+  nodes=$(docker network inspect kind -f '{{range .IPAM.Config}}{{.Subnet}} {{end}}' | tr ' ' '\n' | grep -v : | head -1)
+  [ -n "$pods" ] && [ -n "$nodes" ] || { echo "could not read the pod and node networks" >&2; return 1; }
+  for node in $("$KIND" get nodes --name "$CLUSTER"); do
+    docker exec "$node" sh -c "iptables -t nat -C POSTROUTING -s $pods -d $nodes -j RETURN 2>/dev/null \
+      || iptables -t nat -I POSTROUTING 2 -s $pods -d $nodes -j RETURN"
+  done
+}
+
 deploy() {
   make -C "$ROOT" kustomize >/dev/null
+  nodes_unmasqueraded
   images
   load_images
   tidy_images
