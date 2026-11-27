@@ -364,7 +364,7 @@ spec:
                   with the defaults: health is reported, and only pods annotated sip.instruments.com/fail-over are failed over.
                 properties:
                   failAfterSeconds:
-                    default: 15
+                    default: 5
                     description: failAfterSeconds is how long that many signals must
                       keep failing before the member is Failed.
                     format: int32
@@ -415,7 +415,7 @@ spec:
                         minimum: 1
                         type: integer
                       periodSeconds:
-                        default: 5
+                        default: 2
                         description: periodSeconds between probes of each member.
                         format: int32
                         maximum: 300
@@ -621,6 +621,20 @@ spec:
                 description: |-
                   recovery, when set, recovers the calls tracked under a pod's address each time FreeSWITCH starts there. It
                   needs call tracking in the configuration and a required external address. Unset, nothing recovers calls.
+                properties:
+                  fenceImage:
+                    description: |-
+                      fenceImage is an image with /freeswitch-fence: the operator's freeswitch-exporter image, the one
+                      spec.metrics.exporterImage names; pin it by digest. It is part of the pod template, so changing it rolls the
+                      fleet one drained node at a time.
+                    minLength: 1
+                    type: string
+                  fenceImagePullPolicy:
+                    description: fenceImagePullPolicy for the init container that
+                      copies freeswitch-fence into the pod.
+                    type: string
+                required:
+                - fenceImage
                 type: object
               replicas:
                 default: 2

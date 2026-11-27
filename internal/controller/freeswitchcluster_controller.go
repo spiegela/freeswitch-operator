@@ -80,6 +80,9 @@ type FreeswitchClusterReconciler struct {
 	SIPProbes SIPProbeResults
 	// ProbeEvents, when set, delivers fleets whose SIP signal changed (the SIP prober's Events).
 	ProbeEvents <-chan event.GenericEvent
+	// NodeLeases reads when each node's lease was last seen renewed; nil means a node is lost only by its Ready
+	// condition. Its Events go on ProbeEvents too.
+	NodeLeases NodeLeaseResults
 	// Recorder records events on the fleet; nil records none.
 	Recorder events.EventRecorder
 
@@ -93,6 +96,7 @@ type FreeswitchClusterReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=services;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;patch;delete
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=sip.instruments.com,resources=sipaddresspools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
@@ -567,28 +571,7 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 		if listChanged {
 			changedAt = r.now().UTC().Format(time.RFC3339Nano)
 		}
-		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-			if cm.Labels == nil {
-				cm.Labels = map[string]string{}
-			}
-			maps.Copy(cm.Labels, commonLabels(fsc))
-			if cm.Annotations == nil {
-				cm.Annotations = map[string]string{}
-			}
-			cm.Annotations[sipv1alpha1.DispatcherHashAnnotation] = hash
-			cm.Annotations[sipv1alpha1.DispatcherUpdatedAtAnnotation] = changedAt
-			if startingList != "" {
-				cm.Annotations[sipv1alpha1.StartingAddressesAnnotation] = startingList
-			} else {
-				delete(cm.Annotations, sipv1alpha1.StartingAddressesAnnotation)
-			}
-			if cm.Data == nil {
-				cm.Data = map[string]string{}
-			}
-			cm.Data[dispatcherListKey] = content
-			return controllerutil.SetControllerReference(fsc, cm, r.Scheme)
-		})
-		if err != nil {
+		if err := r.writeDispatcherList(ctx, fsc, cm, content, hash, changedAt, startingList); err != nil {
 			return 0, err
 		}
 	}
@@ -597,14 +580,7 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 		dispatcherListUpdates.WithLabelValues(fleet.labels()...).Inc()
 
 		if notifier != nil {
-			for _, uri := range removedURIs(parseDispatcherURIs(previous, cfg.dispatcherSetID), parseDispatcherURIs(content, cfg.dispatcherSetID)) {
-				err := notifier.SetInactive(ctx, cfg.dispatcherSetID, uri)
-				recordSetInactive(fleet, err)
-				if err != nil {
-					// Kamailio's own probing and the paused node's 503s still protect calls; keep going.
-					log.Error(err, "could not mark destination inactive", "uri", uri)
-				}
-			}
+			deactivateRemoved(ctx, notifier, fleet, cfg.dispatcherSetID, previous, content)
 		}
 	}
 	if notifier != nil && len(starting) > 0 {
@@ -656,6 +632,45 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 	}
 	status.DispatcherReloadedHash = status.DispatcherHash
 	return 0, nil
+}
+
+// writeDispatcherList writes the list, its hash, when it changed and the starting pods' addresses to the
+// dispatcher ConfigMap, in one update.
+func (r *FreeswitchClusterReconciler) writeDispatcherList(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, cm *corev1.ConfigMap, content, hash, changedAt, startingList string) error {
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+		if cm.Labels == nil {
+			cm.Labels = map[string]string{}
+		}
+		maps.Copy(cm.Labels, commonLabels(fsc))
+		if cm.Annotations == nil {
+			cm.Annotations = map[string]string{}
+		}
+		cm.Annotations[sipv1alpha1.DispatcherHashAnnotation] = hash
+		cm.Annotations[sipv1alpha1.DispatcherUpdatedAtAnnotation] = changedAt
+		if startingList != "" {
+			cm.Annotations[sipv1alpha1.StartingAddressesAnnotation] = startingList
+		} else {
+			delete(cm.Annotations, sipv1alpha1.StartingAddressesAnnotation)
+		}
+		if cm.Data == nil {
+			cm.Data = map[string]string{}
+		}
+		cm.Data[dispatcherListKey] = content
+		return controllerutil.SetControllerReference(fsc, cm, r.Scheme)
+	})
+	return err
+}
+
+// deactivateRemoved takes the destinations that left the list out of the running Kamailio at once.
+func deactivateRemoved(ctx context.Context, notifier DispatcherNotifier, fleet fleetRef, setID int32, previous, content string) {
+	for _, uri := range removedURIs(parseDispatcherURIs(previous, setID), parseDispatcherURIs(content, setID)) {
+		err := notifier.SetInactive(ctx, setID, uri)
+		recordSetInactive(fleet, err)
+		if err != nil {
+			// Kamailio's own probing and the paused node's 503s still protect calls; keep going.
+			logf.FromContext(ctx).Error(err, "could not mark destination inactive", "uri", uri)
+		}
+	}
 }
 
 // onlyListNotLoaded reports whether err, or every error joined in it, is errListNotLoaded: Kamailio answered, but

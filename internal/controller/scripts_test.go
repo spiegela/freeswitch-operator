@@ -144,12 +144,22 @@ esac
 }
 
 // With spec.recovery (the fail-over file is there), a member a person fails over stops FreeSWITCH at once without
-// hanging up its calls; any other drain goes on as usual, after a short look for the annotation.
+// hanging up its calls, and so does one the operator failed over automatically (freeswitch-fence exits 0: the pod's
+// token is refused); any other drain goes on as usual, after a short look for the annotation.
 func TestDrainKeepsCallsOfAMemberFailedOver(t *testing.T) {
 	for _, tc := range []struct {
 		name, failOver string
+		fence          string // freeswitch-fence's exit code; empty for none installed
 		crash          bool
-	}{{"failed over", "true", true}, {"not failed over", "", false}} {
+		said           string
+	}{
+		{"failed over by hand", "true", "", true, "failed over by hand"},
+		{"not failed over", "", "", false, ""},
+		{"failed over automatically", "", "0", true, "this pod was failed over"},
+		{"pod still there", "", "1", false, ""},
+		{"fence can't tell", "", "2", false, ""},
+		{"by hand, pod still there", "true", "1", true, "failed over by hand"},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			script := strings.ReplaceAll(drainScript, drainMarker, filepath.Join(dir, "draining"))
@@ -157,14 +167,18 @@ func TestDrainKeepsCallsOfAMemberFailedOver(t *testing.T) {
 				t.Fatal(err)
 			}
 			fake := "#!/bin/sh\necho \"$*\" >> '" + dir + "/log'\ncase \"$*\" in\n  *\"-x status\") echo 'FreeSWITCH (Version 1.10.10) is ready'; echo '0 session(s) - peak 2, last 5min 2 ' ;;\nesac\n"
-			for file, body := range map[string]string{"fs_cli": fake, "fail-over": tc.failOver} {
+			files := map[string]string{"fs_cli": fake, "fail-over": tc.failOver}
+			if tc.fence != "" {
+				files["fence"] = "#!/bin/sh\necho \"$*\" > '" + dir + "/fence.args'\nexit " + tc.fence + "\n"
+			}
+			for file, body := range files {
 				if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o755); err != nil {
 					t.Fatal(err)
 				}
 			}
 			cmd := exec.Command("/bin/sh", filepath.Join(dir, "drain.sh"))
 			cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "FS_FAIL_OVER_FILE=" + filepath.Join(dir, "fail-over"),
-				"FS_DRAIN_LOG=" + filepath.Join(dir, "drain.log")}
+				"FS_DRAIN_LOG=" + filepath.Join(dir, "drain.log"), "FS_FENCE=" + filepath.Join(dir, "fence")}
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("drain: %v %s", err, out)
 			}
@@ -174,8 +188,14 @@ func TestDrainKeepsCallsOfAMemberFailedOver(t *testing.T) {
 				t.Fatalf("crash %v, pause %v; fs_cli calls %q", crashed, paused, log)
 			}
 			said, _ := os.ReadFile(filepath.Join(dir, "drain.log"))
-			if tc.crash != strings.Contains(string(said), "failed over by hand") {
-				t.Fatalf("log %q", said)
+			if (tc.said == "") != (len(said) == 0) || !strings.Contains(string(said), tc.said) {
+				t.Fatalf("log %q, want %q", said, tc.said)
+			}
+			if tc.fence != "" {
+				args, _ := os.ReadFile(filepath.Join(dir, "fence.args"))
+				if want := "check -token " + fenceTokenDir + "/token -ca " + fenceTokenDir + "/ca.crt\n"; string(args) != want {
+					t.Fatalf("fence ran with %q, want %q", args, want)
+				}
 			}
 		})
 	}

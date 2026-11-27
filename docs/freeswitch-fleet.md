@@ -35,7 +35,8 @@ spec:
   drain:
     maxDrainSeconds: 7200           # upper bound on waiting for live calls to finish
   # liveness: {}                    # opt-in hang detection (below)
-  # recovery: {}                    # opt-in: take back tracked calls when FreeSWITCH starts (call-tracking.md)
+  # recovery:                       # opt-in: take back tracked calls when FreeSWITCH starts (call-tracking.md)
+  #   fenceImage: ghcr.io/spiegela/freeswitch-exporter@sha256:...  # the drain's fence check
   dispatcher:
     setID: 1                        # Kamailio dispatcher set for this fleet
     configMapName: edge-dispatcher  # the operator writes dispatcher.list here
@@ -46,9 +47,9 @@ spec:
   failover:                         # optional: health monitoring and failover to a spare node (below)
     mode: Detect                    # Detect (report only) | Automatic
     signalsRequired: 2              # independent signals that must fail together: 1 or 2
-    failAfterSeconds: 15            # ...for this long before a member is Failed
+    failAfterSeconds: 5             # ...for this long before a member is Failed
     notReadySeconds: 20             # how long unready counts as a blip
-    sipProbe: {periodSeconds: 5, timeoutSeconds: 2, failureThreshold: 3}
+    sipProbe: {periodSeconds: 2, timeoutSeconds: 2, failureThreshold: 3}
 status:
   readyReplicas: 2
   members:                          # one entry per pod
@@ -148,14 +149,22 @@ start its pod on a spare.** Every fleet gets the health report, with `spec.failo
 
 | Signal | Fails when | Observer |
 | --- | --- | --- |
-| `NodeLost` | the node's Ready condition isn't True (the node lifecycle controller sets it Unknown once the kubelet stops renewing its lease, about 40 to 50 s), or the Node is gone | the control plane |
+| `NodeLost` | the node's kubelet hasn't renewed its lease for a renew interval and a half (15 s by default), or the node's Ready condition isn't True, or the Node is gone | the kubelet's lease, and the control plane |
 | `NotReady` | a pod that has been ready is unready for `notReadySeconds` (20) on a node that isn't lost: FreeSWITCH fails the kubelet's own checks, or keeps restarting | the kubelet |
-| `SIPUnreachable` | `failureThreshold` (3) SIP OPTIONS in a row go unanswered, sent every `periodSeconds` (5) to the member's SIP port over the dispatcher transport | the operator |
+| `SIPUnreachable` | `failureThreshold` (3) SIP OPTIONS in a row go unanswered, sent every `periodSeconds` (2) to the member's SIP port over the dispatcher transport | the operator |
 
 - **Any SIP response counts as an answer.** A 403 from an ACL or a 503 while paused still shows a live SIP stack.
   The operator probes itself rather than reading Kamailio's dispatcher state, since a member that goes unready
   leaves the dispatcher list and Kamailio stops probing it. So the operator's pods must reach the edge nodes' SIP
   port, as Kamailio's do.
+- **A lost node shows in its lease first.** Each kubelet renews its node's Lease (in `kube-node-lease`) every
+  quarter of the lease's duration, 10 s of the default 40 s. The operator notes when it sees each renewal, by its own
+  clock (a node's clock may be off), and counts the node lost once none has come for one and a half renew intervals:
+  15 s by default. The node lifecycle controller waits its `node-monitor-grace-period` (40 to 50 s, and fixed on a
+  managed control plane like EKS) before it marks the node NotReady, which counts too. A shorter kubelet
+  `nodeLeaseDurationSeconds` on the edge nodes (on EKS, in the node group's kubelet configuration) shortens the
+  lease's grace with it: 7.5 s for 20 s. The operator needs `list` and `watch` on leases, and after a restart counts
+  each lease as renewed when it first sees it.
 - **Only a pod that has been ready counts as `NotReady`** (the operator marks it `sip.instruments.com/first-ready`),
   and readiness doesn't count while the node is lost (that would be the node's loss twice).
 - **A signal failing for every member that has been ready, when two or more have, is the observer's problem**
@@ -164,7 +173,7 @@ start its pod on a spare.** Every fleet gets the health report, with `spec.failo
   configuration) is left out of that test, so it can't hide another member's real failure.
 
 A member with no failing signal is `Healthy`; one with any is `Suspect`; one with `signalsRequired` (2) counted
-signals failing together for `failAfterSeconds` (15) is `Failed`. With 2, a node whose kubelet is lost but whose
+signals failing together for `failAfterSeconds` (5) is `Failed`. With 2, a node whose kubelet is lost but whose
 FreeSWITCH still answers SIP stays Suspect, as does a member Kamailio still reaches but the operator can't. Each
 member's verdict and signals are in `status.members[].health`, the fleet's `MembersHealthy` condition sums them up,
 transitions are events on the fleet, and [metrics and alerts](metrics.md) follow them.
@@ -209,7 +218,10 @@ A failover:
    that delete (a FreeSWITCH that doesn't answer) is deleted at once, and its calls are lost.
    `failover-by-hand-keeps-call` checks it on kind: there the replacement was ready on the spare about 16 s after
    the request, and the call was silent for about 13 s (measured before the 5 s wait was added). An automatic failover always deletes at once: its member's
-   calls are lost already, or its kubelet can't run a drain.
+   calls are lost already, or its kubelet can't run a drain. If its node comes back, the kubelet stops the old pod,
+   giving its drain one second, and the drain, finding the API server refuses the pod's own token (the pod is
+   gone), stops FreeSWITCH without hanging up the calls the spare recovered
+   ([call tracking](call-tracking.md#configure-the-freeswitchcluster)).
 
 `status.lastFailover` records the failover until the replacement is ready (or the fleet is scaled down past it). It
 is written before the node is fenced, and only over the copy of the fleet the decision was made from (one written

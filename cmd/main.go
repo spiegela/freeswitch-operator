@@ -29,10 +29,12 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -177,8 +179,12 @@ func main() {
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "d927555f.instruments.com",
+		// The only Leases the operator reads through its cache are the nodes' (NodeLeases).
+		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
+			&coordinationv1.Lease{}: {Namespaces: map[string]cache.Config{controller.NodeLeaseNamespace: {}}},
+		}},
+		LeaderElection:   enableLeaderElection,
+		LeaderElectionID: "d927555f.instruments.com",
 		// Step down when the manager stops, so an upgraded operator takes over at once instead of after the lease
 		// expires. Safe only because main returns as soon as the manager stops: keep it that way (no cleanup
 		// after mgr.Start returns).
@@ -195,6 +201,12 @@ func main() {
 		setupLog.Error(err, "Failed to add the SIP prober")
 		os.Exit(1)
 	}
+	// NodeLeases follows the kubelets' leases, to find a lost node sooner than the control plane marks it NotReady.
+	leases := &controller.NodeLeases{Client: mgr.GetClient(), Events: prober.Events}
+	if err := mgr.Add(leases); err != nil {
+		setupLog.Error(err, "Failed to add the node lease watch")
+		os.Exit(1)
+	}
 	if err := (&controller.FreeswitchClusterReconciler{
 		Client:      mgr.GetClient(),
 		APIReader:   mgr.GetAPIReader(),
@@ -202,6 +214,7 @@ func main() {
 		NewNotifier: controller.NewJSONRPCNotifier,
 		SIPProbes:   prober,
 		ProbeEvents: prober.Events,
+		NodeLeases:  leases,
 		Recorder:    mgr.GetEventRecorder("freeswitch-operator"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "freeswitchcluster")

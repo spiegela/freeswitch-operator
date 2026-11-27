@@ -18,13 +18,14 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 # Copy the Go source (relies on .dockerignore to filter)
 COPY . .
 
-# Build all four in one step, sharing the build cache: only the first compiles the dependencies. GOARCH has no
+# Build all five in one step, sharing the build cache: only the first compiles the dependencies. GOARCH has no
 # default, so the binaries are built for the target platform buildx passes (the build machine's own for a plain
 # docker build).
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     export CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
  && go build -o manager cmd/main.go \
  && go build -o freeswitch-exporter ./cmd/freeswitch-exporter \
+ && go build -o freeswitch-fence ./cmd/freeswitch-fence \
  && go build -o address-agent ./cmd/address-agent \
  && go build -o call-tracer ./cmd/call-tracer
 
@@ -33,6 +34,8 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 FROM gcr.io/distroless/static:nonroot AS exporter
 WORKDIR /
 COPY --from=builder /workspace/freeswitch-exporter .
+# The drain's fence check (spec.recovery.fenceImage): an init container copies it into each FreeSWITCH pod.
+COPY --from=builder /workspace/freeswitch-fence .
 USER 65532:65532
 ENTRYPOINT ["/freeswitch-exporter"]
 

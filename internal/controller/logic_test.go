@@ -647,7 +647,7 @@ func TestAddressWaitOnlyForRequiredAddresses(t *testing.T) {
 // spec.recovery runs the recover script as the postStart hook, from the scripts ConfigMap.
 func TestBuildStatefulSetRecovery(t *testing.T) {
 	fsc := testCluster()
-	fsc.Spec.Recovery = &sipv1alpha1.RecoverySpec{}
+	fsc.Spec.Recovery = &sipv1alpha1.RecoverySpec{FenceImage: "exporter:fence", FenceImagePullPolicy: corev1.PullNever}
 	c := buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec.Containers[0]
 	if h := c.Lifecycle.PostStart; h == nil || h.Exec == nil || !slices.Equal(h.Exec.Command, []string{shell, scriptsDir + "/" + recoverScriptName}) {
 		t.Fatalf("postStart %+v, want the recover script", h)
@@ -686,15 +686,49 @@ func TestBuildStatefulSetRecovery(t *testing.T) {
 		!slices.Contains(e.Env, corev1.EnvVar{Name: "RECOVERED_FILE", Value: recoveredFile}) {
 		t.Fatalf("exporter mounts %+v env %+v, want the run volume read-only and RECOVERED_FILE", e.VolumeMounts, e.Env)
 	}
-
 	// Without recovery there is no run volume, and the exporter reads no file.
 	fsc.Spec.Recovery = nil
 	spec = buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec
-	if slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumeRun }) || hasFailOver(spec) {
-		t.Fatal("a run volume or the fail-over file without recovery")
+	if slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumeRun || v.Name == volumeFenceToken }) || hasFailOver(spec) ||
+		slices.ContainsFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == fenceContainerName }) {
+		t.Fatal("a run volume, the fence or the fail-over file without recovery")
 	}
 	e = spec.InitContainers[slices.IndexFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == exporterContainerName })]
 	if len(e.VolumeMounts) != 0 || slices.ContainsFunc(e.Env, func(v corev1.EnvVar) bool { return v.Name == "RECOVERED_FILE" }) {
 		t.Fatalf("exporter mounts %+v env %+v without recovery", e.VolumeMounts, e.Env)
+	}
+}
+
+// With spec.recovery the drain gets its fence check, installed by an init container from fenceImage.
+func TestBuildStatefulSetFence(t *testing.T) {
+	fsc := testCluster()
+	fsc.Spec.Recovery = &sipv1alpha1.RecoverySpec{FenceImage: "exporter:fence", FenceImagePullPolicy: corev1.PullNever}
+	spec := buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec
+	c := spec.Containers[0]
+	// The drain's fence check: copied onto the run volume by the first init container, from fenceImage, and reading
+	// the pod's own token and the cluster's CA from a projected volume.
+	if f := spec.InitContainers[0]; f.Name != fenceContainerName || f.Image != "exporter:fence" || f.ImagePullPolicy != corev1.PullNever ||
+		!slices.Equal(f.Command, []string{"/freeswitch-fence", "install", fenceFile}) ||
+		!slices.ContainsFunc(f.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == volumeRun && m.MountPath == runDir && !m.ReadOnly }) {
+		t.Fatalf("first init container %+v, want freeswitch-fence installed onto the run volume", f)
+	}
+	if !strings.HasPrefix(fenceFile, runDir+"/") {
+		t.Fatalf("fence at %s, off the run volume", fenceFile)
+	}
+	tv := spec.Volumes[slices.IndexFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumeFenceToken })]
+	if p := tv.Projected; p == nil || len(p.Sources) != 2 || p.Sources[0].ServiceAccountToken == nil || p.Sources[0].ServiceAccountToken.Path != "token" ||
+		p.Sources[0].ServiceAccountToken.Audience != "" || p.Sources[1].ConfigMap == nil || p.Sources[1].ConfigMap.Name != "kube-root-ca.crt" {
+		t.Fatalf("fence token volume %+v", tv)
+	}
+	if !slices.ContainsFunc(c.VolumeMounts, func(m corev1.VolumeMount) bool {
+		return m.Name == volumeFenceToken && m.MountPath == fenceTokenDir && m.ReadOnly
+	}) {
+		t.Fatalf("mounts %+v, want the fence token at %s", c.VolumeMounts, fenceTokenDir)
+	}
+	// A fleet stored before fenceImage was required gets no fence, rather than a container without an image that
+	// the API server would refuse; its drain then finds no fence and drains as before.
+	fsc.Spec.Recovery.FenceImage = ""
+	if slices.ContainsFunc(buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec.InitContainers, func(c corev1.Container) bool { return c.Name == fenceContainerName }) {
+		t.Fatal("a fence without a fenceImage")
 	}
 }

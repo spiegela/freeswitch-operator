@@ -1,0 +1,51 @@
+name: node-blip-mid-call
+area: fleet
+long: true
+description: >
+  An edge node goes dark mid-call for 35 s, then comes back. That is long enough for the operator to find the member
+  Failed (its node's lease lapsed and its SIP unanswered), fence the node and start the pod on the spare, which
+  recovers the call there, but well short of FreeSWITCH's media timeout. So when the node comes back, the old pod's
+  FreeSWITCH is still running, still holding the call, until the kubelet finds the pod deleted and stops it. The
+  call must survive that: audio both ways after the recovery, through to the runner's hangup, whose BYE must reach
+  the backend through the spare, with no BYE from the old node before it. When the scenario ends the runner
+  unfences the node. Needs call tracking and recovery on start, and a spare edge node holding no address of its
+  own, as on kind.
+requires: [mock, fleet, node-blackout, spare-node, call-recovery]
+timeoutMs: 600000
+metrics:
+  - {query: 'sum(freeswitch_operator_failovers_total{result="ok"})', increase: 1}
+backend:
+  routes:
+    throughout:
+      steps:
+        - answer: {}
+        - tone: {hz: 1000, ms: 240000}
+calls:
+  - id: a
+    to: throughout
+    steps:
+      - tone: {hz: 600, ms: 240000}
+    maxDurationMs: 250000
+    expect:
+      status: 200
+      tonesHeard: [1000]
+      # Silent from the node going dark until the call is recovered on the spare, as in node-lost-mid-call.
+      maxAudioGapMs: 45000
+      endedBy: local
+      backend:
+        answered: true
+        tonesHeard: [600]
+        maxAudioGapMs: 45000
+        endedBy: remote
+actions:
+  - afterAnswered: a
+    afterMs: 10000
+    blackoutNodeOf: {of: a, forMs: 35000}
+  - waitFailover: {of: a, timeoutMs: 45000}
+  - expectRecovered: a
+  # The node is back by now; the old pod is stopped once its kubelet catches up. The call must still be up, with
+  # audio both ways, well after that.
+  - waitNode: {of: a, state: Ready, timeoutMs: 120000}
+  - afterMs: 40000
+    hangup: a
+  - waitFleetCurrent: {timeoutMs: 300000}

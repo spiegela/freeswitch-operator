@@ -21,6 +21,7 @@ const (
 	// addressWaitContainerName is the init container that waits for a pool address.
 	addressWaitContainerName = "wait-for-address"
 	exporterContainerName    = "exporter"
+	fenceContainerName       = "install-fence"
 	portMetrics              = "metrics"
 
 	// Volume and port names both fleets' pods use.
@@ -29,10 +30,13 @@ const (
 	volumeConfig  = "config"
 	// volumeRun is an emptyDir FreeSWITCH and the exporter share, at runDir: the recovery on start writes what it
 	// did there (recoveredFile), for the exporter's metrics. It lasts as long as the pod, across restarts.
-	volumeRun  = "operator-run"
-	runDir     = "/run/freeswitch-operator"
-	portSIPUDP = "sip-udp"
-	portSIPTCP = "sip-tcp"
+	volumeRun = "operator-run"
+	runDir    = "/run/freeswitch-operator"
+	// volumeFenceToken holds the pod's own service account token and the cluster's CA, for freeswitch-fence: a
+	// projected volume of its own, so the check doesn't depend on the service account mounting its token.
+	volumeFenceToken = "fence-token"
+	portSIPUDP       = "sip-udp"
+	portSIPTCP       = "sip-tcp"
 
 	// drainGraceMargin is added to maxDrainSeconds for the pod's termination grace period, so the preStop drain
 	// always finishes before the kubelet's SIGKILL.
@@ -299,8 +303,12 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		templateAnnotations = map[string]string{configHashAnnotation: conf.hash}
 	}
 	if cfg.recovery {
-		volumes = append(volumes, corev1.Volume{Name: volumeRun, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
-		mounts = append(mounts, corev1.VolumeMount{Name: volumeRun, MountPath: runDir})
+		volumes = append(volumes,
+			corev1.Volume{Name: volumeRun, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+			fenceTokenVolume())
+		mounts = append(mounts,
+			corev1.VolumeMount{Name: volumeRun, MountPath: runDir},
+			corev1.VolumeMount{Name: volumeFenceToken, MountPath: fenceTokenDir, ReadOnly: true})
 	}
 
 	container := corev1.Container{
@@ -362,7 +370,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 			},
 		},
 		Containers:     []corev1.Container{container},
-		InitContainers: slices.Concat(addressWaitContainers(fsc, cfg), exporterContainers(cfg.metrics, cfg.recovery)),
+		InitContainers: slices.Concat(fenceContainers(fsc.Spec.Recovery), addressWaitContainers(fsc, cfg), exporterContainers(cfg.metrics, cfg.recovery)),
 		Volumes:        volumes,
 	}
 
@@ -426,17 +434,40 @@ func addressWaitContainers(fsc *sipv1alpha1.FreeswitchCluster, cfg settings) []c
 		Command:         []string{shell, "-c", addressWaitScript},
 		Env:             []corev1.EnvVar{{Name: "FS_EXTERNAL_ADDRESS_FILE", Value: externalAddrFile}},
 		VolumeMounts:    []corev1.VolumeMount{{Name: volumePodInfo, MountPath: podInfoDir, ReadOnly: true}},
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("5m"), corev1.ResourceMemory: resource.MustParse("8Mi")},
-			Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("32Mi")},
+		Resources:       oneShotResources(),
+		SecurityContext: helperSecurityContext(),
+	}}
+}
+
+// fenceTokenVolume is the pod's own service account token, which the API server refuses once the pod is gone,
+// and the cluster's CA, for freeswitch-fence (drainScript).
+func fenceTokenVolume() corev1.Volume {
+	return corev1.Volume{Name: volumeFenceToken, VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+		Sources: []corev1.VolumeProjection{
+			{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Path: "token", ExpirationSeconds: ptr.To[int64](3600)}},
+			{ConfigMap: &corev1.ConfigMapProjection{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "kube-root-ca.crt"},
+				Items:                []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}},
+			}},
 		},
-		SecurityContext: &corev1.SecurityContext{
-			RunAsNonRoot:             ptr.To(true),
-			RunAsUser:                ptr.To[int64](65532),
-			AllowPrivilegeEscalation: ptr.To(false),
-			ReadOnlyRootFilesystem:   ptr.To(true),
-			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-		},
+	}}}
+}
+
+// fenceContainers copies freeswitch-fence from spec.recovery's fenceImage into the run volume, where the drain runs
+// it (drainScript). Nil without spec.recovery, or without a fenceImage (a fleet stored before it was required): the
+// drain then finds no fence and drains as before.
+func fenceContainers(r *sipv1alpha1.RecoverySpec) []corev1.Container {
+	if r == nil || r.FenceImage == "" {
+		return nil
+	}
+	return []corev1.Container{{
+		Name:            fenceContainerName,
+		Image:           r.FenceImage,
+		ImagePullPolicy: r.FenceImagePullPolicy,
+		Command:         []string{"/freeswitch-fence", "install", fenceFile},
+		VolumeMounts:    []corev1.VolumeMount{{Name: volumeRun, MountPath: runDir}},
+		Resources:       oneShotResources(),
+		SecurityContext: helperSecurityContext(),
 	}}
 }
 
@@ -476,13 +507,27 @@ func exporterContainers(m *sipv1alpha1.FreeswitchMetricsSpec, recovery bool) []c
 		VolumeMounts:    mounts,
 		Resources:       resources,
 		// The host network makes this a port on the node; declaring it lets a scrape config find it by name.
-		Ports: []corev1.ContainerPort{{Name: portMetrics, Protocol: corev1.ProtocolTCP, ContainerPort: m.Port, HostPort: m.Port}},
-		SecurityContext: &corev1.SecurityContext{
-			RunAsNonRoot:             ptr.To(true),
-			RunAsUser:                ptr.To[int64](65532),
-			AllowPrivilegeEscalation: ptr.To(false),
-			ReadOnlyRootFilesystem:   ptr.To(true),
-			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-		},
+		Ports:           []corev1.ContainerPort{{Name: portMetrics, Protocol: corev1.ProtocolTCP, ContainerPort: m.Port, HostPort: m.Port}},
+		SecurityContext: helperSecurityContext(),
 	}}
+}
+
+// helperSecurityContext is the restricted security context of the operator's helper containers, none of which needs
+// root, a writable root filesystem or any capability.
+func helperSecurityContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		RunAsNonRoot:             ptr.To(true),
+		RunAsUser:                ptr.To[int64](65532),
+		AllowPrivilegeEscalation: ptr.To(false),
+		ReadOnlyRootFilesystem:   ptr.To(true),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+}
+
+// oneShotResources are the resources of a helper init container that runs a moment and exits.
+func oneShotResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("5m"), corev1.ResourceMemory: resource.MustParse("8Mi")},
+		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("32Mi")},
+	}
 }
