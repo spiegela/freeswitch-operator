@@ -94,8 +94,9 @@ The planner's rules, the same for every provider:
   (`wait-for-address`, in the FreeSWITCH image) that waits for the downward-API file, which the kubelet fills in
   within seconds of the annotation (checked on kind). A fleet with `required: false` or no external address gets no
   such container.
-- The pool rereads its provider 5 s after binding or unbinding, and every 5 minutes otherwise, to see changes made
-  outside the operator. Deleting a pool leaves its addresses where they are, since they may be carrying calls.
+- The pool rereads its provider 5 s after binding or unbinding, every 5 s while the provider can't yet use an
+  address it has bound for pods (MetalLB yet to assign it to the pool's Service, which can take longer than 5 s
+  when the Service was just recreated), and every 5 minutes otherwise, to see changes made outside the operator. Deleting a pool leaves its addresses where they are, since they may be carrying calls.
 
 **Datapath: how the address reaches the node.** Providers don't differ only in API calls, and the difference
 changes what the fleets render:

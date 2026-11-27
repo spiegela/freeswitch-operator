@@ -342,6 +342,12 @@ func BindingForNode(status *sipv1alpha1.SIPAddressPoolStatus, node string) *sipv
 	return nil
 }
 
+// AwaitingProvider says whether an address is bound for pods but its provider can't use it yet, or hasn't
+// confirmed binding it (MetalLB yet to assign it, say): the pods wait for the provider's next read.
+func AwaitingProvider(a *sipv1alpha1.PoolAddress) bool {
+	return a.State == sipv1alpha1.PoolAddressBound && len(a.ClaimedBy) > 0 && a.Message != ""
+}
+
 // AwaitingAgent says whether an address is bound for pods but its node's address agent doesn't report its bind
 // address yet (and nothing else holds it back: see BindingForNode).
 func AwaitingAgent(a *sipv1alpha1.PoolAddress) bool {

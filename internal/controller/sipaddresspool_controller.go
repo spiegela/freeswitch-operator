@@ -47,7 +47,8 @@ const (
 	// poolResync is how often a pool rereads its provider with nothing else happening, to see changes made
 	// outside the operator. Each pass is one provider read (one DescribeAddresses on AWS).
 	poolResync = 5 * time.Minute
-	// poolConfirm is how soon a pool rereads its provider after binding or unbinding, to record the outcome.
+	// poolConfirm is how soon a pool rereads its provider after binding or unbinding, to record the outcome, and
+	// while the provider can't use an address it has bound for pods yet.
 	poolConfirm = 5 * time.Second
 	// poolRetry is how soon a pool whose provider can't be built tries again.
 	poolRetry = time.Minute
@@ -186,7 +187,11 @@ func (r *SIPAddressPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err := r.writePoolStatus(ctx, &pool, status); err != nil {
 		return ctrl.Result{}, err
 	}
-	if len(plan.Steps) > 0 {
+	if len(plan.Steps) > 0 || slices.ContainsFunc(status.Addresses, func(a sipv1alpha1.PoolAddress) bool {
+		return addresspool.AwaitingProvider(&a)
+	}) {
+		// A bound address the provider can't use yet keeps its pods waiting, and nothing else may wake the pool
+		// (MetalLB writes its assignment to a Service the pool doesn't watch), so read again soon.
 		return ctrl.Result{RequeueAfter: poolConfirm}, nil
 	}
 	return ctrl.Result{RequeueAfter: poolResync}, nil

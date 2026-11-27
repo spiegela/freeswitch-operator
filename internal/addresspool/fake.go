@@ -27,6 +27,9 @@ type Fake struct {
 	// BindIPs, when set, are the bind addresses Observe reports for bound addresses, by address ID, as a provider
 	// that binds to a secondary private address does.
 	BindIPs map[string]string
+	// NotReady, when set, is what Observe reports as NotReady for bound addresses, by address ID, as MetalLB's
+	// provider does before MetalLB assigns the address.
+	NotReady map[string]string
 }
 
 // NewFake returns a Fake holding the given addresses, ID to IP, in order.
@@ -60,6 +63,7 @@ func (f *Fake) Observe(context.Context) ([]Address, error) {
 		if a.NodeID != "" {
 			a.BindingID = "binding-" + id
 			a.BindIP = f.BindIPs[id]
+			a.NotReady = f.NotReady[id]
 		}
 		out = append(out, a)
 	}
