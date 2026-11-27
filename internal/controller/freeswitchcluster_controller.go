@@ -194,7 +194,7 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if cfg.dispatcher != nil {
-		after, err := r.syncDispatcher(ctx, &fsc, fleet, cfg, status)
+		after, err := r.syncDispatcher(ctx, &fsc, fleet, cfg, status, pods, nodes)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -521,7 +521,7 @@ func externalAddressOf(o client.Object) sipv1alpha1.ExternalAddressSpec {
 // syncDispatcher renders the dispatcher list from the ready endpoints, writes it when it changes, takes leaving
 // nodes out of a running Kamailio at once, and asks Kamailio to reload once the kubelet has had time to update
 // the mounted file. It returns how long to wait before the reload is due, or zero.
-func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, fleet fleetRef, cfg settings, status *sipv1alpha1.FreeswitchClusterStatus) (time.Duration, error) {
+func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, fleet fleetRef, cfg settings, status *sipv1alpha1.FreeswitchClusterStatus, pods []corev1.Pod, nodes map[string]*corev1.Node) (time.Duration, error) {
 	log := logf.FromContext(ctx)
 	d := cfg.dispatcher
 
@@ -549,11 +549,24 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 		log.Error(notifierErr, "could not find the Kamailio pods to notify", "jsonrpcURL", d.JSONRPCURL)
 	}
 
+	// A pod recovering its calls on start re-invites them before it is ready, so before the list names it, and
+	// Kamailio's trusted-peer check would drop them. The starting pods' addresses go on the ConfigMap, for the
+	// KamailioClusters dispatching to this fleet, and to the Kamailio notified here; see startingHosts.
+	var starting []string
+	if cfg.recovery {
+		starting = startingHosts(pods, nodes)
+	}
+	startingList := strings.Join(starting, ",")
+
 	// The ConfigMap is the record of what changed when: the list, its hash and the change time go in one update,
 	// and the status only mirrors them. A status write lost to a conflict then can't hide a change that still
 	// needs a reload (the next reconcile would see an up-to-date ConfigMap and nothing to do).
-	if previous != content || cm.Annotations[sipv1alpha1.DispatcherUpdatedAtAnnotation] == "" {
-		changedAt := r.now().UTC().Format(time.RFC3339Nano)
+	listChanged := previous != content || cm.Annotations[sipv1alpha1.DispatcherUpdatedAtAnnotation] == ""
+	if listChanged || cm.Annotations[sipv1alpha1.StartingAddressesAnnotation] != startingList {
+		changedAt := cm.Annotations[sipv1alpha1.DispatcherUpdatedAtAnnotation]
+		if listChanged {
+			changedAt = r.now().UTC().Format(time.RFC3339Nano)
+		}
 		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
 			if cm.Labels == nil {
 				cm.Labels = map[string]string{}
@@ -564,6 +577,11 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 			}
 			cm.Annotations[sipv1alpha1.DispatcherHashAnnotation] = hash
 			cm.Annotations[sipv1alpha1.DispatcherUpdatedAtAnnotation] = changedAt
+			if startingList != "" {
+				cm.Annotations[sipv1alpha1.StartingAddressesAnnotation] = startingList
+			} else {
+				delete(cm.Annotations, sipv1alpha1.StartingAddressesAnnotation)
+			}
 			if cm.Data == nil {
 				cm.Data = map[string]string{}
 			}
@@ -573,6 +591,8 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 		if err != nil {
 			return 0, err
 		}
+	}
+	if listChanged {
 		log.Info("dispatcher list updated", "destinations", len(dests), "hash", hash)
 		dispatcherListUpdates.WithLabelValues(fleet.labels()...).Inc()
 
@@ -585,6 +605,12 @@ func (r *FreeswitchClusterReconciler) syncDispatcher(ctx context.Context, fsc *s
 					log.Error(err, "could not mark destination inactive", "uri", uri)
 				}
 			}
+		}
+	}
+	if notifier != nil && len(starting) > 0 {
+		// Admitted again on each look while the pods start; the entries outlive the start (kamailioAdmittedTable).
+		if err := notifier.Admit(ctx, starting); err != nil {
+			log.Error(err, "could not admit starting pods' addresses to Kamailio", "addresses", starting)
 		}
 	}
 	status.DispatcherHash = hash

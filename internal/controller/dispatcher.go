@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 )
 
@@ -28,6 +29,41 @@ type destination struct {
 	URI  string // sip:<address>:<port>[;transport=tcp]
 	Pod  string // used as the destination's duid attribute
 	Node string
+}
+
+// startingHosts are the addresses of the pods that are starting: placed on a node, neither ready nor shutting down.
+// With spec.recovery, such a pod recovers its calls before it turns ready, and their re-INVITEs reach Kamailio from
+// its address before the dispatcher list names it. That is the pod's IP once the kubelet reports it, and before then
+// its node's internal addresses (the pods use the host network): the scheduler places a pod well before FreeSWITCH
+// starts, so Kamailio can know the address before the first re-INVITE, rather than once the EndpointSlice has it.
+func startingHosts(pods []corev1.Pod, nodes map[string]*corev1.Node) []string {
+	var out []string
+	add := func(a string) {
+		if a != "" && !slices.Contains(out, a) {
+			out = append(out, a)
+		}
+	}
+	for i := range pods {
+		p := &pods[i]
+		if p.Spec.NodeName == "" || p.DeletionTimestamp != nil || podReady(p) {
+			continue
+		}
+		if len(p.Status.PodIPs) > 0 {
+			for _, ip := range p.Status.PodIPs {
+				add(ip.IP)
+			}
+			continue
+		}
+		if n := nodes[p.Spec.NodeName]; n != nil && p.Spec.HostNetwork {
+			for _, a := range n.Status.Addresses {
+				if a.Type == corev1.NodeInternalIP {
+					add(a.Address)
+				}
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // readyDestinations turns EndpointSlices into dispatcher destinations: one per ready endpoint address. Terminating

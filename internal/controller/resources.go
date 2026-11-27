@@ -27,8 +27,12 @@ const (
 	volumeScripts = "operator-scripts"
 	volumePodInfo = "podinfo"
 	volumeConfig  = "config"
-	portSIPUDP    = "sip-udp"
-	portSIPTCP    = "sip-tcp"
+	// volumeRun is an emptyDir FreeSWITCH and the exporter share, at runDir: the recovery on start writes what it
+	// did there (recoveredFile), for the exporter's metrics. It lasts as long as the pod, across restarts.
+	volumeRun  = "operator-run"
+	runDir     = "/run/freeswitch-operator"
+	portSIPUDP = "sip-udp"
+	portSIPTCP = "sip-tcp"
 
 	// drainGraceMargin is added to maxDrainSeconds for the pod's termination grace period, so the preStop drain
 	// always finishes before the kubelet's SIGKILL.
@@ -59,6 +63,7 @@ type settings struct {
 	liveness        *sipv1alpha1.LivenessSpec          // nil: no liveness probe
 	metrics         *sipv1alpha1.FreeswitchMetricsSpec // nil: no exporter; otherwise with defaults applied
 	failover        failoverSettings
+	recovery        bool // recover the address's calls each time FreeSWITCH starts
 }
 
 func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
@@ -119,6 +124,7 @@ func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
 		}
 	}
 	out.failover = resolveFailover(s.Failover)
+	out.recovery = s.Recovery != nil
 	if l := s.Liveness; l != nil {
 		out.liveness = &sipv1alpha1.LivenessSpec{PeriodSeconds: 30, TimeoutSeconds: 15, FailureThreshold: 10}
 		if l.PeriodSeconds != 0 {
@@ -132,6 +138,14 @@ func resolve(fsc *sipv1alpha1.FreeswitchCluster) settings {
 		}
 	}
 	return out
+}
+
+// recoveryHook runs the recover script after each start of FreeSWITCH, or is nil when recovery is off.
+func recoveryHook(on bool) *corev1.LifecycleHandler {
+	if !on {
+		return nil
+	}
+	return &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + recoverScriptName}}}
 }
 
 // livenessProbe runs the live script, or is nil when liveness is off.
@@ -193,6 +207,7 @@ func buildScriptsConfigMap(fsc *sipv1alpha1.FreeswitchCluster) *corev1.ConfigMap
 			readyScriptName:   readyScript,
 			startupScriptName: startupScript,
 			liveScriptName:    liveScript,
+			recoverScriptName: recoverScript,
 		},
 	}
 }
@@ -250,6 +265,12 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		{Name: "FS_REQUIRE_EXTERNAL_ADDRESS", Value: strconv.FormatBool(cfg.requireAddress)},
 	}, livenessEnv(cfg.liveness), bindAddressEnv(cfg.addressSource), fsc.Spec.Env)
 
+	podInfo := podInfoItems(cfg.addressSource)
+	if cfg.recovery {
+		// The drain keeps a member's calls when a person fails it over (drainScript).
+		podInfo = append(podInfo, corev1.DownwardAPIVolumeFile{Path: "fail-over",
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: fmt.Sprintf("metadata.annotations['%s']", sipv1alpha1.FailOverAnnotation)}})
+	}
 	volumes := []corev1.Volume{
 		{
 			Name: volumeScripts,
@@ -261,7 +282,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		{
 			// Downward-API files update in place when the annotation changes; environment variables would not.
 			Name:         volumePodInfo,
-			VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{Items: podInfoItems(cfg.addressSource)}},
+			VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{Items: podInfo}},
 		},
 	}
 	mounts := []corev1.VolumeMount{
@@ -276,6 +297,10 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		})
 		mounts = append(mounts, corev1.VolumeMount{Name: volumeConfig, MountPath: conf.mountPath, ReadOnly: true})
 		templateAnnotations = map[string]string{configHashAnnotation: conf.hash}
+	}
+	if cfg.recovery {
+		volumes = append(volumes, corev1.Volume{Name: volumeRun, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
+		mounts = append(mounts, corev1.VolumeMount{Name: volumeRun, MountPath: runDir})
 	}
 
 	container := corev1.Container{
@@ -315,7 +340,8 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		// hang it guards against. A crash needs no probe: the process exits and the container restarts.
 		LivenessProbe: livenessProbe(cfg.liveness),
 		Lifecycle: &corev1.Lifecycle{
-			PreStop: &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + drainScriptName}}},
+			PostStart: recoveryHook(cfg.recovery),
+			PreStop:   &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + drainScriptName}}},
 		},
 	}
 
@@ -336,7 +362,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 			},
 		},
 		Containers:     []corev1.Container{container},
-		InitContainers: slices.Concat(addressWaitContainers(fsc, cfg), exporterContainers(cfg.metrics)),
+		InitContainers: slices.Concat(addressWaitContainers(fsc, cfg), exporterContainers(cfg.metrics, cfg.recovery)),
 		Volumes:        volumes,
 	}
 
@@ -416,8 +442,8 @@ func addressWaitContainers(fsc *sipv1alpha1.FreeswitchCluster, cfg settings) []c
 
 // exporterContainers is the metrics exporter as a native sidecar (an init container that keeps running): it starts
 // before FreeSWITCH and the kubelet stops it only after FreeSWITCH has exited, so it reports through the whole
-// drain. Nil when spec.metrics is unset.
-func exporterContainers(m *sipv1alpha1.FreeswitchMetricsSpec) []corev1.Container {
+// drain. With recovery on start it reads what the recovery did (recoveredFile). Nil when spec.metrics is unset.
+func exporterContainers(m *sipv1alpha1.FreeswitchMetricsSpec, recovery bool) []corev1.Container {
 	if m == nil {
 		return nil
 	}
@@ -428,6 +454,11 @@ func exporterContainers(m *sipv1alpha1.FreeswitchMetricsSpec) []corev1.Container
 	}
 	if ref := m.EventSocket.PasswordSecretRef; ref != nil {
 		env = append(env, corev1.EnvVar{Name: "ESL_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: ref}})
+	}
+	var mounts []corev1.VolumeMount
+	if recovery {
+		env = append(env, corev1.EnvVar{Name: "RECOVERED_FILE", Value: recoveredFile})
+		mounts = []corev1.VolumeMount{{Name: volumeRun, MountPath: runDir, ReadOnly: true}}
 	}
 	resources := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
@@ -442,6 +473,7 @@ func exporterContainers(m *sipv1alpha1.FreeswitchMetricsSpec) []corev1.Container
 		ImagePullPolicy: m.ExporterImagePullPolicy,
 		RestartPolicy:   ptr.To(corev1.ContainerRestartPolicyAlways),
 		Env:             env,
+		VolumeMounts:    mounts,
 		Resources:       resources,
 		// The host network makes this a port on the node; declaring it lets a scrape config find it by name.
 		Ports: []corev1.ContainerPort{{Name: portMetrics, Protocol: corev1.ProtocolTCP, ContainerPort: m.Port, HostPort: m.Port}},

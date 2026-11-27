@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -62,7 +63,8 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 	r.completeFailover(fsc, cfg.replicas, pods, status.LastFailover, now)
 
 	decision := decideFailover(verdicts, cfg.failover.mode, status.LastFailover)
-	recheck := r.carryOut(ctx, fsc, fleet, &decision, status, now)
+	recheck := r.carryOut(ctx, fsc, fleet, cfg, nodes, &decision, status, now)
+	recheck = minPositive(recheck, r.forceKeptCallsFailover(ctx, fsc, pods, status.LastFailover, now))
 
 	suspect, failed, verdictRecheck := r.attachHealth(fsc, verdicts, decision, status)
 	recheck = minPositive(recheck, verdictRecheck)
@@ -79,7 +81,12 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 // carryOut records a decision's failover, then fences and deletes. It returns how soon to look again, or zero. A
 // failover decided from a stale copy of the fleet is dropped (target nil) and decided again in a second. An error is
 // kept in the decision (err), for the member's health to report.
-func (r *FreeswitchClusterReconciler) carryOut(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, fleet fleetRef, d *failoverDecision, status *sipv1alpha1.FreeswitchClusterStatus, now time.Time) time.Duration {
+//
+// A member a person fails over, with spec.recovery, on a node whose kubelet is up, keeps its calls: keepCallsSettle
+// after the record, its pod is deleted gracefully, and its drain, seeing the fail-over annotation, stops FreeSWITCH
+// without hanging them up (drainScript), for the replacement to recover. Any other failover deletes the pod at once: an automatic one is of
+// a member whose calls are lost already, or whose kubelet can't run a drain.
+func (r *FreeswitchClusterReconciler) carryOut(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, fleet fleetRef, cfg settings, nodes map[string]*corev1.Node, d *failoverDecision, status *sipv1alpha1.FreeswitchClusterStatus, now time.Time) time.Duration {
 	t := d.target
 	if t == nil {
 		return 0
@@ -107,7 +114,16 @@ func (r *FreeswitchClusterReconciler) carryOut(ctx context.Context, fsc *sipv1al
 			status.LastFailover = rec.DeepCopy()
 		}
 	}
-	deleted, err := r.failOver(ctx, fsc, t, d.trigger, d.reason, now)
+	keepCalls := d.trigger == sipv1alpha1.FailoverTriggerManual && cfg.recovery && nodeReady(nodes[t.Spec.NodeName])
+	if keepCalls && status.LastFailover != nil {
+		// The drain learns of the failover from the annotation in a downward-API file, which the kubelet stops
+		// refreshing once the pod is being deleted: give it time to write the annotation first. The pod's calls go on
+		// meanwhile, on its node, still unfenced.
+		if wait := status.LastFailover.StartedAt.Add(keepCallsSettle).Sub(now); wait > 0 {
+			return wait
+		}
+	}
+	deleted, err := r.failOver(ctx, fsc, t, d.trigger, d.reason, keepCalls, now)
 	if err != nil {
 		recordFailover(fleet, d.trigger, err)
 		r.event(fsc, corev1.EventTypeWarning, "FailoverFailed", "Failover", "could not fail over %s (retrying): %v", t.Name, err)
@@ -115,6 +131,10 @@ func (r *FreeswitchClusterReconciler) carryOut(ctx context.Context, fsc *sipv1al
 		return 0
 	}
 	what := "deleted the pod to start it on another node"
+	if keepCalls {
+		what = "deleted the pod, whose drain stops FreeSWITCH without hanging up its calls, for its replacement on " +
+			"another node to recover"
+	}
 	switch {
 	case !deleted && d.resume:
 		// Carried out already: the pod is gone, and the cache that still listed it hadn't caught up.
@@ -125,7 +145,7 @@ func (r *FreeswitchClusterReconciler) carryOut(ctx context.Context, fsc *sipv1al
 		what = "the pod was already gone, so it starts on another node"
 	}
 	log.Info("failed over member", "pod", t.Name, "node", t.Spec.NodeName, "trigger", d.trigger, "reason", d.reason,
-		"resumed", d.resume, "deleted", deleted)
+		"resumed", d.resume, "deleted", deleted, "keepCalls", keepCalls)
 	recordFailover(fleet, d.trigger, nil)
 	r.event(fsc, corev1.EventTypeWarning, "FailingOver", "Failover", "%s failover of %s: fenced node %s and %s; %s",
 		d.trigger, t.Name, t.Spec.NodeName, what, truncate(d.reason, 512))
@@ -266,10 +286,11 @@ func membersHealthyCondition(gen int64, suspect, failed []string, last *sipv1alp
 	return cond
 }
 
-// failOver fences the pod's node, then deletes the pod at once (no drain: its calls are lost anyway). The
+// failOver fences the pod's node, then deletes the pod: at once (no drain: its calls are lost anyway), or with
+// keepCalls gracefully, for its drain to stop FreeSWITCH without hanging up its calls (see carryOut). The
 // StatefulSet starts it again, and the fenced label keeps it off the fenced node. deleted is false when the pod was
 // already gone: deleted, or already replaced by a new pod of the same name (the UID precondition conflicts).
-func (r *FreeswitchClusterReconciler) failOver(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, p *corev1.Pod, trigger sipv1alpha1.FailoverTrigger, reason string, now time.Time) (deleted bool, err error) {
+func (r *FreeswitchClusterReconciler) failOver(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, p *corev1.Pod, trigger sipv1alpha1.FailoverTrigger, reason string, keepCalls bool, now time.Time) (deleted bool, err error) {
 	if p.Spec.NodeName != "" {
 		by := fmt.Sprintf("%s failover of FreeswitchCluster %s/%s pod %s at %s: %s",
 			trigger, fsc.Namespace, fsc.Name, p.Name, now.UTC().Format(time.RFC3339), reason)
@@ -278,13 +299,71 @@ func (r *FreeswitchClusterReconciler) failOver(ctx context.Context, fsc *sipv1al
 		}
 	}
 	uid := p.UID
-	switch err := r.Delete(ctx, p, client.Preconditions{UID: &uid}, client.GracePeriodSeconds(0)); {
+	opts := []client.DeleteOption{client.Preconditions{UID: &uid}}
+	if !keepCalls {
+		opts = append(opts, client.GracePeriodSeconds(0))
+	}
+	switch err := r.Delete(ctx, p, opts...); {
 	case apierrors.IsNotFound(err), apierrors.IsConflict(err):
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("deleting pod: %w", err)
 	}
 	return true, nil
+}
+
+// keepCallsSettle is how long a failover that keeps its member's calls waits after it is recorded before it fences
+// the node and deletes the pod, for the kubelet to write the pod's fail-over annotation to the file its drain reads
+// (within a second on kind). A file the kubelet hasn't updated by the delete never is: the drain then misses the
+// failover, and drains as for any delete.
+const keepCallsSettle = 5 * time.Second
+
+// keepCallsWait is how long the pod of a member failed over with its calls kept (see carryOut) has to stop on its
+// own after its graceful delete. Its drain stops FreeSWITCH within seconds; one still there after this didn't (a
+// FreeSWITCH that doesn't answer, a drain that missed the annotation), and is deleted at once, calls and all.
+const keepCallsWait = 30 * time.Second
+
+// forceKeptCallsFailover deletes at once the pod of the latest failover when it was deleted gracefully, to keep its
+// calls, and is still there keepCallsWait later. It returns how soon to look again, or zero.
+func (r *FreeswitchClusterReconciler) forceKeptCallsFailover(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, pods []corev1.Pod, last *sipv1alpha1.FailoverRecord, now time.Time) time.Duration {
+	if last == nil || last.CompletedAt != nil {
+		return 0
+	}
+	for i := range pods {
+		p := &pods[i]
+		grace := time.Duration(ptr.Deref(p.DeletionGracePeriodSeconds, 0)) * time.Second
+		if p.Name != last.Pod || string(p.UID) != last.PodUID || p.DeletionTimestamp == nil || grace == 0 {
+			continue
+		}
+		// The deletion timestamp is when the grace period ends: the delete itself was that much earlier.
+		if wait := p.DeletionTimestamp.Add(-grace).Add(keepCallsWait).Sub(now); wait > 0 {
+			return wait
+		}
+		uid := p.UID
+		err := r.Delete(ctx, p, client.Preconditions{UID: &uid}, client.GracePeriodSeconds(0))
+		if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+			logf.FromContext(ctx).Error(err, "could not delete a failed-over pod that didn't stop", "pod", p.Name)
+			return healthRecheck
+		}
+		r.event(fsc, corev1.EventTypeWarning, "FailoverForced", "Failover",
+			"%s didn't stop within %s of its failover, which was to keep its calls: deleted the pod at once, and its calls with it",
+			p.Name, keepCallsWait)
+		return 0
+	}
+	return 0
+}
+
+// nodeReady reports whether the node's kubelet says it is Ready.
+func nodeReady(n *corev1.Node) bool {
+	if n == nil {
+		return false
+	}
+	for _, c := range n.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 func (r *FreeswitchClusterReconciler) apiReader() client.Reader {

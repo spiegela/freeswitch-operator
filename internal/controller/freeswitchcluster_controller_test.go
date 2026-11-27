@@ -161,6 +161,35 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(err).To(MatchError(ContainSubstring("metrics.port must differ from sip.port")))
 	})
 
+	It("takes spec.recovery only with a required external address", func() {
+		ns := newNamespace(ctx)
+		obj := func(name string, address map[string]any) *unstructured.Unstructured {
+			spec := map[string]any{"image": "example/freeswitch:1", "recovery": map[string]any{}}
+			if address != nil {
+				spec["externalAddress"] = address
+			}
+			return &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": sipv1alpha1.GroupVersion.String(), "kind": "FreeswitchCluster",
+				"metadata": map[string]any{"name": name, "namespace": ns},
+				"spec":     spec,
+			}}
+		}
+		Expect(k8sClient.Create(ctx, obj("defaults", nil))).To(Succeed())
+		Expect(k8sClient.Create(ctx, obj("pool", map[string]any{
+			"source": "AddressPool", "addressPoolRef": map[string]any{"name": "edge-media"},
+		}))).To(Succeed())
+		Expect(k8sClient.Create(ctx, obj("node-ip-required", map[string]any{"source": "NodeExternalIP", "required": true}))).To(Succeed())
+		for name, address := range map[string]map[string]any{
+			"none":         {"source": "None"},
+			"not-required": {"required": false},
+			"pool-not-required": {
+				"source": "AddressPool", "addressPoolRef": map[string]any{"name": "edge-media"}, "required": false,
+			},
+		} {
+			Expect(k8sClient.Create(ctx, obj(name, address))).To(MatchError(ContainSubstring("recovery needs a required external address")), name)
+		}
+	})
+
 	It("creates the fleet's objects with the shape SIP media needs", func() {
 		ns := newNamespace(ctx)
 		Expect(k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
@@ -310,6 +339,63 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(notifier.reloads).To(Equal(2))
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
 		Expect(fsc.Status.DispatcherReloadedHash).To(Equal(changed))
+	})
+
+	It("publishes its starting pods' addresses with the list, for the Kamailio fleets to admit, with spec.recovery", func() {
+		ns := newNamespace(ctx)
+		Expect(k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
+			f.Spec.Recovery = &sipv1alpha1.RecoverySpec{}
+			f.Spec.Dispatcher = &sipv1alpha1.DispatcherSpec{ConfigMapName: "edge-dispatcher", SetID: 1}
+		}))).To(Succeed())
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: ns + "-spare"}}
+		Expect(k8sClient.Create(ctx, node)).To(Succeed())
+		node.Status.Addresses = []corev1.NodeAddress{
+			{Type: corev1.NodeInternalIP, Address: "10.0.1.40"},
+			{Type: corev1.NodeExternalIP, Address: "203.0.113.40"},
+		}
+		Expect(k8sClient.Status().Update(ctx, node)).To(Succeed())
+		p := fsPod(ns, "edge-0", node.Name, "r1")
+		p.Spec.HostNetwork = true
+		Expect(k8sClient.Create(ctx, p)).To(Succeed())
+		r := &FreeswitchClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		dispatcherList := func() *corev1.ConfigMap {
+			var cm corev1.ConfigMap
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge-dispatcher"}, &cm)).To(Succeed())
+			return &cm
+		}
+
+		By("placed on a node, before the kubelet reports anything, the pod's address is its node's")
+		reconcileOnce(r, ns)
+		cm := dispatcherList()
+		Expect(cm.Annotations).To(HaveKeyWithValue(sipv1alpha1.StartingAddressesAnnotation, "10.0.1.40"))
+		changedAt := cm.Annotations[sipv1alpha1.DispatcherUpdatedAtAnnotation]
+
+		By("once the kubelet reports the pod's IP, that is the address; the list itself hasn't changed")
+		Expect(k8sClient.Get(ctx, podKey(p), p)).To(Succeed())
+		p.Status.PodIP = "10.0.1.41"
+		p.Status.PodIPs = []corev1.PodIP{{IP: "10.0.1.41"}}
+		Expect(k8sClient.Status().Update(ctx, p)).To(Succeed())
+		reconcileOnce(r, ns)
+		cm = dispatcherList()
+		Expect(cm.Annotations).To(HaveKeyWithValue(sipv1alpha1.StartingAddressesAnnotation, "10.0.1.41"))
+		Expect(cm.Annotations).To(HaveKeyWithValue(sipv1alpha1.DispatcherUpdatedAtAnnotation, changedAt),
+			"the reload delay runs from changes to the list only")
+
+		By("ready, it is no longer starting")
+		setPodReady(ctx, p)
+		reconcileOnce(r, ns)
+		Expect(dispatcherList().Annotations).NotTo(HaveKey(sipv1alpha1.StartingAddressesAnnotation))
+
+		By("without spec.recovery, a starting pod recovers nothing, and nothing is published")
+		Expect(k8sClient.Get(ctx, podKey(p), p)).To(Succeed())
+		p.Status.Conditions = nil
+		Expect(k8sClient.Status().Update(ctx, p)).To(Succeed())
+		var fsc sipv1alpha1.FreeswitchCluster
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge"}, &fsc)).To(Succeed())
+		fsc.Spec.Recovery = nil
+		Expect(k8sClient.Update(ctx, &fsc)).To(Succeed())
+		reconcileOnce(r, ns)
+		Expect(dispatcherList().Annotations).NotTo(HaveKey(sipv1alpha1.StartingAddressesAnnotation))
 	})
 
 	It("tells every ready Kamailio behind the JSON-RPC Service, not just the one the Service picks", func() {

@@ -125,6 +125,15 @@ var _ = Describe("SIPAddressPool controller", func() {
 		syncFleet(w)
 		Expect(annotation(w.ns, "edge-0")).To(Equal("203.0.113.10"))
 		Expect(annotation(w.ns, "edge-1")).To(Equal("203.0.113.11"))
+
+		By("a bound address the provider can't use yet has the pool read again soon, not at the next resync")
+		id := "eipalloc-" + fmt.Sprint(poolCounter) + "0"
+		w.fake.NotReady = map[string]string{id: "MetalLB hasn't assigned it"}
+		res, _ = reconcilePool(w)
+		Expect(res.RequeueAfter).To(Equal(poolConfirm))
+		w.fake.NotReady = nil
+		res, _ = reconcilePool(w)
+		Expect(res.RequeueAfter).To(Equal(poolResync))
 	})
 
 	It("moves a replaced node's address to the node its pod comes back on", func() {

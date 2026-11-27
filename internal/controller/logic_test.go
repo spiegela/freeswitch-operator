@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func endpoint(addr, pod, node string, ready, terminating bool) discoveryv1.Endpo
 }
 
 func TestReadyDestinationsKeepsOnlyReadyNonTerminating(t *testing.T) {
-	slices := []discoveryv1.EndpointSlice{{
+	eps := []discoveryv1.EndpointSlice{{
 		Endpoints: []discoveryv1.Endpoint{
 			endpoint("10.0.1.30", "edge-2", "n3", true, false),
 			endpoint("10.0.1.10", "edge-0", "n1", true, false),
@@ -43,13 +44,52 @@ func TestReadyDestinationsKeepsOnlyReadyNonTerminating(t *testing.T) {
 		// A duplicate address in a second slice is listed once.
 		Endpoints: []discoveryv1.Endpoint{endpoint("10.0.1.10", "edge-0", "n1", true, false)},
 	}}
-	got := readyDestinations(slices, 5060, "udp")
+	got := readyDestinations(eps, 5060, "udp")
 	want := []destination{
 		{URI: "sip:10.0.1.10:5060", Pod: "edge-0", Node: "n1"},
 		{URI: "sip:10.0.1.30:5060", Pod: "edge-2", Node: "n3"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+// A starting pod's address is admitted to Kamailio while it recovers its calls, before it is ready: its own IP once
+// the kubelet reports it, its node's internal address from the moment it is placed.
+func TestStartingHosts(t *testing.T) {
+	node := func(name string, addrs ...corev1.NodeAddress) *corev1.Node {
+		return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}, Status: corev1.NodeStatus{Addresses: addrs}}
+	}
+	internal := func(a string) corev1.NodeAddress { return corev1.NodeAddress{Type: corev1.NodeInternalIP, Address: a} }
+	nodes := map[string]*corev1.Node{
+		"n1": node("n1", internal("10.0.1.10")),
+		"n3": node("n3", internal("10.0.1.30")),
+		"n4": node("n4", internal("10.0.1.40"), corev1.NodeAddress{Type: corev1.NodeExternalIP, Address: "203.0.113.4"}),
+		"n5": node("n5", internal("10.0.1.50")),
+	}
+	pod := func(name, nodeName string, ready bool, ip string) corev1.Pod {
+		p := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: corev1.PodSpec{NodeName: nodeName, HostNetwork: true}}
+		if ready {
+			p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+		}
+		if ip != "" {
+			p.Status.PodIPs = []corev1.PodIP{{IP: ip}}
+		}
+		return p
+	}
+	draining := pod("edge-1", "n2", false, "10.0.1.20")
+	draining.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	unscheduled := pod("edge-5", "", false, "")
+	pods := []corev1.Pod{
+		pod("edge-0", "n1", true, "10.0.1.10"),
+		draining,
+		pod("edge-2", "n3", false, "10.0.1.30"), // started, its IP reported
+		pod("edge-3", "n4", false, ""),          // placed, not started: its node's internal address
+		unscheduled,
+		pod("edge-6", "gone", false, ""), // its node is unknown
+	}
+	if got, want := startingHosts(pods, nodes), []string{"10.0.1.30", "10.0.1.40"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }
 
@@ -218,6 +258,9 @@ func TestBuildStatefulSet(t *testing.T) {
 	c := spec.Containers[0]
 	if c.Lifecycle == nil || c.Lifecycle.PreStop == nil || !strings.HasSuffix(c.Lifecycle.PreStop.Exec.Command[1], drainScriptName) {
 		t.Fatal("preStop must run the drain script")
+	}
+	if c.Lifecycle.PostStart != nil {
+		t.Fatal("without spec.recovery nothing runs after FreeSWITCH starts")
 	}
 	if c.ReadinessProbe == nil || !strings.HasSuffix(c.ReadinessProbe.Exec.Command[1], readyScriptName) {
 		t.Fatal("readiness must run the ready script")
@@ -598,5 +641,60 @@ func TestAddressWaitOnlyForRequiredAddresses(t *testing.T) {
 		f.Spec.ExternalAddress.Required = ptr.To(false)
 	}); len(got) != 0 {
 		t.Error("fleet with required: false got a wait container")
+	}
+}
+
+// spec.recovery runs the recover script as the postStart hook, from the scripts ConfigMap.
+func TestBuildStatefulSetRecovery(t *testing.T) {
+	fsc := testCluster()
+	fsc.Spec.Recovery = &sipv1alpha1.RecoverySpec{}
+	c := buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec.Containers[0]
+	if h := c.Lifecycle.PostStart; h == nil || h.Exec == nil || !slices.Equal(h.Exec.Command, []string{shell, scriptsDir + "/" + recoverScriptName}) {
+		t.Fatalf("postStart %+v, want the recover script", h)
+	}
+	if c.Lifecycle.PreStop == nil {
+		t.Fatal("the drain must stay")
+	}
+	if got := buildScriptsConfigMap(fsc).Data[recoverScriptName]; got != recoverScript {
+		t.Fatal("the scripts ConfigMap must carry the recover script")
+	}
+	// What the hook did goes on the run volume, which the exporter reads for its freeswitch_recovery_* series.
+	if !slices.ContainsFunc(c.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == volumeRun && m.MountPath == runDir && !m.ReadOnly }) {
+		t.Fatalf("mounts %+v, want the run volume writable at %s", c.VolumeMounts, runDir)
+	}
+	fsc.Spec.Metrics = &sipv1alpha1.FreeswitchMetricsSpec{ExporterImage: "exporter:test"}
+	spec := buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec
+	if !slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumeRun && v.EmptyDir != nil }) {
+		t.Fatalf("volumes %+v, want the run volume, an emptyDir", spec.Volumes)
+	}
+	// The drain reads the pod's fail-over annotation from the pod-info files, to keep the calls of a member a person
+	// fails over.
+	failOver := corev1.DownwardAPIVolumeFile{Path: "fail-over", FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.annotations['" + sipv1alpha1.FailOverAnnotation + "']"}}
+	hasFailOver := func(spec corev1.PodSpec) bool {
+		i := slices.IndexFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumePodInfo })
+		return i >= 0 && slices.ContainsFunc(spec.Volumes[i].DownwardAPI.Items, func(f corev1.DownwardAPIVolumeFile) bool { return reflect.DeepEqual(f, failOver) })
+	}
+	if failOverFile != podInfoDir+"/"+failOver.Path || !hasFailOver(spec) {
+		t.Fatalf("volumes %+v, want the fail-over annotation at %s", spec.Volumes, failOverFile)
+	}
+	i := slices.IndexFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == exporterContainerName })
+	if i < 0 {
+		t.Fatal("no exporter")
+	}
+	e := spec.InitContainers[i]
+	if !slices.ContainsFunc(e.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == volumeRun && m.MountPath == runDir && m.ReadOnly }) ||
+		!slices.Contains(e.Env, corev1.EnvVar{Name: "RECOVERED_FILE", Value: recoveredFile}) {
+		t.Fatalf("exporter mounts %+v env %+v, want the run volume read-only and RECOVERED_FILE", e.VolumeMounts, e.Env)
+	}
+
+	// Without recovery there is no run volume, and the exporter reads no file.
+	fsc.Spec.Recovery = nil
+	spec = buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec
+	if slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumeRun }) || hasFailOver(spec) {
+		t.Fatal("a run volume or the fail-over file without recovery")
+	}
+	e = spec.InitContainers[slices.IndexFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == exporterContainerName })]
+	if len(e.VolumeMounts) != 0 || slices.ContainsFunc(e.Env, func(v corev1.EnvVar) bool { return v.Name == "RECOVERED_FILE" }) {
+		t.Fatalf("exporter mounts %+v env %+v without recovery", e.VolumeMounts, e.Env)
 	}
 }

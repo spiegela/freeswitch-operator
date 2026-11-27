@@ -35,6 +35,7 @@ spec:
   drain:
     maxDrainSeconds: 7200           # upper bound on waiting for live calls to finish
   # liveness: {}                    # opt-in hang detection (below)
+  # recovery: {}                    # opt-in: take back tracked calls when FreeSWITCH starts (call-tracking.md)
   dispatcher:
     setID: 1                        # Kamailio dispatcher set for this fleet
     configMapName: edge-dispatcher  # the operator writes dispatcher.list here
@@ -91,6 +92,9 @@ The operator renders a StatefulSet with:
     alive). It checks every 30 s with a 15 s timeout and restarts after 10 misses in a row, about five minutes of
     silence. `fs_cli` gives up two seconds before the probe does, so a slow answer is a counted miss, never a
     killed probe.
+  - **Recovery on start is opt-in** (`spec.recovery`): a `postStart` hook that waits for FreeSWITCH's SIP profiles
+    and runs `sofia recover`, so the pod turns ready only once the calls tracked under its address are back
+    ([call tracking](call-tracking.md#configure-the-freeswitchcluster)).
 - A downward-API volume of the pod's annotations, through which the operator hands the pod its external address
   ([address pools](address-pools.md)).
 
@@ -183,14 +187,29 @@ A failover:
 1. Fences the member's node: the label `sip.instruments.com/fenced=true`, which marks it fenced, the taint
    `sip.instruments.com/fenced:NoSchedule`, which keeps other workloads off it, and the annotation
    `sip.instruments.com/fenced-by` saying which member's failover, when, and why.
-2. Deletes the pod at once (no grace period, no drain: its calls are lost anyway). Its endpoint goes, so the
-   dispatcher list drops it and Kamailio takes it out of rotation at once, as for a drain.
+2. Deletes the pod at once (no grace period, no drain: its node can't end its calls anyway). Its endpoint goes, so the
+   dispatcher list drops it and Kamailio takes it out of rotation at once, as for a drain. A member failed over by
+   hand with `spec.recovery`, on a node whose kubelet is up, is the exception: see step 5.
 3. The StatefulSet starts the pod again. Every fleet's pods have a node affinity rule against the label, so it
    lands on the spare whatever the fleet's `tolerations` (a toleration with no key and `operator: Exists` would
    tolerate the taint).
 4. Every `SIPAddressPool` that may fence takes its addresses off the fenced node and treats the node as failed
    ([address pools](address-pools.md)). The replacement gets an address on the spare as any replaced pod does: the
    failed member's own, freed by the fence, unless the spare holds an idle address of its own.
+5. With [recovery on start](call-tracking.md#configure-the-freeswitchcluster) (`spec.recovery`), FreeSWITCH takes
+   the failed member's calls back as it starts on the spare, before its pod turns ready: they are tracked under the
+   address it now holds. The operator lets the spare's address past Kamailio's trusted-peer check while the pod
+   starts, so the recovered calls' re-INVITEs aren't dropped before the dispatcher list names the node. That moves
+   the calls of a member whose FreeSWITCH died or was cut off. A member a person fails over, whose FreeSWITCH still
+   runs, keeps its calls too: its pod is deleted gracefully, and its drain (the preStop hook), which reads the pod's
+   `sip.instruments.com/fail-over` annotation from a downward-API file, stops FreeSWITCH at once without hanging them
+   up. The operator fences and deletes 5 seconds after recording the failover: the kubelet stops refreshing that
+   file once the pod is being deleted, so it needs the time to write the annotation first. A clean stop would hang them up, deleting what recovery reads; and the kubelet restarts nothing in a pod being
+   deleted, so FreeSWITCH can't come back on the old node and take them there. A pod still there 30 seconds after
+   that delete (a FreeSWITCH that doesn't answer) is deleted at once, and its calls are lost.
+   `failover-by-hand-keeps-call` checks it on kind: there the replacement was ready on the spare about 16 s after
+   the request, and the call was silent for about 13 s (measured before the 5 s wait was added). An automatic failover always deletes at once: its member's
+   calls are lost already, or its kubelet can't run a drain.
 
 `status.lastFailover` records the failover until the replacement is ready (or the fleet is scaled down past it). It
 is written before the node is fenced, and only over the copy of the fleet the decision was made from (one written
@@ -209,10 +228,12 @@ The operator needs `patch` on nodes for the label and the taint.
 Fencing a node takes every pool address off it, whatever fleet uses it: a Kamailio pod on a fenced node loses its
 address too.
 
-**Still to come: recovering the failed member's calls.** Nothing runs `sofia recover` on the replacement yet, so a
-failed member's calls are lost (FreeSWITCH ends them at its media timeout, and nothing tells the backend); new calls
-go elsewhere, within Kamailio's 5 s failover at first. [Call tracking](call-tracking.md#failover-what-tracking-is-for-and-whats-left)
-has what recovery needs.
+**A failed member's calls survive only with recovery on start**, call tracking in a shared PostgreSQL, and a spare
+that comes up with the failed member's address; they are silent from the node's loss until the replacement has
+recovered them (70 s on kind). Without those they are lost: FreeSWITCH ends them at its media
+timeout, and nothing tells the backend. New calls go elsewhere meanwhile, within Kamailio's 5 s failover at first.
+[Call tracking](call-tracking.md#failover-what-tracking-is-for-and-whats-left) has the details, and when media
+survives a move.
 
 ## Configuration from ConfigMaps
 

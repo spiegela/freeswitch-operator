@@ -4,19 +4,20 @@ long: true
 description: >
   A call's FreeSWITCH moves to a spare edge node mid-call, and the call's SIP follows it both ways. Four long calls
   go through the fleet. Ten seconds in, the runner moves call a's pod to the spare node, as a lost node's pod would
-  move: it cordons the node, crashes FreeSWITCH (no drain, no BYE, the calls left in the recovery table) and
-  deletes the pod at once. The replacement comes up on the spare with the same address, so the same profile names,
-  and the runner runs `sofia recover` there, which must take exactly the legs of the calls that were on a's node.
+  move: it cordons the node, deletes the pod (whose drain holds FreeSWITCH while calls are up, and keeps the kubelet
+  from restarting it in place, where it would recover the calls itself), crashes FreeSWITCH under the drain (no
+  BYE, the calls left in the recovery table) and deletes the pod at once. The replacement comes up on the spare with the same address, so the same profile names,
+  and recovers on start (spec.recovery): that must have taken exactly the legs of the calls that were on a's node.
   Their re-INVITEs give both far ends the spare's Contact. Every call then exercises its dialog both ways: the
   backend sends a REFER (it must reach the spare directly), the spare accepts it, releases the backend with a
   NOTIFY and a BYE, and transfers the caller to the runner's target; then the caller hangs up (its BYE must reach the
   spare through Kamailio, which ends the target's call). The calls on the node that stayed do the same with no
-  gap. Which calls share a's node varies from run to run, and the checks hold either way. Needs call tracking and
-  a spare edge node holding no address of its own (kind runs two FreeSWITCH nodes on three edge nodes; a fleet
+  gap. Which calls share a's node varies from run to run, and the checks hold either way. Needs call tracking,
+  recovery on start and a spare edge node holding no address of its own (kind runs two FreeSWITCH nodes on three edge nodes; a fleet
   scaled down in place leaves the freed node an idle address, which the pool gives the moved pod instead of its
   own). Kamailio's part, a route back through its pod's name for a Kamailio lost with the node, is checked by
   make check-kamailio-name: on kind, Kamailio runs on nodes of its own.
-requires: [mock, fleet, spare-node, call-tracking]
+requires: [mock, fleet, spare-node, call-recovery]
 timeoutMs: 300000
 backend:
   routes:
@@ -78,6 +79,6 @@ actions:
   - afterAnswered: d
     afterMs: 10000
     moveFreeswitchOf: a
-  - recoverOn: a
+  - expectRecovered: a
   - uncordon: {}
   - waitFleetCurrent: {timeoutMs: 120000}

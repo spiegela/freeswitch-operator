@@ -156,17 +156,21 @@ type Fleet interface {
 	PodLog(ctx context.Context, pod string) (string, error)
 	// DeletePod deletes a pod; one already gone is no error.
 	DeletePod(ctx context.Context, pod string) error
+	// RequestFailover asks the operator to fail a member over now, as a person would: it annotates the pod
+	// FailOverAnnotation=true.
+	RequestFailover(ctx context.Context, pod string) error
 	// DeletePodNow deletes a pod with no grace period, as for a lost node: the API server forgets it at once, so
 	// its StatefulSet replaces it without waiting for the kubelet. One already gone is no error.
 	DeletePodNow(ctx context.Context, pod string) error
 	// Exec runs a command in one of a pod's containers and returns what it printed (stdout, then stderr). A
 	// command that exits non-zero, or whose container dies under it, is an error, with the output so far.
 	Exec(ctx context.Context, pod, container string, cmd ...string) (string, error)
-	// Container reports on one of a pod's containers.
+	// Container reports on one of a pod's containers. A pod that is gone reads as a stopped container.
 	Container(ctx context.Context, pod, container string) (ContainerState, error)
-	// TracksCalls reports whether the fleet keeps its calls in a shared recovery table: its spec.env sets
-	// TRACK_CALLS to "true" and CORE_DB_DSN (sipbench's FreeSWITCH config reads both).
-	TracksCalls(ctx context.Context) (bool, error)
+	// RecoversCalls reports whether the fleet keeps its calls in a shared recovery table and recovers them when
+	// FreeSWITCH starts: its spec.env sets TRACK_CALLS to "true" and CORE_DB_DSN (sipbench's FreeSWITCH config reads
+	// both), and spec.recovery is set.
+	RecoversCalls(ctx context.Context) (bool, error)
 }
 
 // ContainerState is what the runner sees of a container.
@@ -351,6 +355,8 @@ const (
 	FencedTaint        = "sip.instruments.com/fenced"
 	FencedLabel        = "sip.instruments.com/fenced"
 	FencedByAnnotation = "sip.instruments.com/fenced-by"
+	// FailOverAnnotation, set to "true" on a FreeSWITCH pod, has the operator fail the member over now.
+	FailOverAnnotation = "sip.instruments.com/fail-over"
 )
 
 func (k *kube) Unfence(ctx context.Context, node string) (bool, error) {
@@ -565,6 +571,12 @@ func (k *kube) DeletePod(ctx context.Context, pod string) error {
 	return err
 }
 
+func (k *kube) RequestFailover(ctx context.Context, pod string) error {
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:"true"}}}`, FailOverAnnotation)
+	_, err := k.core.CoreV1().Pods(k.ns).Patch(ctx, pod, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+	return err
+}
+
 func (k *kube) DeletePodNow(ctx context.Context, pod string) error {
 	now := int64(0)
 	err := k.core.CoreV1().Pods(k.ns).Delete(ctx, pod, metav1.DeleteOptions{GracePeriodSeconds: &now})
@@ -619,9 +631,12 @@ func (s *syncBuffer) String() string {
 	return s.b.String()
 }
 
-func (k *kube) TracksCalls(ctx context.Context) (bool, error) {
+func (k *kube) RecoversCalls(ctx context.Context) (bool, error) {
 	u, err := k.dyn.Resource(fscResource).Namespace(k.ns).Get(ctx, k.name, metav1.GetOptions{})
 	if err != nil {
+		return false, err
+	}
+	if _, on, err := unstructured.NestedMap(u.Object, "spec", "recovery"); err != nil || !on {
 		return false, err
 	}
 	env, _, err := unstructured.NestedSlice(u.Object, "spec", "env")
@@ -643,6 +658,9 @@ func (k *kube) TracksCalls(ctx context.Context) (bool, error) {
 
 func (k *kube) Container(ctx context.Context, pod, container string) (ContainerState, error) {
 	p, err := k.core.CoreV1().Pods(k.ns).Get(ctx, pod, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return ContainerState{}, nil
+	}
 	if err != nil {
 		return ContainerState{}, err
 	}

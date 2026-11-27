@@ -56,10 +56,13 @@ the same pieces by hand:
 - Pool addresses stay with a node for its life and move to its replacement.
 - Providers: AWS Elastic IPs (on the node's own private address or a secondary one), and MetalLB on kind and on-prem.
 
-**Call tracking** ([setup](docs/call-tracking.md))
+**Call tracking and recovery** ([setup](docs/call-tracking.md))
 - FreeSWITCH's core db and per-call tracking in a PostgreSQL shared by the whole fleet: the groundwork for failover.
 - SIP profiles named for each node's address (`trunks-<address>`, alias `trunks`), so `sofia recover` takes one
   address's calls and never a live node's: a node whose FreeSWITCH restarts takes back its own calls.
+- Recovery on start (`spec.recovery`): a FreeSWITCH that starts takes back the calls tracked under its address
+  before its pod turns ready, after a crash or in a pod failed over to a spare with the same address. In-dialog SIP
+  follows a call recovered on another node.
 - `ghcr.io/spiegela/freeswitch` ([`images/freeswitch`](images/freeswitch/Dockerfile)): FreeSWITCH 1.11.4, built
   from source ([`images/freeswitch-base`](images/freeswitch-base/Dockerfile)) with `mod_pgsql`, G.722, `mod_lua` and
   `mod_opusfile`, plus the project's own speech detector, cut down to what the edge runs (154 MB).
@@ -112,8 +115,8 @@ flowchart LR
 - **FreeSWITCH** ends every call leg, anchors media and runs the call: bridging, transfers, codecs, headers. Each
   node runs on the host network, one per node, with its RTP range open in the node's security group, and advertises
   its own fixed public address for media. No media relay sits in front of it (see [decisions](#decisions)).
-- **PostgreSQL** holds the fleet's shared core db and call tracking, so a spare can take over a lost node's calls
-  once call recovery exists: a small in-cluster instance, or a managed service such as Aurora PostgreSQL.
+- **PostgreSQL** holds the fleet's shared core db and call tracking, so a spare can recover a lost node's
+  calls: a small in-cluster instance, or a managed service such as Aurora PostgreSQL.
 - **The operator** owns both fleets and everything around them: the headless Services, the dispatcher list, each
   node's public address, drains and rolling updates, member health and failover.
 - **Behind the edge**, FreeSWITCH bridges calls to a SIP target. In the bench that is sipbench's mock backend; in
@@ -126,7 +129,7 @@ flowchart LR
 | [The FreeSWITCH fleet](docs/freeswitch-fleet.md) | The `FreeswitchCluster` resource: pods, probes, dispatcher membership, drains, rolling updates, health and failover, configuration |
 | [Kamailio](docs/kamailio.md) | The `KamailioCluster` resource: routing, refusals, live membership, JSON-RPC, drains |
 | [Address pools](docs/address-pools.md) | Fixed public addresses, the `SIPAddressPool` resource, the AWS and MetalLB providers, the address agent |
-| [Call tracking and failover](docs/call-tracking.md) | Setting up call tracking in PostgreSQL, and what call recovery still needs |
+| [Call tracking and failover](docs/call-tracking.md) | Setting up call tracking in PostgreSQL and recovery on start, and how failover moves a lost node's calls |
 | [Barge-in voice detection](docs/barge-in.md) | The edge-or-agent switch, the SIP INFO signal, LiveKit SIP's patch, measurements |
 | [Metrics and alerts](docs/metrics.md) | Every metric, the alert rules, scraping |
 | [Dashboards](docs/dashboards.md) | The Grafana dashboards for Kamailio, FreeSWITCH and the operator, with screenshots |
@@ -158,10 +161,8 @@ layout, and [`config/samples`](config/samples/) has a sample of each resource.
 
 Features still to come, each with the stories that make it up.
 
-**Failover with call recovery** ([design](docs/call-tracking.md#failover-what-tracking-is-for-and-whats-left))
-- Recover a failed member's calls on the spare it moved to (dead-node detection, fencing and the move are in).
-- Have `node-lost-mid-call` check the call survives.
-- Check call tracking against a managed PostgreSQL (Aurora), through a database failover.
+**Call tracking on managed PostgreSQL** ([design](docs/call-tracking.md#failover-what-tracking-is-for-and-whats-left))
+- Check call tracking and recovery against a managed PostgreSQL (Aurora), through a database failover.
 
 **Address pools on AWS**
 - Run the AWS provider on real clusters: a one-node cluster with `Secondary` addresses, then an EKS edge node group.

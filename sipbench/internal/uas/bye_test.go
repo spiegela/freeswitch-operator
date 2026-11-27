@@ -169,6 +169,10 @@ func hangupServerAfterRefresh(t *testing.T, answer string) {
 		t.Fatalf("re-INVITE: want 200, got %d", ok.Code)
 	}
 	ack(moved, 2, "moved-ack")
+	// diago reads the ACK on a goroutine of its own, and sends nothing for it. Read late, it would confirm the dialog
+	// again after the refused BYE ended it, and diago would hang up once more, to the first Contact: a race of the
+	// test's making (a real hangup comes long after the ACK), so give the ACK a moment.
+	time.Sleep(200 * time.Millisecond)
 
 	close(hang)
 	bye, byeFrom := recvSIP(t, moved)

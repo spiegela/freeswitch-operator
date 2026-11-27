@@ -194,17 +194,17 @@ func run(args []string) (int, error) {
 			capSet[scenario.BlackoutCapability] = true
 			capList = append(capList, scenario.BlackoutCapability)
 		}
-		// Crash and move scenarios recover calls from the fleet's shared table: without one they'd fail on
-		// what the fleet can't do, so they're skipped instead.
+		// Crash and move scenarios check the fleet recovers its calls when FreeSWITCH starts: on a fleet that
+		// doesn't, they'd fail on what it can't do, so they're skipped instead.
 		tctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		tracks, terr := fl.TracksCalls(tctx)
+		recovers, rerr := fl.RecoversCalls(tctx)
 		cancel()
-		if terr != nil {
-			return 2, fmt.Errorf("reading whether the fleet tracks its calls: %w", terr)
+		if rerr != nil {
+			return 2, fmt.Errorf("reading whether the fleet recovers its calls: %w", rerr)
 		}
-		if tracks && !capSet[scenario.CallTrackingCapability] {
-			capSet[scenario.CallTrackingCapability] = true
-			capList = append(capList, scenario.CallTrackingCapability)
+		if recovers && !capSet[scenario.CallRecoveryCapability] {
+			capSet[scenario.CallRecoveryCapability] = true
+			capList = append(capList, scenario.CallRecoveryCapability)
 		}
 	}
 	if *lkAgent != "" && !capSet[scenario.LiveKitCapability] {

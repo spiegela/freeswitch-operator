@@ -28,11 +28,12 @@ rules:
     verbs: ["list"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "create", "delete"]
+    # patch: the fail-over annotation (failOverOf).
+    verbs: ["get", "list", "create", "delete", "patch"]
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
-  # fs_cli in a FreeSWITCH pod (crashFreeswitchOf, recoverOn). WebSocket exec is a GET; older API servers take
+  # fs_cli in a FreeSWITCH pod (crashFreeswitchOf), and reading what its recovery on start did (expectRecovered). WebSocket exec is a GET; older API servers take
   # SPDY's POST, authorized as create.
   - apiGroups: [""]
     resources: ["pods/exec"]

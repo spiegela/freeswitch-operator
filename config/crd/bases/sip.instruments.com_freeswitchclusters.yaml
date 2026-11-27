@@ -617,6 +617,11 @@ spec:
                   type: string
                 description: nodeSelector pins the fleet to the edge node group.
                 type: object
+              recovery:
+                description: |-
+                  recovery, when set, recovers the calls tracked under a pod's address each time FreeSWITCH starts there. It
+                  needs call tracking in the configuration and a required external address. Unset, nothing recovers calls.
+                type: object
               replicas:
                 default: 2
                 description: replicas is the number of FreeSWITCH nodes. Each runs
@@ -766,6 +771,11 @@ spec:
             - message: metrics.port must differ from sip.port
               rule: '!has(self.metrics) || self.metrics.port != (has(self.sip) &&
                 has(self.sip.port) ? self.sip.port : 5060)'
+            - message: 'recovery needs a required external address: externalAddress.source
+                other than None, and required true'
+              rule: '!has(self.recovery) || !has(self.externalAddress) || ((!has(self.externalAddress.source)
+                || self.externalAddress.source != ''None'') && (!has(self.externalAddress.required)
+                || self.externalAddress.required))'
           status:
             description: status defines the observed state of FreeswitchCluster
             properties:

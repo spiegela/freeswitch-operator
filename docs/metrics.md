@@ -34,6 +34,10 @@ and serves `/metrics` on the pod's own address (default port 9282):
   profile's name, or for a profile named `<alias>-<anything>` with that alias, the alias: an edge's profiles run as
   `trunks-<address>` and `backend-<address>` ([call tracking](call-tracking.md)), and report as `trunks` and
   `backend` on every node.
+- With [recovery on start](call-tracking.md#configure-the-freeswitchcluster) (`spec.recovery`), what the last start
+  of FreeSWITCH recovered: `freeswitch_recovery_skipped` (1 when it recovered nothing because something was wrong),
+  `freeswitch_recovery_recovered_legs` (two per call) and `freeswitch_recovery_timestamp_seconds`. Nothing until that
+  start's recovery has finished.
 
 The exporter runs as a native sidecar, so it keeps reporting while the node drains and stops only after FreeSWITCH
 has. It is its own image, versioned apart from the operator: it is part of the pod template, so changing its image
@@ -74,7 +78,7 @@ runs their unit tests with promtool.
   5 minutes.
 - **Warning:**
   - silent drops of single requests (malformed traffic or an attack), repeated silent node timeouts;
-  - a SIP profile down, sessions near the limit;
+  - a SIP profile down, sessions near the limit, a start of FreeSWITCH that skipped recovering its calls;
   - a fleet short of members with nothing draining, a roll stalled with nothing draining, a drain past 80% of its
     limit;
   - a dispatcher reload pending for 5 minutes, a dispatch set conflict;

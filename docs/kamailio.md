@@ -53,7 +53,10 @@ first.
   stranger. Empty trusts every source. The fleet's nodes are the dispatcher list's, which Kamailio reloads only
   `reloadDelaySeconds` after the operator writes it (the kubelet's time to update the mounted file): so the operator
   also admits each listed node's address at once, over JSON-RPC (`htable.seti admitted`, entries kept 15 minutes),
-  and a FreeSWITCH that has just moved to a new node, with calls, isn't dropped meanwhile. It guards signaling only: carriers send media straight to FreeSWITCH, often
+  and a FreeSWITCH that has just moved to a new node, with calls, isn't dropped meanwhile. A fleet with
+  `spec.recovery` re-invites the calls it recovers before its pod is ready, so before any list names it: the
+  operator admits each starting pod's address too, from the moment the pod is placed on a node
+  ([call tracking](call-tracking.md)). It guards signaling only: carriers send media straight to FreeSWITCH, often
   from other addresses (Twilio signals from `/30`s per edge and sends media from `168.86.128.0/18`), so the firewall
   in front of the FreeSWITCH nodes' RTP range must admit those. The list is in the rendered config, so changing it
   rolls the fleet.

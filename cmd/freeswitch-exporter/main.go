@@ -34,6 +34,9 @@ func main() {
 	relay := flag.Bool("barge-in-relay", os.Getenv("BARGE_IN_RELAY") != "false",
 		"send FreeSWITCH's barge-in voice detections to the agent as SIP INFO "+
 			"(default: true unless $BARGE_IN_RELAY is false)")
+	recovered := flag.String("recovered-file", os.Getenv("RECOVERED_FILE"),
+		"the file the operator's recovery on start writes what it did to, for the freeswitch_recovery_* series "+
+			"(default: $RECOVERED_FILE; none without it)")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	// The password comes from the environment only, never a flag, so it stays out of the pod's command line.
@@ -41,6 +44,9 @@ func main() {
 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(&fsexporter.Collector{Address: *eslAddr, Password: password, Timeout: *timeout, Log: log})
+	if *recovered != "" {
+		reg.MustRegister(&fsexporter.RecoveryCollector{File: *recovered})
+	}
 	mux := http.NewServeMux()
 	errLog := slog.NewLogLogger(log.Handler(), slog.LevelError)
 	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{ErrorLog: errLog}))

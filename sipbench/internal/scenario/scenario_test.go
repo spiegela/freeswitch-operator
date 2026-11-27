@@ -167,10 +167,10 @@ func TestParseErrors(t *testing.T) {
 		"move untracked": "name: x\nrequires: [fleet, spare-node]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
 			"actions: [{moveFreeswitchOf: a}]",
 		"crash untracked":   fleetCalls + "actions: [{crashFreeswitchOf: a}]",
-		"recover untracked": fleetCalls + "actions: [{recoverOn: a}]",
-		"move no call": "name: x\nrequires: [fleet, spare-node, call-tracking]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
+		"recover untracked": fleetCalls + "actions: [{expectRecovered: a}]",
+		"move no call": "name: x\nrequires: [fleet, spare-node, call-recovery]\ncalls: [{id: a, to: b, expect: {status: 200}}]\n" +
 			"actions: [{moveFreeswitchOf: b}]",
-		"move repeated": "name: x\nrequires: [fleet, spare-node, call-tracking]\ncalls: [{id: a, to: b, repeat: {count: 2}, expect: {status: 200}}]\n" +
+		"move repeated": "name: x\nrequires: [fleet, spare-node, call-recovery]\ncalls: [{id: a, to: b, repeat: {count: 2}, expect: {status: 200}}]\n" +
 			"actions: [{moveFreeswitchOf: a}]",
 		"bad node state":     fleetCalls + "actions: [{waitNode: {of: a, state: Unknown}}]",
 		"wait node no call":  fleetCalls + "actions: [{waitNode: {of: b, state: Ready}}]",
