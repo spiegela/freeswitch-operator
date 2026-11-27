@@ -677,6 +677,34 @@ func TestBuildStatefulSetRecovery(t *testing.T) {
 	if failOverFile != podInfoDir+"/"+failOver.Path || !hasFailOver(spec) {
 		t.Fatalf("volumes %+v, want the fail-over annotation at %s", spec.Volumes, failOverFile)
 	}
+	i := slices.IndexFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == exporterContainerName })
+	if i < 0 {
+		t.Fatal("no exporter")
+	}
+	e := spec.InitContainers[i]
+	if !slices.ContainsFunc(e.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == volumeRun && m.MountPath == runDir && m.ReadOnly }) ||
+		!slices.Contains(e.Env, corev1.EnvVar{Name: "RECOVERED_FILE", Value: recoveredFile}) {
+		t.Fatalf("exporter mounts %+v env %+v, want the run volume read-only and RECOVERED_FILE", e.VolumeMounts, e.Env)
+	}
+	// Without recovery there is no run volume, and the exporter reads no file.
+	fsc.Spec.Recovery = nil
+	spec = buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec
+	if slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumeRun || v.Name == volumeFenceToken }) || hasFailOver(spec) ||
+		slices.ContainsFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == fenceContainerName }) {
+		t.Fatal("a run volume, the fence or the fail-over file without recovery")
+	}
+	e = spec.InitContainers[slices.IndexFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == exporterContainerName })]
+	if len(e.VolumeMounts) != 0 || slices.ContainsFunc(e.Env, func(v corev1.EnvVar) bool { return v.Name == "RECOVERED_FILE" }) {
+		t.Fatalf("exporter mounts %+v env %+v without recovery", e.VolumeMounts, e.Env)
+	}
+}
+
+// With spec.recovery the drain gets its fence check, installed by an init container from fenceImage.
+func TestBuildStatefulSetFence(t *testing.T) {
+	fsc := testCluster()
+	fsc.Spec.Recovery = &sipv1alpha1.RecoverySpec{FenceImage: "exporter:fence", FenceImagePullPolicy: corev1.PullNever}
+	spec := buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec
+	c := spec.Containers[0]
 	// The drain's fence check: copied onto the run volume by the first init container, from fenceImage, and reading
 	// the pod's own token and the cluster's CA from a projected volume.
 	if f := spec.InitContainers[0]; f.Name != fenceContainerName || f.Image != "exporter:fence" || f.ImagePullPolicy != corev1.PullNever ||
@@ -697,31 +725,10 @@ func TestBuildStatefulSetRecovery(t *testing.T) {
 	}) {
 		t.Fatalf("mounts %+v, want the fence token at %s", c.VolumeMounts, fenceTokenDir)
 	}
-	i := slices.IndexFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == exporterContainerName })
-	if i < 0 {
-		t.Fatal("no exporter")
-	}
-	e := spec.InitContainers[i]
-	if !slices.ContainsFunc(e.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == volumeRun && m.MountPath == runDir && m.ReadOnly }) ||
-		!slices.Contains(e.Env, corev1.EnvVar{Name: "RECOVERED_FILE", Value: recoveredFile}) {
-		t.Fatalf("exporter mounts %+v env %+v, want the run volume read-only and RECOVERED_FILE", e.VolumeMounts, e.Env)
-	}
 	// A fleet stored before fenceImage was required gets no fence, rather than a container without an image that
 	// the API server would refuse; its drain then finds no fence and drains as before.
 	fsc.Spec.Recovery.FenceImage = ""
 	if slices.ContainsFunc(buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec.InitContainers, func(c corev1.Container) bool { return c.Name == fenceContainerName }) {
 		t.Fatal("a fence without a fenceImage")
-	}
-
-	// Without recovery there is no run volume, and the exporter reads no file.
-	fsc.Spec.Recovery = nil
-	spec = buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec
-	if slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumeRun || v.Name == volumeFenceToken }) || hasFailOver(spec) ||
-		slices.ContainsFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == fenceContainerName }) {
-		t.Fatal("a run volume, the fence or the fail-over file without recovery")
-	}
-	e = spec.InitContainers[slices.IndexFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == exporterContainerName })]
-	if len(e.VolumeMounts) != 0 || slices.ContainsFunc(e.Env, func(v corev1.EnvVar) bool { return v.Name == "RECOVERED_FILE" }) {
-		t.Fatalf("exporter mounts %+v env %+v without recovery", e.VolumeMounts, e.Env)
 	}
 }
