@@ -7,10 +7,8 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"sync"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	sipv1alpha1 "github.com/spiegela/freeswitch-operator/api/v1alpha1"
 )
@@ -128,41 +126,10 @@ func configSnapshotName(fsc *sipv1alpha1.FreeswitchCluster, hash string) string 
 	return prefix + "-config-" + hash
 }
 
-// configHasher remembers each ConfigMap's hash by resourceVersion, so reconciles that the config didn't trigger
-// (pods, endpoints, nodes) don't re-hash every referenced ConfigMap in full.
-type configHasher struct {
-	mu   sync.Mutex
-	seen map[types.NamespacedName]hashedVersion
-}
-
-type hashedVersion struct {
-	uid             types.UID
-	resourceVersion string
-	hash            string
-}
-
-func (c *configHasher) hash(cm *corev1.ConfigMap) string {
-	if cm.ResourceVersion == "" {
-		return configMapHash(cm)
-	}
-	key := types.NamespacedName{Namespace: cm.Namespace, Name: cm.Name}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if v, ok := c.seen[key]; ok && v.uid == cm.UID && v.resourceVersion == cm.ResourceVersion {
-		return v.hash
-	}
-	h := configMapHash(cm)
-	if c.seen == nil {
-		c.seen = map[types.NamespacedName]hashedVersion{}
-	}
-	c.seen[key] = hashedVersion{uid: cm.UID, resourceVersion: cm.ResourceVersion, hash: h}
-	return h
-}
-
-// layoutConfig lays out the cluster's referenced ConfigMaps, which cms holds by name, as snapshots. hashOf hashes
-// a ConfigMap (nil means configMapHash). References are taken in name order and keys in sorted order, so the same
-// contents always render the same template, however the list is ordered.
-func layoutConfig(fsc *sipv1alpha1.FreeswitchCluster, cms map[string]*corev1.ConfigMap, hashOf func(*corev1.ConfigMap) string) (configLayout, error) {
+// layoutConfig lays out the cluster's referenced ConfigMaps, which cms holds by name, as snapshots. References are
+// taken in name order and keys in sorted order, so the same contents always render the same template, however the
+// list is ordered.
+func layoutConfig(fsc *sipv1alpha1.FreeswitchCluster, cms map[string]*corev1.ConfigMap) (configLayout, error) {
 	out := configLayout{mountPath: configMountPath(fsc)}
 	if err := checkMountPath(out.mountPath); err != nil {
 		return out, err
@@ -172,9 +139,6 @@ func layoutConfig(fsc *sipv1alpha1.FreeswitchCluster, cms map[string]*corev1.Con
 		return out, nil
 	}
 	slices.SortFunc(refs, func(a, b sipv1alpha1.ConfigMapRef) int { return strings.Compare(a.Name, b.Name) })
-	if hashOf == nil {
-		hashOf = configMapHash
-	}
 
 	h := sha256.New()
 	files := map[string]string{} // file path under mountPath -> ConfigMap that writes it
@@ -192,7 +156,7 @@ func layoutConfig(fsc *sipv1alpha1.FreeswitchCluster, cms map[string]*corev1.Con
 			// it out could remove a whole directory, such as every SIP profile. Remove the reference instead.
 			return out, &configError{fmt.Sprintf("ConfigMap %s has no keys; remove it from configMapRefs if that is intended", ref.Name)}
 		}
-		contentHash := hashOf(cm)
+		contentHash := configMapHash(cm)
 		_, _ = fmt.Fprintf(h, "ref\x00%s\x00%s\x00", dir, contentHash)
 
 		items := make([]corev1.KeyToPath, 0, len(keys))

@@ -60,12 +60,12 @@ func (c *eslClient) API(cmd string, timeout time.Duration) (string, error) {
 	_ = c.conn.SetDeadline(time.Now().Add(timeout))
 	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 	if _, err := fmt.Fprintf(c.conn, "api %s\n\n", cmd); err != nil {
-		return "", err
+		return "", c.fail(err)
 	}
 	for {
 		h, body, err := c.read()
 		if err != nil {
-			return "", err
+			return "", c.fail(err)
 		}
 		if h.Get("Content-Type") == "api/response" {
 			out := strings.TrimSpace(string(body))
@@ -82,12 +82,12 @@ func (c *eslClient) Command(cmd string, timeout time.Duration) (string, error) {
 	_ = c.conn.SetDeadline(time.Now().Add(timeout))
 	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 	if _, err := fmt.Fprintf(c.conn, "%s\n\n", cmd); err != nil {
-		return "", err
+		return "", c.fail(err)
 	}
 	for {
 		h, _, err := c.read()
 		if err != nil {
-			return "", err
+			return "", c.fail(err)
 		}
 		if h.Get("Content-Type") == "command/reply" {
 			reply := h.Get("Reply-Text")
@@ -101,6 +101,13 @@ func (c *eslClient) Command(cmd string, timeout time.Duration) (string, error) {
 
 // Close ends the connection.
 func (c *eslClient) Close() error { return c.conn.Close() }
+
+// fail closes the connection after a broken write or read and returns err. A reply that missed its deadline may
+// still arrive, and the next command would take it for its own; closed, every later command fails at once.
+func (c *eslClient) fail(err error) error {
+	_ = c.conn.Close()
+	return err
+}
 
 func (c *eslClient) read() (textproto.MIMEHeader, []byte, error) {
 	h, err := c.r.ReadMIMEHeader()

@@ -122,6 +122,9 @@ func (r *SIPAddressPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 	poolLastObserved.WithLabelValues(pool.Name).SetToCurrentTime()
 	setProviderAvailable(status, gen, "Observed", nil)
+	if err := r.markShared(ctx, &pool, in.Observed); err != nil {
+		return ctrl.Result{}, err
+	}
 	if pr, ok := provider.(addresspool.Pruner); ok {
 		// Bindings of addresses taken out of the spec. A failure costs nothing now: the next pass tries again.
 		err := pr.Prune(ctx)
@@ -238,6 +241,35 @@ func (r *SIPAddressPoolReconciler) planInput(
 		return in, nil, err
 	}
 	return in, nodeNames, nil
+}
+
+// markShared marks each address another pool lists too as an Error, so neither pool moves or unbinds it (the
+// planner leaves an address in Error where it is) until one of them stops listing it. Without it two pools fight
+// over the address, each taking it for its own nodes.
+func (r *SIPAddressPoolReconciler) markShared(ctx context.Context, pool *sipv1alpha1.SIPAddressPool, observed []addresspool.Address) error {
+	var pools sipv1alpha1.SIPAddressPoolList
+	if err := r.List(ctx, &pools); err != nil {
+		return err
+	}
+	for i := range pools.Items {
+		other := &pools.Items[i]
+		if other.Name == pool.Name || other.DeletionTimestamp != nil {
+			continue
+		}
+		var ids []string
+		switch {
+		case other.Spec.AWSElasticIP != nil:
+			ids = other.Spec.AWSElasticIP.AllocationIDs
+		case other.Spec.MetalLB != nil:
+			ids = other.Spec.MetalLB.Addresses
+		}
+		for j := range observed {
+			if observed[j].Err == nil && slices.Contains(ids, observed[j].ID) {
+				observed[j].Err = fmt.Errorf("also listed in pool %s", other.Name)
+			}
+		}
+	}
+	return nil
 }
 
 // poolClaimants are the pods, scheduled to a node, of every fleet that draws its addresses from the pool.
@@ -374,8 +406,8 @@ func addressPoolName(s sipv1alpha1.ExternalAddressSpec) string {
 	return s.AddressPoolRef.Name
 }
 
-// SetupWithManager sets up the controller with the Manager. Pools are few, so a pod, node, fleet or address agent
-// event requeues every pool; the planner finds nothing to do for those it doesn't concern.
+// SetupWithManager sets up the controller with the Manager. Pools are few, so a pod, node, fleet, address agent or
+// other pool's spec event requeues every pool; the planner finds nothing to do for those it doesn't concern.
 func (r *SIPAddressPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	allPools := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, _ client.Object) []reconcile.Request {
 		var list sipv1alpha1.SIPAddressPoolList
@@ -416,6 +448,8 @@ func (r *SIPAddressPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sipv1alpha1.SIPAddressPool{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// Another pool listing the same address (markShared).
+		Watches(&sipv1alpha1.SIPAddressPool{}, allPools, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&corev1.Pod{}, allPools, builder.WithPredicates(podClaims)).
 		Watches(&corev1.Pod{}, allPools, builder.WithPredicates(agentPod, predicate.AnnotationChangedPredicate{})).
 		Watches(&corev1.Node{}, allPools, builder.WithPredicates(nodeChanges)).

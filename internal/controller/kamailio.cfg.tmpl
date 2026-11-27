@@ -116,6 +116,9 @@ modparam("dispatcher", "ds_probing_threshold", 2)
 modparam("dispatcher", "ds_inactive_threshold", 2)
 modparam("dispatcher", "ds_ping_reply_codes", "class=2;code=403;code=404;code=405")
 modparam("dispatcher", "xavp_dst", "_dsdst_")
+# "Is this one of our nodes" is ds_is_from_list("-1", "3"): any set, matched on the address alone (mode 3: port
+# and protocol ignored). Without arguments it also matches the port, and a node's request over TCP comes from an
+# ephemeral port, not the one the list names.
 
 # FreeSWITCH node addresses the operator admits over JSON-RPC (htable.seti) as soon as it writes a list naming them:
 # Kamailio sees the list itself only once the kubelet has updated the mounted file and the operator has reloaded it,
@@ -173,7 +176,7 @@ request_route {
 	# from anywhere else is dropped before it is parsed further, so scanners learn nothing. In-dialog requests are
 	# checked too, so a forged Route set can't make Kamailio relay for a stranger. Our own nodes are the dispatcher
 	# list's, and those the operator has admitted ahead of it (a node a pod has just moved to, with calls).
-	if (!ds_is_from_list() && $sht(admitted=>$si) == $null && !route(TRUSTED_PEER)) {
+	if (!ds_is_from_list("-1", "3") && $sht(admitted=>$si) == $null && !route(TRUSTED_PEER)) {
 		prom_counter_inc("rejected_requests_total", "1", "untrusted_source");
 		xlog("L_INFO", "dropped $rm from untrusted $si:$sp\n");
 		exit;
@@ -235,7 +238,7 @@ request_route {
 	# Matched on the missing user rather than on our address, which a peer may write as a name or an address
 	# Kamailio doesn't know as its own. While draining, or while no node is active, the answer is 503, so peers
 	# route elsewhere.
-	if (is_method("OPTIONS") && $rU == $null && !ds_is_from_list()) {
+	if (is_method("OPTIONS") && $rU == $null && !ds_is_from_list("-1", "3")) {
 		if ($shv(draining) == 1 || !route(ANY_ACTIVE)) {
 			sl_send_reply("503", "No FreeSWITCH Available");
 			exit;
@@ -250,7 +253,7 @@ request_route {
 
 	# From a FreeSWITCH node toward a peer: relay to the request URI, from our fixed address. A draining Kamailio
 	# still relays these: they belong to calls already up (a transfer, say).
-	if (ds_is_from_list()) {
+	if (ds_is_from_list("-1", "3")) {
 		t_set_fr(FR_INV_TIMER, RELAY_FR_TIMER);
 		route(TO_PEERS);
 		route(RELAY);
@@ -411,8 +414,8 @@ event_route[xhttp:request] {
 		xhttp_reply("404", "Not Found", "text/plain", "not found\n");
 		exit;
 	}
+	# HTTP to any other port (the public SIP port over TCP) gets no answer, as an untrusted SIP source gets none.
 	if ($Rp != RPC_PORT) {
-		xhttp_reply("403", "Forbidden", "text/plain", "forbidden\n");
 		exit;
 	}
 	$var(bearer) = "Bearer " + $env(KAMAILIO_RPC_TOKEN);

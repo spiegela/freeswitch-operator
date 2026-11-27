@@ -35,8 +35,10 @@ func runScript(t *testing.T, name, status, sofia string, env ...string) (int, st
 			t.Fatal(err)
 		}
 	}
-	// The command is fs_cli's last argument; FAKE_ARGS, when set, collects every call's arguments.
-	fake := "#!/bin/sh\nfor a; do last=$a; done\n[ -n \"$FAKE_ARGS\" ] && echo \"$*\" >>\"$FAKE_ARGS\"\ncase \"$last\" in\n  status) cat '" + bin + "/status.out' ;;\n  'sofia status') cat '" + bin + "/sofia.out' ;;\nesac\n"
+	// The command is fs_cli's last argument; FAKE_ARGS, when set, collects every call's arguments. FAKE_MISS, when
+	// set, names a file the first call creates, answering nothing.
+	fake := "#!/bin/sh\nfor a; do last=$a; done\n[ -n \"$FAKE_ARGS\" ] && echo \"$*\" >>\"$FAKE_ARGS\"\n" +
+		"if [ -n \"$FAKE_MISS\" ] && [ ! -e \"$FAKE_MISS\" ]; then : >\"$FAKE_MISS\"; exit 1; fi\ncase \"$last\" in\n  status) cat '" + bin + "/status.out' ;;\n  'sofia status') cat '" + bin + "/sofia.out' ;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(bin, "fs_cli"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +92,22 @@ func TestReadyScriptRunsTheStartupChecks(t *testing.T) {
 	}
 }
 
+// One slow or lost fs_cli answer doesn't fail readiness, which fails on one failed check (so a drain takes the pod
+// out at once), and each call is bounded to fit the probe's timeout.
+func TestReadyScriptRidesOutAMissedAnswer(t *testing.T) {
+	dir := t.TempDir()
+	args := filepath.Join(dir, "args")
+	code, out := runScript(t, readyScriptName, fsReady, sofiaTwoProfiles, "FS_SIP_PORT=5060",
+		"FAKE_MISS="+filepath.Join(dir, "missed"), "FAKE_ARGS="+args)
+	if code != 0 {
+		t.Fatalf("one missed answer: exit %d %q", code, out)
+	}
+	calls, _ := os.ReadFile(args)
+	if lines := strings.Split(strings.TrimSpace(string(calls)), "\n"); len(lines) != 3 || !strings.Contains(lines[0], "-T 300 -t 1200") {
+		t.Fatalf("fs_cli calls %q", calls)
+	}
+}
+
 func TestDrainWaitsForAStartingFreeSWITCH(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "draining")
@@ -140,6 +158,52 @@ esac
 	}
 	if !strings.Contains(string(out), "no live calls") {
 		t.Fatalf("output %q", out)
+	}
+}
+
+// The drain waits on through a few missed status answers, starting the count again on each good one, and gives up on
+// a FreeSWITCH that doesn't answer five times in a row.
+func TestDrainRidesOutMissedAnswers(t *testing.T) {
+	const ready, miss = "FreeSWITCH (Version 1.10.10) is ready", ""
+	legs := func(n string) string { return ready + "|" + n + " session(s) - peak 2, last 5min 2 " }
+	for _, tc := range []struct {
+		name    string
+		answers []string // status answers, one per call; none after the last
+		calls   int
+		said    string
+	}{
+		{"misses between answers", []string{ready, miss, miss, miss, miss, legs("1"), miss, miss, miss, miss, legs("0")}, 11, "no live calls"},
+		{"never answers", []string{ready}, 6, "not answering"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			script := strings.ReplaceAll(drainScript, drainMarker, filepath.Join(dir, "draining"))
+			script = strings.ReplaceAll(script, "sleep 2", "sleep 0")
+			fake := `#!/bin/sh
+d='` + dir + `'
+case "$*" in
+  *"-x status")
+    n=$(cat "$d/n" 2>/dev/null || echo 0); echo $((n + 1)) > "$d/n"
+    sed -n "$((n + 1))p" "$d/answers" | tr '|' '\n' ;;
+esac
+`
+			files := map[string]string{"drain.sh": script, "fs_cli": fake, "answers": strings.Join(tc.answers, "\n") + "\n"}
+			for file, body := range files {
+				if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("/bin/sh", filepath.Join(dir, "drain.sh"))
+			cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "FS_MAX_DRAIN_SECONDS=30"}
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("drain: %v %s", err, out)
+			}
+			n, _ := os.ReadFile(filepath.Join(dir, "n"))
+			if strings.TrimSpace(string(n)) != strconv.Itoa(tc.calls) || !strings.Contains(string(out), tc.said) {
+				t.Fatalf("%s status calls (want %d), output %q (want %q)", strings.TrimSpace(string(n)), tc.calls, out, tc.said)
+			}
+		})
 	}
 }
 

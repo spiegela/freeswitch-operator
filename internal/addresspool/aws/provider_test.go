@@ -19,8 +19,8 @@ import (
 )
 
 // fakeEC2 holds Elastic IPs and instances' primary interfaces, and follows EC2's rules where the provider relies
-// on them: describing a missing allocation ID fails the whole call, and AllowReassociation=false refuses an
-// address that is associated.
+// on them: naming a missing allocation ID fails the whole call (filtering by one doesn't), and
+// AllowReassociation=false refuses an address that is associated.
 type fakeEC2 struct {
 	addrs   map[string]*ec2types.Address // by allocation ID
 	enis    map[string]ec2types.NetworkInterface
@@ -144,9 +144,13 @@ func (f *fakeEC2) DescribeAddresses(_ context.Context, in *ec2.DescribeAddresses
 		return nil, f.failErr
 	}
 	out := &ec2.DescribeAddressesOutput{}
-	if len(in.Filters) > 0 { // instance-id
+	if len(in.Filters) > 0 {
 		for _, a := range f.addrs {
-			if awssdk.ToString(a.InstanceId) == in.Filters[0].Values[0] {
+			v := awssdk.ToString(a.AllocationId)
+			if awssdk.ToString(in.Filters[0].Name) == "instance-id" {
+				v = awssdk.ToString(a.InstanceId)
+			}
+			if slices.Contains(in.Filters[0].Values, v) {
 				out.Addresses = append(out.Addresses, *a)
 			}
 		}
@@ -417,6 +421,61 @@ func TestSecondaryBindFailureTakesTheAddressBack(t *testing.T) {
 	}
 }
 
+// A read that missed a binding just made (EC2 is eventually consistent) can have the planner bind the address
+// again. Bind refuses before touching anything, so the tag still names the private address the binding has.
+func TestSecondaryBindRefusesAnAssociatedAddress(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeEC2()
+	f.addEIP("eipalloc-1", "203.0.113.1")
+	f.addInstance("i-a", "eni-a", "10.0.1.10")
+	f.addInstance("i-b", "eni-b", "10.0.1.11")
+	p := New(f, secondaryPool("eipalloc-1"))
+	stale, _ := p.Observe(ctx)
+	if err := p.Bind(ctx, stale[0], "i-a"); err != nil {
+		t.Fatal(err)
+	}
+	tag := f.tag()
+	f.calls = nil
+	if err := p.Bind(ctx, stale[0], "i-b"); err == nil {
+		t.Fatal("bound an associated address")
+	}
+	if slices.ContainsFunc(f.calls, func(c string) bool {
+		return strings.HasPrefix(c, "AssignPrivateIpAddresses") || strings.HasPrefix(c, "CreateTags") || strings.HasPrefix(c, "DeleteTags")
+	}) {
+		t.Errorf("touched it: %v", f.calls)
+	}
+	if f.tag() != tag {
+		t.Errorf("tag %q, want %q", f.tag(), tag)
+	}
+}
+
+// AWS disassociates a terminated instance's Elastic IP itself, so Unbind never runs and the private address the
+// binding had is still in PrivateAddressTag: binding asks for it, and a failed attempt leaves the tag as it was.
+func TestSecondaryBindAfterTerminationKeepsThePrivateAddress(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeEC2()
+	f.addEIP("eipalloc-1", "203.0.113.1")
+	f.addrs["eipalloc-1"].Tags = []ec2types.Tag{{Key: awssdk.String(PrivateAddressTag), Value: awssdk.String("10.0.1.50")}}
+	f.addInstance("i-b", "eni-b", "10.0.1.11")
+	p := New(f, secondaryPool("eipalloc-1"))
+	obs, _ := p.Observe(ctx)
+
+	f.failAssociate = &smithy.GenericAPIError{Code: "UnauthorizedOperation"}
+	if err := p.Bind(ctx, obs[0], "i-b"); err == nil {
+		t.Fatal("bind succeeded")
+	}
+	if f.tag() != "10.0.1.50" {
+		t.Fatalf("after a failed bind the tag is %q, want 10.0.1.50", f.tag())
+	}
+	f.failAssociate = nil
+	if err := p.Bind(ctx, obs[0], "i-b"); err != nil {
+		t.Fatal(err)
+	}
+	if obs, _ = p.Observe(ctx); obs[0].BindIP != "10.0.1.50" {
+		t.Errorf("bound %q, want 10.0.1.50 again", obs[0].BindIP)
+	}
+}
+
 // Unbinding never takes back an address the tag doesn't name, nor a primary address a tag names.
 func TestSecondaryUnbindLeavesUntaggedAddresses(t *testing.T) {
 	ctx := context.Background()
@@ -450,7 +509,7 @@ func TestSecondaryUnbindLeavesUntaggedAddresses(t *testing.T) {
 func TestObserve(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("a missing allocation ID is reported on its own", func(t *testing.T) {
+	t.Run("a missing allocation ID is reported on its own, in the same one call", func(t *testing.T) {
 		f := newFakeEC2()
 		f.addEIP("eipalloc-1", "203.0.113.1")
 		obs, err := New(f, pool("eipalloc-1", "eipalloc-gone")).Observe(ctx)
@@ -459,6 +518,9 @@ func TestObserve(t *testing.T) {
 		}
 		if obs[0].Err != nil || obs[0].IP != "203.0.113.1" || obs[1].Err == nil {
 			t.Fatalf("Observe = %+v", obs)
+		}
+		if len(f.calls) != 1 {
+			t.Errorf("calls %v, want one DescribeAddresses", f.calls)
 		}
 	})
 

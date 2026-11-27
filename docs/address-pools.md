@@ -19,7 +19,8 @@ A fleet's `externalAddress.source` says where the address comes from:
 - **`None`:** no external address.
 
 **Pools and providers.** A pool is cluster-scoped, like a `GatewayClass`: addresses and nodes are cluster-wide, and
-two pools must never hold the same address. Its spec names exactly one provider, each with its own block, so a new
+two pools must never hold the same address: one that two pools both list is an `Error` in each, left where it is,
+until one of them stops listing it. Its spec names exactly one provider, each with its own block, so a new
 provider is a new block rather than a new resource:
 
 ```yaml
@@ -186,9 +187,13 @@ Identity.
 `privateAddress: Secondary` is for nodes whose own address already holds an Elastic IP the pool must not touch (a
 cluster endpoint, as on a one-node cluster). Binding assigns the node's primary interface a new secondary private
 address, records it on the Elastic IP as the tag `sip.instruments.com/private-address`, and associates the Elastic
-IP with it; a failed association takes the address back. Unbinding disassociates, then unassigns only the address
+IP with it; a failed association takes the address back and puts the tag back as it was. It refuses an Elastic IP
+that is already associated before touching anything (a read that missed a binding just made), so the tag never loses
+the address a binding has. Unbinding disassociates, then unassigns only the address
 the tag names (never a primary address), records it as `sip.instruments.com/last-private-address`, and removes the
-first tag. Binding again asks for that last address first (never taking it from an interface that has it), so a pod
+first tag. Binding again asks for that last address first (or the one the first tag still names, when a binding
+ended without unbinding: AWS disassociates a terminated instance's Elastic IP itself), never taking it from an
+interface that has it, so a pod
 that moves keeps its bind address, and the calls it recovers keep their media, when the new node's interface is in
 the same subnet; in another subnet (another availability zone), or once something else holds the address, it gets
 a new one. The address agent then puts the address on the node's interface. This needs
@@ -214,8 +219,8 @@ FreeSWITCH's 16k-port RTP range. So for each binding the pool keeps a Service of
 and an EndpointSlice the pool writes naming the node. MetalLB announces the address from that node only and won't
 give it to any other Service; the pool reports an address another Service asks for or holds as a `Conflict`, and
 leaves it alone. One MetalLB hasn't assigned (not in an IPAddressPool) stays bound, with a message, but its node's
-pods aren't given it and the node counts as waiting. A Service whose EndpointSlice has gone announces nothing, so
-the pool counts its address as unbound and the next bind completes it. Taking an address out of the spec deletes its
+pods aren't given it and the node counts as waiting. A Service whose EndpointSlice or node has gone announces
+nothing, so the pool counts its address as unbound and the next bind completes it. Taking an address out of the spec deletes its
 Service, so MetalLB stops announcing it. The Service's one port is a placeholder
 (discard, 9/UDP): kube-proxy rewrites traffic to a Service's ports, and SIP and RTP must reach the pods untouched.
 The address agent (above) puts the address on the node's interface while it is bound there, so the node delivers

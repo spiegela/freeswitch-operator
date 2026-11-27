@@ -75,6 +75,15 @@ func TestKamailioConfigRouting(t *testing.T) {
 			t.Errorf("rendered config lacks %q", want)
 		}
 	}
+	// A node's request over TCP comes from an ephemeral port: our nodes are matched on the address alone.
+	if strings.Contains(cfg, "ds_is_from_list()") || !strings.Contains(cfg, `	if (ds_is_from_list("-1", "3")) {`) {
+		t.Error(`every "from our nodes" check must ignore the port`)
+	}
+	// HTTP on the public SIP port gets no answer at all.
+	rpc := cfg[strings.Index(cfg, "if ($Rp != RPC_PORT) {"):]
+	if rpc = rpc[:strings.Index(rpc, "}")]; strings.Contains(rpc, "xhttp_reply") {
+		t.Errorf("HTTP to a port other than RPC_PORT is answered:\n%s", rpc)
+	}
 	none, err := renderKamailioConfig(kamailioConfigCases["no-sets"])
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +101,7 @@ func TestKamailioConfigTrustedPeers(t *testing.T) {
 	for _, want := range []string{
 		`loadmodule "ipops.so"`,
 		"# Trusted peers: carrier bench",
-		`if (!ds_is_from_list() && $sht(admitted=>$si) == $null && !route(TRUSTED_PEER)) {`,
+		`if (!ds_is_from_list("-1", "3") && $sht(admitted=>$si) == $null && !route(TRUSTED_PEER)) {`,
 		`prom_counter_inc("rejected_requests_total", "1", "untrusted_source");`,
 		`if (is_in_subnet("$si", "198.51.100.0/30,203.0.113.8/29")) {`,
 		`if (is_in_subnet("$si", "10.244.0.0/16,2001:db8::/32")) {`,

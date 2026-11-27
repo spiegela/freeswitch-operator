@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -173,5 +175,32 @@ func TestFanoutNotifierTellsEveryPodAndReportsEachFailure(t *testing.T) {
 	}
 	if err := (&fanoutNotifier{}).Reload(context.Background(), nil); err != nil {
 		t.Fatalf("no pods, nothing to tell: %v", err)
+	}
+}
+
+// A pod that doesn't answer costs one call, not one per address: each would wait out the client's timeout.
+func TestJSONRPCNotifierAdmitStopsAtAPodThatDoesNotAnswer(t *testing.T) {
+	var calls int
+	hangUp := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if hangUp {
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			_ = conn.Close()
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","error":{"code":500,"message":"no such table"},"id":1}`))
+	}))
+	defer srv.Close()
+	addrs := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}
+	n := NewJSONRPCNotifier(srv.URL, "")
+	if err := n.Admit(context.Background(), addrs); err == nil || calls != 1 {
+		t.Fatalf("a pod that hangs up: %d calls (want 1), err %v", calls, err)
+	}
+	// Kamailio's own error answer is about that address: the rest are still tried.
+	calls, hangUp = 0, false
+	if err := n.Admit(context.Background(), addrs); err == nil || calls != len(addrs) {
+		t.Fatalf("an error answer: %d calls (want %d), err %v", calls, len(addrs), err)
 	}
 }

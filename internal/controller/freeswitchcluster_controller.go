@@ -85,8 +85,6 @@ type FreeswitchClusterReconciler struct {
 	NodeLeases NodeLeaseResults
 	// Recorder records events on the fleet; nil records none.
 	Recorder events.EventRecorder
-
-	configHashes configHasher
 }
 
 // +kubebuilder:rbac:groups=sip.instruments.com,resources=freeswitchclusters,verbs=get;list;watch;create;update;patch;delete
@@ -130,29 +128,37 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := r.ensureService(ctx, &fsc); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.ensurePDB(ctx, &fsc); err != nil {
+	if err := ensurePDB(ctx, r.Client, r.Scheme, &fsc, newPDB(pdbName(&fsc), fsc.Namespace, commonLabels(&fsc), selectorLabels(&fsc))); err != nil {
 		return ctrl.Result{}, err
 	}
 	// A missing or conflicting ConfigMap is the user's to fix: report it, and keep the running fleet as it is,
 	// with its template unchanged and any roll in progress paused.
 	conf, confErr := r.loadConfig(ctx, &fsc)
+	stsKey := types.NamespacedName{Namespace: fsc.Namespace, Name: statefulSetName(&fsc)}
 	sts := &appsv1.StatefulSet{}
+	// A StatefulSet the API server refuses (requests above limits, say) mustn't stop the fleet's health, failovers
+	// and dispatcher list either: report it, carry on with the StatefulSet as it is, and retry with backoff.
+	var stsErr error
 	if confErr != nil {
 		var ce *configError
 		if !errors.As(confErr, &ce) {
 			return ctrl.Result{}, confErr
 		}
 		log.Info("configuration not usable; leaving the StatefulSet as it is", "reason", ce.msg)
-		if err := r.Get(ctx, types.NamespacedName{Namespace: fsc.Namespace, Name: statefulSetName(&fsc)}, sts); client.IgnoreNotFound(err) != nil {
+		if err := r.Get(ctx, stsKey, sts); client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
 		}
 	} else {
-		if err := r.ensureConfigSnapshots(ctx, &fsc, conf); err != nil {
-			return ctrl.Result{}, err
+		stsErr = r.ensureConfigSnapshots(ctx, &fsc, conf)
+		if stsErr == nil {
+			sts, stsErr = r.ensureStatefulSet(ctx, &fsc, conf)
 		}
-		var err error
-		if sts, err = r.ensureStatefulSet(ctx, &fsc, conf); err != nil {
-			return ctrl.Result{}, err
+		if stsErr != nil {
+			log.Error(stsErr, "could not write the StatefulSet; leaving it as it is")
+			sts = &appsv1.StatefulSet{}
+			if err := r.Get(ctx, stsKey, sts); err != nil {
+				return ctrl.Result{}, errors.Join(stsErr, client.IgnoreNotFound(err))
+			}
 		}
 	}
 
@@ -168,8 +174,15 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	if confErr == nil {
-		if err := r.pruneConfigSnapshots(ctx, &fsc, conf, sts, pods); err != nil {
+	if confErr == nil && stsErr == nil {
+		keep := map[string]bool{}
+		for _, snap := range conf.snapshots {
+			keep[snap.name] = true
+		}
+		for i := range pods {
+			podConfigSnapshots(&pods[i], keep)
+		}
+		if err := pruneConfigSnapshots(ctx, r.Client, &fsc, sts, client.MatchingLabels{sipv1alpha1.ClusterLabel: fsc.Name}, keep); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -182,19 +195,8 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		decision.Replace = nil
 		decision.Waiting = "paused until the configuration is fixed"
 	}
-	if decision.Replace != nil {
-		p := decision.Replace
-		log.Info("replacing pod for rolling update", "pod", p.Name, "revision", podRevision(p), "updateRevision", sts.Status.UpdateRevision)
-		uid := p.UID
-		if err := r.Delete(ctx, p, client.Preconditions{UID: &uid}); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, err
-			}
-		} else {
-			fleetPodReplacements.WithLabelValues(fleet.labels()...).Inc()
-		}
-	} else if decision.Waiting != "" {
-		log.V(1).Info("rolling update waiting", "reason", decision.Waiting, "outdated", decision.Outdated)
+	if err := replacePod(ctx, r.Client, fleet, decision, sts.Status.UpdateRevision); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if cfg.dispatcher != nil {
@@ -209,11 +211,8 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// A failover that failed is retried, but the status is written first, so it goes on showing the fleet.
 	healthAfter, failoverErr := r.syncHealth(ctx, &fsc, fleet, cfg, pods, nodes, status)
 	requeue = minPositive(requeue, healthAfter)
-	if confErr != nil {
-		gen := fsc.Generation
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionDegraded, Status: metav1.ConditionTrue, Reason: "ConfigInvalid", Message: confErr.Error(), ObservedGeneration: gen})
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionReady, Status: metav1.ConditionFalse, Reason: "ConfigInvalid", Message: confErr.Error(), ObservedGeneration: gen})
-	}
+	setWriteProblem(&status.Conditions, fsc.Generation, confErr, stsErr)
+	retryErr := errors.Join(stsErr, failoverErr)
 	recordFleet(fleet, fleetObservation{
 		desired: cfg.replicas, pods: pods, outdated: decision.Outdated, conditions: status.Conditions,
 		maxDrainSeconds: cfg.maxDrainSeconds, now: r.now(),
@@ -222,19 +221,35 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		fsc.Status = *status
 		if err := r.Status().Update(ctx, &fsc); err != nil {
 			if apierrors.IsConflict(err) {
-				if failoverErr != nil {
-					// Retried on the failover's error (and logged), which writes the status again too.
-					return ctrl.Result{}, failoverErr
+				if retryErr != nil {
+					// Retried on that error (and logged), which writes the status again too.
+					return ctrl.Result{}, retryErr
 				}
 				return ctrl.Result{RequeueAfter: time.Second}, nil
 			}
-			return ctrl.Result{}, errors.Join(err, failoverErr)
+			return ctrl.Result{}, errors.Join(err, retryErr)
 		}
 	}
-	if failoverErr != nil {
-		return ctrl.Result{}, failoverErr
+	if retryErr != nil {
+		return ctrl.Result{}, retryErr
 	}
 	return ctrl.Result{RequeueAfter: requeue}, nil
+}
+
+// setWriteProblem marks the fleet Degraded and not Ready when its configuration is unusable or the API server
+// refused its StatefulSet; the configuration counts first.
+func setWriteProblem(conds *[]metav1.Condition, gen int64, confErr, stsErr error) {
+	reason, msg := "ConfigInvalid", ""
+	switch {
+	case confErr != nil:
+		msg = confErr.Error()
+	case stsErr != nil:
+		reason, msg = "StatefulSetRejected", truncate(stsErr.Error(), 1024)
+	default:
+		return
+	}
+	meta.SetStatusCondition(conds, metav1.Condition{Type: conditionDegraded, Status: metav1.ConditionTrue, Reason: reason, Message: msg, ObservedGeneration: gen})
+	meta.SetStatusCondition(conds, metav1.Condition{Type: conditionReady, Status: metav1.ConditionFalse, Reason: reason, Message: msg, ObservedGeneration: gen})
 }
 
 // syncPods reads the pods' nodes, and writes on each pod its external address and whether it has been ready. It
@@ -287,20 +302,6 @@ func (r *FreeswitchClusterReconciler) ensureService(ctx context.Context, fsc *si
 	return err
 }
 
-func (r *FreeswitchClusterReconciler) ensurePDB(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster) error {
-	want := buildPDB(fsc)
-	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Name: want.Name, Namespace: want.Namespace}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pdb, func() error {
-		pdb.Labels = want.Labels
-		pdb.Spec.MaxUnavailable = want.Spec.MaxUnavailable
-		if pdb.CreationTimestamp.IsZero() {
-			pdb.Spec.Selector = want.Spec.Selector
-		}
-		return controllerutil.SetControllerReference(fsc, pdb, r.Scheme)
-	})
-	return err
-}
-
 // ensureStatefulSet writes the StatefulSet. The pod template is replaced only when the operator's rendering of it
 // changes (tracked by a hash annotation), so API-server defaulting never causes an update loop.
 func (r *FreeswitchClusterReconciler) ensureStatefulSet(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) (*appsv1.StatefulSet, error) {
@@ -346,7 +347,7 @@ func (r *FreeswitchClusterReconciler) loadConfig(ctx context.Context, fsc *sipv1
 		}
 		cms[ref.Name] = &cm
 	}
-	return layoutConfig(fsc, cms, r.configHashes.hash)
+	return layoutConfig(fsc, cms)
 }
 
 // ensureConfigSnapshots creates the immutable copies the template is about to mount. A snapshot's name is its
@@ -383,37 +384,6 @@ func (r *FreeswitchClusterReconciler) ensureConfigSnapshots(ctx context.Context,
 		if err := r.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
 			return err
 		}
-	}
-	return nil
-}
-
-// pruneConfigSnapshots deletes the snapshots that neither the current template nor any pod mounts. It waits until
-// the StatefulSet controller has seen the current template, so no pod can still be created from an older one.
-func (r *FreeswitchClusterReconciler) pruneConfigSnapshots(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, conf configLayout, sts *appsv1.StatefulSet, pods []corev1.Pod) error {
-	if sts.CreationTimestamp.IsZero() || sts.Status.ObservedGeneration < sts.Generation {
-		return nil
-	}
-	keep := map[string]bool{}
-	for _, snap := range conf.snapshots {
-		keep[snap.name] = true
-	}
-	for i := range pods {
-		podConfigSnapshots(&pods[i], keep)
-	}
-	var list corev1.ConfigMapList
-	if err := r.List(ctx, &list, client.InNamespace(fsc.Namespace), client.MatchingLabels{sipv1alpha1.ClusterLabel: fsc.Name, configSnapshotLabel: configSnapshotValue}); err != nil {
-		return err
-	}
-	for i := range list.Items {
-		cm := &list.Items[i]
-		if keep[cm.Name] || cm.DeletionTimestamp != nil || !metav1.IsControlledBy(cm, fsc) {
-			continue
-		}
-		uid := cm.UID
-		if err := r.Delete(ctx, cm, client.Preconditions{UID: &uid}); err != nil && !apierrors.IsNotFound(err) {
-			return err
-		}
-		logf.FromContext(ctx).Info("deleted unused config snapshot", "configMap", cm.Name)
 	}
 	return nil
 }

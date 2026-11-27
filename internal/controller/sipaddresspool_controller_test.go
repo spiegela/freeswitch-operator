@@ -246,6 +246,35 @@ var _ = Describe("SIPAddressPool controller", func() {
 		Expect(pool.Status.Addresses[0].State).To(Equal(sipv1alpha1.PoolAddressConflict))
 	})
 
+	It("leaves alone an address another pool lists too, in both pools", func() {
+		w := setup("203.0.113.70")
+		a, b := node(w, "a"), node(w, "b")
+		id := fmt.Sprintf("eipalloc-%d0", poolCounter)
+		w.fake.SetBound(id, b) // the other pool's, on a node with no pod of w's: idle as far as w can tell
+		other := &sipv1alpha1.SIPAddressPool{
+			ObjectMeta: metav1.ObjectMeta{Name: w.pool + "-other"},
+			Spec:       sipv1alpha1.SIPAddressPoolSpec{AWSElasticIP: &sipv1alpha1.AWSElasticIPPool{Region: "us-east-1", AllocationIDs: []string{id}}},
+		}
+		Expect(k8sClient.Create(ctx, other)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, other)).To(Succeed()) })
+		Expect(k8sClient.Create(ctx, fsPod(w.ns, "edge-0", a, "r1"))).To(Succeed())
+
+		_, pool := reconcilePool(w)
+		Expect(w.fake.CallLog()).To(BeEmpty(), "not taken off b for a")
+		Expect(pool.Status.Addresses[0].State).To(Equal(sipv1alpha1.PoolAddressError))
+		Expect(meta.FindStatusCondition(pool.Status.Conditions, conditionReady).Message).To(ContainSubstring("also listed in pool " + other.Name))
+
+		By("the other pool leaves it alone too")
+		r := &SIPAddressPoolReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(),
+			NewProvider: func(context.Context, *sipv1alpha1.SIPAddressPool) (addresspool.Provider, error) { return w.fake, nil }}
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: other.Name}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: other.Name}, other)).To(Succeed())
+		Expect(other.Status.Addresses[0].State).To(Equal(sipv1alpha1.PoolAddressError))
+		Expect(other.Status.Addresses[0].Message).To(ContainSubstring("also listed in pool " + w.pool))
+		Expect(w.fake.BoundTo(id)).To(Equal(b))
+	})
+
 	It("records a failed bind, keeps the pod without an address, and binds on the next pass", func() {
 		w := setup("203.0.113.40")
 		a := node(w, "a")

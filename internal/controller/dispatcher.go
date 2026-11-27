@@ -242,10 +242,16 @@ func (n *jsonrpcNotifier) SetInactive(ctx context.Context, setID int32, uri stri
 	return n.call(ctx, "dispatcher.set_state", []any{"ip", setID, uri}, nil)
 }
 
+// Admit stops at the first failure that isn't Kamailio's own answer (a timeout, a refused connection): the rest
+// would fail the same way, each after the client's timeout, holding up the reconcile.
 func (n *jsonrpcNotifier) Admit(ctx context.Context, addrs []string) error {
 	errs := make([]error, 0, len(addrs))
 	for _, a := range addrs {
-		errs = append(errs, n.call(ctx, "htable.seti", []any{kamailioAdmittedTable, a, 1}, nil))
+		err := n.call(ctx, "htable.seti", []any{kamailioAdmittedTable, a, 1}, nil)
+		errs = append(errs, err)
+		if re := (*rpcError)(nil); err != nil && !errors.As(err, &re) {
+			break
+		}
 	}
 	return errors.Join(errs...)
 }

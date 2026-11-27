@@ -92,8 +92,8 @@ func (p *Provider) NodeID(n *corev1.Node) (string, error) {
 
 // Observe reads every LoadBalancer Service and the pool's EndpointSlices. An address is bound where the pool's
 // Service for it and its EndpointSlice say, and ready once MetalLB has assigned it; one another Service requests or
-// holds is a conflict. A Service whose EndpointSlice is missing announces nothing, so its address counts as unbound,
-// and the next Bind completes it.
+// holds is a conflict. A Service whose EndpointSlice is missing, or whose node has gone, announces nothing, so its
+// address counts as unbound, and the next Bind completes it (relabelling the Service and replacing the slice).
 func (p *Provider) Observe(ctx context.Context) ([]addresspool.Address, error) {
 	svcs, err := p.services(ctx)
 	if err != nil {
@@ -113,8 +113,18 @@ func (p *Provider) Observe(ctx context.Context) ([]addresspool.Address, error) {
 	out := make([]addresspool.Address, 0, len(p.addresses))
 	for _, ip := range p.addresses {
 		a := addresspool.Address{ID: ip, IP: ip}
-		switch s, bound := ours[ip]; {
-		case bound && sliced[s.Name]:
+		s, bound := ours[ip]
+		if bound = bound && sliced[s.Name]; bound {
+			// A Service of the pool's on a node that has gone announces nothing. Left bound, the planner would call it
+			// a conflict when the pool didn't record the node (a pool recreated, or a status write lost), and leave it.
+			gone, err := p.nodeGone(ctx, s.Labels[NodeLabel])
+			if err != nil {
+				return nil, err
+			}
+			bound = !gone
+		}
+		switch {
+		case bound:
 			a.NodeID, a.BindingID, a.BindIP = s.Labels[NodeLabel], s.Name, ip
 			a.NotReady = notAssigned(s, ip, others[ip])
 		case len(others[ip]) > 0:
@@ -123,6 +133,15 @@ func (p *Provider) Observe(ctx context.Context) ([]addresspool.Address, error) {
 		out = append(out, a)
 	}
 	return out, nil
+}
+
+// nodeGone says whether the named node no longer exists.
+func (p *Provider) nodeGone(ctx context.Context, name string) (bool, error) {
+	err := p.c.Get(ctx, types.NamespacedName{Name: name}, &corev1.Node{})
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	return false, err
 }
 
 // notAssigned says why MetalLB hasn't assigned ip to the pool's Service s, or "" when it has.

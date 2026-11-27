@@ -85,7 +85,8 @@ func (r *FreeswitchClusterReconciler) syncHealth(ctx context.Context, fsc *sipv1
 // A member a person fails over, with spec.recovery, on a node whose kubelet is up, keeps its calls: keepCallsSettle
 // after the record, its pod is deleted gracefully, and its drain, seeing the fail-over annotation, stops FreeSWITCH
 // without hanging them up (drainScript), for the replacement to recover. Any other failover deletes the pod at once: an automatic one is of
-// a member whose calls are lost already, or whose kubelet can't run a drain.
+// a member whose calls are lost already, or whose kubelet can't run a drain, or of a pod already shutting down: its
+// drain began without the annotation, and so hangs up its calls.
 func (r *FreeswitchClusterReconciler) carryOut(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, fleet fleetRef, cfg settings, nodes map[string]*corev1.Node, d *failoverDecision, status *sipv1alpha1.FreeswitchClusterStatus, now time.Time) time.Duration {
 	t := d.target
 	if t == nil {
@@ -114,7 +115,8 @@ func (r *FreeswitchClusterReconciler) carryOut(ctx context.Context, fsc *sipv1al
 			status.LastFailover = rec.DeepCopy()
 		}
 	}
-	keepCalls := d.trigger == sipv1alpha1.FailoverTriggerManual && cfg.recovery && r.nodeUp(nodes[t.Spec.NodeName], now)
+	keepCalls := d.trigger == sipv1alpha1.FailoverTriggerManual && cfg.recovery && r.nodeUp(nodes[t.Spec.NodeName], now) &&
+		t.DeletionTimestamp == nil
 	if keepCalls && status.LastFailover != nil {
 		// The drain learns of the failover from the annotation in a downward-API file, which the kubelet stops
 		// refreshing once the pod is being deleted: give it time to write the annotation first. The pod's calls go on
@@ -324,19 +326,19 @@ const keepCallsSettle = 5 * time.Second
 const keepCallsWait = 30 * time.Second
 
 // forceKeptCallsFailover deletes at once the pod of the latest failover when it was deleted gracefully, to keep its
-// calls, and is still there keepCallsWait later. It returns how soon to look again, or zero.
+// calls, and is still there keepCallsWait later. A pod shutting down since before its failover wasn't deleted to keep
+// its calls: its failover is resumed instead (decideFailover). It returns how soon to look again, or zero.
 func (r *FreeswitchClusterReconciler) forceKeptCallsFailover(ctx context.Context, fsc *sipv1alpha1.FreeswitchCluster, pods []corev1.Pod, last *sipv1alpha1.FailoverRecord, now time.Time) time.Duration {
 	if last == nil || last.CompletedAt != nil {
 		return 0
 	}
 	for i := range pods {
 		p := &pods[i]
-		grace := time.Duration(ptr.Deref(p.DeletionGracePeriodSeconds, 0)) * time.Second
-		if p.Name != last.Pod || string(p.UID) != last.PodUID || p.DeletionTimestamp == nil || grace == 0 {
+		if p.Name != last.Pod || string(p.UID) != last.PodUID || p.DeletionTimestamp == nil ||
+			ptr.Deref(p.DeletionGracePeriodSeconds, 0) == 0 || drainStart(p).Before(last.StartedAt.Time) {
 			continue
 		}
-		// The deletion timestamp is when the grace period ends: the delete itself was that much earlier.
-		if wait := p.DeletionTimestamp.Add(-grace).Add(keepCallsWait).Sub(now); wait > 0 {
+		if wait := drainStart(p).Add(keepCallsWait).Sub(now); wait > 0 {
 			return wait
 		}
 		uid := p.UID

@@ -7,7 +7,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -46,6 +45,9 @@ const (
 	// kubelet restarts it.
 	startupGraceSeconds int32 = 120
 	startupProbePeriod  int32 = 5
+	// probeTimeoutSeconds bounds the startup and readiness probes, which run startupScript: room for its three
+	// fs_cli calls at most.
+	probeTimeoutSeconds int32 = 5
 )
 
 // settings is a FreeswitchClusterSpec with every default applied. The API server applies the same defaults from
@@ -237,21 +239,6 @@ func buildService(fsc *sipv1alpha1.FreeswitchCluster) *corev1.Service {
 	}
 }
 
-func buildPDB(fsc *sipv1alpha1.FreeswitchCluster) *policyv1.PodDisruptionBudget {
-	maxUnavailable := intstr.FromInt32(1)
-	return &policyv1.PodDisruptionBudget{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pdbName(fsc),
-			Namespace: fsc.Namespace,
-			Labels:    commonLabels(fsc),
-		},
-		Spec: policyv1.PodDisruptionBudgetSpec{
-			MaxUnavailable: &maxUnavailable,
-			Selector:       &metav1.LabelSelector{MatchLabels: selectorLabels(fsc)},
-		},
-	}
-}
-
 // buildStatefulSet renders the fleet's StatefulSet, with conf (from layoutConfig) as its configuration directory.
 func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *appsv1.StatefulSet {
 	cfg := resolve(fsc)
@@ -332,14 +319,14 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		StartupProbe: &corev1.Probe{
 			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + startupScriptName}}},
 			PeriodSeconds:    startupProbePeriod,
-			TimeoutSeconds:   3,
+			TimeoutSeconds:   probeTimeoutSeconds,
 			FailureThreshold: startupGraceSeconds / startupProbePeriod,
 			SuccessThreshold: 1,
 		},
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{shell, scriptsDir + "/" + readyScriptName}}},
 			PeriodSeconds:    5,
-			TimeoutSeconds:   3,
+			TimeoutSeconds:   probeTimeoutSeconds,
 			FailureThreshold: 1,
 			SuccessThreshold: 1,
 		},

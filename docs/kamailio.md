@@ -75,8 +75,9 @@ Kamailio takes requests routed to that name as its own (in the lint workflow too
 ## Membership is live
 
 Each `FreeswitchCluster` publishes its own dispatcher list. The `KamailioCluster` combines its fleets' lists into
-`<name>-dispatcher`, which its pods mount as a directory, with every destination flagged for probing (Kamailio's
-probes take a dead node out on their own).
+`<name>-kamailio-dispatcher`, which its pods mount as a directory, with every destination flagged for probing
+(Kamailio's probes take a dead node out on their own). A Kamailio pod knows a request as one of the fleet's by its
+source address alone: a node's requests over TCP come from any port.
 
 When a destination leaves, the operator marks it inactive on every ready Kamailio pod at once, by pod address. Once
 `reloadDelaySeconds` have passed, it has each pod reload, reads each pod's list back, and reloads again every 10 s
@@ -96,9 +97,11 @@ one pod at a time. That is cheap, because a Kamailio drain is short.
 
 Kamailio's JSON-RPC has no authentication of its own, and NetworkPolicy doesn't apply to host-network pods. So the
 operator keeps a random token in a Secret (`<name>-jsonrpc`), the pods get it as an environment variable, and the
-HTTP route answers `401` to any request without it. The RPC listener binds to the pod's own address only (on the
-host network, the node's private address). Keep the port closed in the security group too. A `FreeswitchCluster`'s
-`jsonrpcURL` remains for a Kamailio you run yourself, without a token.
+HTTP route answers `401` to any request without it; HTTP to the public SIP port gets no answer at all. The pods
+read the token only at start, so the pod template carries its hash: replacing the token rolls the fleet. The RPC
+listener binds to the pod's own address only (on the host network, the node's private address). Keep the port
+closed in the security group too. A `FreeswitchCluster`'s `jsonrpcURL` remains for a Kamailio you run yourself,
+without a token.
 
 ## SIP capture
 
