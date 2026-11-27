@@ -286,9 +286,9 @@ kamailio_rpc() {
 # The operator asks Kamailio to reload only reloadDelaySeconds after it last wrote the list (so the kubelet has
 # synced the mounted file), so a fleet that has just become Ready may not be in Kamailio yet. Wait until the
 # KamailioCluster is Ready and current, has confirmed the reload, and every Kamailio pod has loaded exactly the
-# destinations in its combined list, or the bench meets 503s.
+# destinations in its combined list, with one of them active, or the bench meets 503s.
 wait_proxy() {
-  local deadline=$((SECONDS + $1)) want have pod behind state
+  local deadline=$((SECONDS + $1)) want have list pod behind state
   while :; do
     state=$("${KUBECTL[@]}" -n "$NS" get kamailiocluster "$PROXY" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status} {.status.dispatcherHash} {.status.dispatcherReloadedHash} {.status.updatedReplicas}/{.spec.replicas}')
     want=$("${KUBECTL[@]}" -n "$NS" get configmap "$PROXY-dispatcher" -o jsonpath='{.data.dispatcher\.list}' \
@@ -299,9 +299,13 @@ wait_proxy() {
       behind=" (KamailioCluster: Ready=${2:-?} hash=${3:-?} reloaded=${4:-?} updated=${5:-?})"
     fi
     for pod in $("${KUBECTL[@]}" -n "$NS" get pods -l "sip.instruments.com/kamailio-cluster=$PROXY" -o name); do
-      have=$(kamailio_rpc "$pod" dispatcher.list 2>/dev/null \
-        | sed -n 's/.*"URI":[[:space:]]*"\([^"]*\)".*/\1/p' | sort || true)
-      [ -n "$want" ] && [ "$have" = "$want" ] || behind="$behind ${pod#pod/}"
+      list=$(kamailio_rpc "$pod" dispatcher.list 2>/dev/null || true)
+      have=$(printf '%s\n' "$list" | sed -n 's/.*"URI":[[:space:]]*"\([^"]*\)".*/\1/p' | sort)
+      # A reloaded list starts with its destinations inactive until a probe answers (FLAGS IP): wait for one to be
+      # active (AP), or the bench's first call meets a 503.
+      if [ -z "$want" ] || [ "$have" != "$want" ] || ! printf '%s\n' "$list" | grep -q '"FLAGS":[[:space:]]*"A'; then
+        behind="$behind ${pod#pod/}"
+      fi
     done
     [ -z "$behind" ] && return 0
     if [ "$SECONDS" -ge "$deadline" ]; then
