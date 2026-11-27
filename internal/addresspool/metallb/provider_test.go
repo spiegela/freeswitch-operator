@@ -267,3 +267,33 @@ func TestFactoryNeedsNamespace(t *testing.T) {
 		t.Error("no namespace accepted")
 	}
 }
+
+// The pool's own Service on a node that has gone announces nothing: the address is unbound, not a conflict the pool
+// can't clear, and the next Bind moves the Service to the new node.
+func TestOwnServiceOnAGoneNode(t *testing.T) {
+	ctx := context.Background()
+	p, c := setup(t)
+	obs, _ := p.Observe(ctx)
+	if err := p.Bind(ctx, obs[0], "edge-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "edge-a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if obs, _ = p.Observe(ctx); obs[0].NodeID != "" {
+		t.Fatalf("bound to a gone node: %+v", obs[0])
+	}
+	b := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "edge-b"},
+		Status:     corev1.NodeStatus{Addresses: []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "172.18.0.6"}}},
+	}
+	if err := c.Create(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Bind(ctx, obs[0], "edge-b"); err != nil {
+		t.Fatalf("Bind over the gone node's Service: %v", err)
+	}
+	if obs, _ = p.Observe(ctx); obs[0].NodeID != "edge-b" {
+		t.Errorf("not moved: %+v", obs[0])
+	}
+}

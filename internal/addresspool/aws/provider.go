@@ -8,6 +8,7 @@
 package aws
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -102,40 +103,31 @@ func (p *Provider) NodeID(n *corev1.Node) (string, error) {
 	return instance, nil
 }
 
-// Observe describes the pool's Elastic IPs in one call. When an allocation ID doesn't exist the whole call fails,
-// so it then describes them one at a time, to report the missing one and still see the rest.
+// filterValuesMax is the most values EC2 takes in one filter; a pool may list more allocation IDs.
+const filterValuesMax = 200
+
+// Observe describes the pool's Elastic IPs, in one call for up to filterValuesMax of them. It filters by allocation
+// ID rather than naming them, since naming one that doesn't exist fails the whole call; filtered, a missing one is
+// just absent, and reported on its own.
 func (p *Provider) Observe(ctx context.Context) ([]addresspool.Address, error) {
 	found := map[string]ec2types.Address{}
-	failed := map[string]error{}
-	out, err := p.api.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{AllocationIds: p.ids})
-	switch {
-	case err == nil:
+	for ids := range slices.Chunk(p.ids, filterValuesMax) {
+		out, err := p.api.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{
+			Filters: []ec2types.Filter{{Name: awssdk.String("allocation-id"), Values: ids}},
+		})
+		if err != nil {
+			return nil, err
+		}
 		for _, a := range out.Addresses {
 			found[awssdk.ToString(a.AllocationId)] = a
 		}
-	case apiErrorCode(err) == "InvalidAllocationID.NotFound":
-		for _, id := range p.ids {
-			one, err := p.api.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{AllocationIds: []string{id}})
-			switch {
-			case err != nil:
-				failed[id] = err
-			case len(one.Addresses) == 1:
-				found[id] = one.Addresses[0]
-			}
-		}
-	default:
-		return nil, err
 	}
 
 	res := make([]addresspool.Address, 0, len(p.ids))
 	for _, id := range p.ids {
 		a, ok := found[id]
 		if !ok {
-			err := failed[id]
-			if err == nil {
-				err = fmt.Errorf("no Elastic IP with allocation ID %s in this account and region", id)
-			}
-			res = append(res, addresspool.Address{ID: id, Err: err})
+			res = append(res, addresspool.Address{ID: id, Err: fmt.Errorf("no Elastic IP with allocation ID %s in this account and region", id)})
 			continue
 		}
 		obs := addresspool.Address{ID: id, IP: awssdk.ToString(a.PublicIp), BindingID: awssdk.ToString(a.AssociationId)}
@@ -165,9 +157,9 @@ func (p *Provider) Observe(ctx context.Context) ([]addresspool.Address, error) {
 // already holds that isn't the pool's, and (AllowReassociation false) to take the address from anything else.
 //
 // With privateAddress Secondary it instead assigns the interface a secondary private address (the one the Elastic
-// IP had last, LastPrivateAddressTag, when AWS gives it; else a new one), records it on the Elastic IP
-// (PrivateAddressTag) and associates the Elastic IP with it, leaving any Elastic IP on the node's own address
-// alone. A failed association takes the secondary address back.
+// IP had last, when AWS gives it; else a new one), records it on the Elastic IP (PrivateAddressTag) and associates
+// the Elastic IP with it, leaving any Elastic IP on the node's own address alone. A failed association takes the
+// secondary address back and puts the tag back as it was.
 func (p *Provider) Bind(ctx context.Context, a addresspool.Address, instanceID string) error {
 	if p.secondary {
 		return p.bindSecondary(ctx, a, instanceID)
@@ -246,7 +238,17 @@ func (p *Provider) bindSecondary(ctx context.Context, a addresspool.Address, ins
 	if len(out.Addresses) != 1 {
 		return fmt.Errorf("no Elastic IP with allocation ID %s", a.ID)
 	}
-	ip, err := p.assignSecondary(ctx, eniID, tagValue(out.Addresses[0].Tags, LastPrivateAddressTag))
+	cur := out.Addresses[0]
+	if cur.AssociationId != nil {
+		// Refused before touching anything: the association below would fail anyway (AllowReassociation false), and
+		// overwriting the tag first would lose the private address its binding really has. A read that missed a
+		// binding just made (EC2 is eventually consistent) gets here.
+		return fmt.Errorf("the Elastic IP %s is already associated (%s)", a.ID, awssdk.ToString(cur.AssociationId))
+	}
+	// A binding that ended without Unbind (AWS disassociates a terminated instance's Elastic IP itself) still names its
+	// private address in PrivateAddressTag; Unbind moves it to LastPrivateAddressTag.
+	prevTag := tagValue(cur.Tags, PrivateAddressTag)
+	ip, err := p.assignSecondary(ctx, eniID, cmp.Or(prevTag, tagValue(cur.Tags, LastPrivateAddressTag)))
 	if err != nil {
 		return fmt.Errorf("assigning a secondary private address to %s: %w", eniID, err)
 	}
@@ -259,8 +261,8 @@ func (p *Provider) bindSecondary(ctx context.Context, a addresspool.Address, ins
 		if !tagged {
 			return err
 		}
-		if derr := p.untag(ctx, a.ID); derr != nil {
-			err = fmt.Errorf("%w; removing the %s tag also failed: %w", err, PrivateAddressTag, derr)
+		if rerr := p.restoreTag(ctx, a.ID, prevTag); rerr != nil {
+			err = fmt.Errorf("%w; restoring the %s tag also failed: %w", err, PrivateAddressTag, rerr)
 		}
 		return err
 	}
@@ -377,6 +379,18 @@ func (p *Provider) unassign(ctx context.Context, eniID, ip string) error {
 		// The interface has gone with its instance, and the address with it.
 		return nil
 	}
+	return err
+}
+
+// restoreTag sets PrivateAddressTag back to prev, or removes it when there was none.
+func (p *Provider) restoreTag(ctx context.Context, allocationID, prev string) error {
+	if prev == "" {
+		return p.untag(ctx, allocationID)
+	}
+	_, err := p.api.CreateTags(ctx, &ec2.CreateTagsInput{
+		Resources: []string{allocationID},
+		Tags:      []ec2types.Tag{{Key: awssdk.String(PrivateAddressTag), Value: awssdk.String(prev)}},
+	})
 	return err
 }
 
