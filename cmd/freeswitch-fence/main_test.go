@@ -24,7 +24,9 @@ func TestCheckExitCode(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(http.StatusText(c.status), func(t *testing.T) {
-			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(c.status) }))
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(c.status)
+			}))
 			defer srv.Close()
 			host, port, err := net.SplitHostPort(srv.Listener.Addr().String())
 			if err != nil {
