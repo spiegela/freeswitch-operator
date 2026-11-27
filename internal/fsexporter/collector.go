@@ -84,7 +84,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	defer func() { _ = cl.Close() }()
 	ch <- prometheus.MustNewConstMetric(descUp, prometheus.GaugeValue, 1)
 
-	// Each part is reported on its own: one command that fails (a module not loaded, say) leaves the rest.
+	// Each part is reported on its own: one command that fails (a module not loaded, say) leaves the rest. One that
+	// times out closes the connection (eslClient.fail), so the rest fail too rather than read its late reply.
 	if out, err := cl.API(`json {"command":"status","data":""}`, c.Timeout); err != nil {
 		c.logger().Warn("status failed", "error", err)
 	} else if st, err := parseStatus(out); err != nil {

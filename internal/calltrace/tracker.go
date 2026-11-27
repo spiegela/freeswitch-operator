@@ -68,6 +68,12 @@ const (
 // messages to arrive.
 const settle = 2 * time.Second
 
+// txnLife is how long after its request a transaction can still see copies of its messages: 64*T1, RFC 3261's
+// Timers B, F and J, after which neither end retransmits it. Sweep then drops an emitted transaction, so a long
+// call's in-dialog requests don't pile up, except a dialog's first INVITEs, which the call's other spans hang off.
+// Until then a late retransmission still finds its transaction instead of starting a duplicate span.
+const txnLife = 32 * time.Second
+
 // Tracker builds calls out of SIP messages and LiveKit webhooks, and hands back spans as they finish. It is safe
 // for concurrent use.
 type Tracker struct {
@@ -213,6 +219,7 @@ func (t *Tracker) HandleSIP(p Packet, msg *Message) []Span {
 			t.metrics.SIPMessages.WithLabelValues("untraced").Inc()
 			return nil
 		}
+		// Strings kept past this message are cloned: msg's point into its whole header block.
 		root := msg.CallID
 		if v := msg.Header(t.cfg.CorrelationHeader); v != "" {
 			root = v
@@ -220,12 +227,13 @@ func (t *Tracker) HandleSIP(p Packet, msg *Message) []Span {
 		trace := TraceIDFor(root)
 		if c = t.calls[trace]; c == nil {
 			out = t.makeRoom()
-			c = &call{trace: trace, rootCallID: root, start: p.Time, last: p.Time}
+			c = &call{trace: trace, rootCallID: strings.Clone(root), start: p.Time, last: p.Time}
 			t.calls[trace] = c
 			t.metrics.ActiveCalls.Set(float64(len(t.calls)))
 		}
-		c.callIDs = append(c.callIDs, msg.CallID)
-		t.byCallID[msg.CallID] = c
+		id := strings.Clone(msg.CallID)
+		c.callIDs = append(c.callIDs, id)
+		t.byCallID[id] = c
 	}
 	t.metrics.SIPMessages.WithLabelValues("traced").Inc()
 	// A component listening on a wildcard address (Kamailio on 0.0.0.0) captures its own side as that: it is
@@ -268,17 +276,18 @@ func (t *Tracker) request(c *call, p Packet, msg *Message) {
 		}
 		return
 	}
+	key.callID, key.method = strings.Clone(key.callID), strings.Clone(key.method)
 	tx := &txn{
 		key: key, id: spanIDFor(c.trace, "sip", key.callID, strconv.FormatUint(uint64(key.cseq), 10), key.method,
 			key.src.String(), key.dst.String()),
 		initial: msg.Method == methodInvite && msg.ToTag == "", start: p.Time, firstCap: p.CaptureID,
 		reporters: map[uint32]bool{p.CaptureID: true}, seen: map[string]int{},
-		ruriHost: uriHost(msg.RequestURI), userAgent: msg.Header("user-agent"), reason: msg.Header("reason"),
-		fromTag: msg.FromTag,
+		ruriHost: strings.Clone(uriHost(msg.RequestURI)), userAgent: strings.Clone(msg.Header("user-agent")),
+		reason: strings.Clone(msg.Header("reason")), fromTag: strings.Clone(msg.FromTag),
 	}
 	c.list = append(c.list, tx)
 	if tx.initial && c.first == nil {
-		c.first, c.fromUser, c.toUser = tx, msg.FromUser, msg.ToUser
+		c.first, c.fromUser, c.toUser = tx, strings.Clone(msg.FromUser), strings.Clone(msg.ToUser)
 	}
 }
 
@@ -292,9 +301,9 @@ func (t *Tracker) response(c *call, p Packet, msg *Message) {
 		return
 	}
 	if tx.status == 0 || (msg.Status == tx.status && p.Time.Before(tx.end)) {
-		tx.status, tx.phrase, tx.end = msg.Status, msg.Phrase, p.Time
+		tx.status, tx.phrase, tx.end = msg.Status, strings.Clone(msg.Phrase), p.Time
 		if r := msg.Header("reason"); r != "" {
-			tx.reason = r
+			tx.reason = strings.Clone(r)
 		}
 	}
 	switch {
@@ -551,6 +560,9 @@ func (t *Tracker) Sweep() []Span {
 			for _, tx := range ready {
 				out = append(out, t.txnSpan(c, tx))
 			}
+			c.list = slices.DeleteFunc(c.list, func(tx *txn) bool {
+				return tx.emitted && !tx.initial && now.Sub(tx.start) >= txnLife
+			})
 		}
 	}
 	for name, pr := range t.pending {

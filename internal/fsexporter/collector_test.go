@@ -66,6 +66,12 @@ const (
 // fakeFreeSWITCH serves the event socket protocol: auth, then one api/response per api command.
 func fakeFreeSWITCH(t *testing.T, password string, answers map[string]string) string {
 	t.Helper()
+	return slowFreeSWITCH(t, password, answers, nil)
+}
+
+// slowFreeSWITCH is fakeFreeSWITCH, holding back the answer to each command in delays that long.
+func slowFreeSWITCH(t *testing.T, password string, answers map[string]string, delays map[string]time.Duration) string {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -77,13 +83,13 @@ func fakeFreeSWITCH(t *testing.T, password string, answers map[string]string) st
 			if err != nil {
 				return
 			}
-			go serveESL(conn, password, answers)
+			go serveESL(conn, password, answers, delays)
 		}
 	}()
 	return ln.Addr().String()
 }
 
-func serveESL(conn net.Conn, password string, answers map[string]string) {
+func serveESL(conn net.Conn, password string, answers map[string]string, delays map[string]time.Duration) {
 	defer func() { _ = conn.Close() }()
 	r := textproto.NewReader(bufio.NewReader(conn))
 	_, _ = io.WriteString(conn, "Content-Type: auth/request\n\n")
@@ -103,7 +109,9 @@ func serveESL(conn net.Conn, password string, answers map[string]string) {
 			}
 			_, _ = io.WriteString(conn, "Content-Type: command/reply\nReply-Text: +OK accepted\n\n")
 		case strings.HasPrefix(line, "api "):
-			body, ok := answers[strings.TrimPrefix(line, "api ")]
+			cmd := strings.TrimPrefix(line, "api ")
+			time.Sleep(delays[cmd])
+			body, ok := answers[cmd]
 			if !ok {
 				body = "-ERR command not found\n"
 			}
@@ -211,6 +219,20 @@ func TestCollectorKeepsGoingWhenACommandFails(t *testing.T) {
 	}
 	if n := testutil.CollectAndCount(c, "freeswitch_calls"); n != 1 {
 		t.Errorf("freeswitch_calls series = %d, want 1", n)
+	}
+}
+
+// A reply that comes after its command timed out must not be read as the next command's.
+func TestCollectorDropsLateReply(t *testing.T) {
+	addr := slowFreeSWITCH(t, "ClueCon", map[string]string{
+		"show calls count":          "\n2 total.\n\n",
+		"show channels count":       "\n4 total.\n\n",
+		"fsctl pause_check inbound": "true\n",
+	}, map[string]time.Duration{"show calls count": 300 * time.Millisecond})
+	c := &Collector{Address: addr, Password: "ClueCon", Timeout: 200 * time.Millisecond, Log: quietLog()}
+	// Read out of step, channels would be the calls count and pause_check the channels count (so 0).
+	if n := testutil.CollectAndCount(c, "freeswitch_channels", "freeswitch_inbound_paused"); n != 0 {
+		t.Errorf("channels and pause_check series = %d, want 0 after the connection timed out", n)
 	}
 }
 

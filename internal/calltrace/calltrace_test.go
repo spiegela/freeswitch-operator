@@ -381,6 +381,42 @@ func TestTrackerEvictsOldest(t *testing.T) {
 	}
 }
 
+// A long call's in-dialog requests are dropped once neither end can retransmit them, so its state stays bounded,
+// and a retransmission before then joins its transaction instead of making a second span.
+func TestTrackerDropsFinishedInDialogRequests(t *testing.T) {
+	b := newBench(t)
+	b.send(0, carrier, kam, invite(a, "1", ""), 1)
+	b.send(10, kam, carrier, reply("200 OK", a, "1 INVITE"), 1)
+	info := func(cseq string) string {
+		return "INFO sip:x SIP/2.0\nFrom: <sip:a@b>;tag=caller\nTo: <sip:c@d>;tag=callee\nCall-ID: " + a +
+			"\nCSeq: " + cseq + " INFO"
+	}
+	const n = 100
+	for i := range n {
+		ms, cseq := 1000*(i+1), fmt.Sprint(i+2)
+		b.send(ms, carrier, kam, info(cseq), 1)
+		b.send(ms+5, kam, carrier, reply("200 OK", a, cseq+" INFO"), 1)
+		b.sweep(ms + 500)
+	}
+	last := fmt.Sprint(n + 1)
+	b.sweep(1000*n + 3000) // the last INFO's span goes out
+	b.send(1000*n+4000, carrier, kam, info(last), 1)
+	c := b.tr.calls[TraceIDFor(a)]
+	if c == nil || len(c.list) > 40 {
+		t.Fatalf("transactions kept: %d, want at most the last %v's and the INVITE", len(c.list), txnLife)
+	}
+	b.spans = append(b.spans, b.tr.Flush()...)
+	infos := 0
+	for _, s := range b.spans {
+		if attr(s, "sip.method") == "INFO" {
+			infos++
+		}
+	}
+	if infos != n {
+		t.Errorf("INFO spans = %d, want %d (one each)", infos, n)
+	}
+}
+
 func TestLiveKitVerify(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	v := &LiveKitVerifier{Keys: map[string]string{"APIkey": "secret"}, Now: func() time.Time { return now }}
