@@ -318,11 +318,17 @@ func failOverRequested(p *corev1.Pod) bool {
 	return err == nil && asked
 }
 
+// beingFailedOver reports whether p is the pod of the failover under way, already shutting down: one failed over
+// by hand is deleted gracefully, keeping its annotation until it is gone, and isn't asked for again meanwhile.
+func beingFailedOver(p *corev1.Pod, last *sipv1alpha1.FailoverRecord) bool {
+	return failoverInProgress(last) && string(p.UID) == last.PodUID && p.DeletionTimestamp != nil
+}
+
 // decideFailover picks at most one member to fail over:
 //   - The pod of the last failover, if it is still there and not shutting down: the failover was recorded but not
 //     carried out, and is finished whatever the pod's health is now.
 //   - A pod a person annotated sip.instruments.com/fail-over=true, whatever the mode or its health (the first by
-//     name).
+//     name), unless it is the last failover's pod, shutting down.
 //   - Otherwise, in mode Automatic and with no failover under way, the Failed member that has been ready and failed
 //     first. A Failed member that has never been ready isn't failed over: a configuration or image that never
 //     worked fails the same way on any node. Nor is one shutting down (a drain, a rolling update, a scale-down),
@@ -339,7 +345,7 @@ func decideFailover(verdicts []verdict, mode sipv1alpha1.FailoverMode, last *sip
 	}
 	for i := range verdicts {
 		p := verdicts[i].pod
-		if failOverRequested(p) {
+		if failOverRequested(p) && !beingFailedOver(p, last) {
 			d.target, d.trigger = p, sipv1alpha1.FailoverTriggerManual
 			d.reason = "requested with the " + sipv1alpha1.FailOverAnnotation + " annotation"
 			return d

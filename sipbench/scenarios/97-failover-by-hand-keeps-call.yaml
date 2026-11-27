@@ -1,0 +1,51 @@
+name: failover-by-hand-keeps-call
+area: fleet
+long: true
+description: >
+  A person fails over a healthy member mid-call, with sip.instruments.com/fail-over=true on its pod. With
+  spec.recovery the operator fences the node and deletes the pod gracefully, and its drain, seeing the annotation,
+  stops FreeSWITCH at once without hanging up the call (a clean stop would hang it up, deleting what recovery
+  reads). The pod comes back on the spare edge node with the member's address and recovers the call on start: the
+  recovery must take exactly the call's two legs, and the call must have audio both ways again, through to the
+  runner's hangup, whose BYE must reach the backend through the spare. When the scenario ends the runner unfences
+  the node. Needs call tracking and recovery on start, and a spare edge node holding no address of its own, as on
+  kind.
+requires: [mock, fleet, spare-node, call-recovery]
+timeoutMs: 300000
+metrics:
+  - {query: 'sum(freeswitch_operator_failovers_total{trigger="Manual",result="ok"})', increase: 1}
+backend:
+  routes:
+    throughout:
+      steps:
+        - answer: {}
+        - tone: {hz: 1000, ms: 240000}
+calls:
+  - id: a
+    to: throughout
+    steps:
+      - tone: {hz: 600, ms: 240000}
+    maxDurationMs: 200000
+    expect:
+      status: 200
+      tonesHeard: [1000]
+      # Silent from the drain's stop until the call is recovered on the spare: the pod's deletion, its start
+      # there, the address agent binding its address and the wait for its profiles. A call whose audio never came
+      # back would be silent on to its hangup, 30 s after the recovery.
+      maxAudioGapMs: 25000
+      endedBy: local
+      backend:
+        answered: true
+        tonesHeard: [600]
+        maxAudioGapMs: 25000
+        endedBy: remote
+actions:
+  - afterAnswered: a
+    afterMs: 10000
+    failOverOf: a
+  - waitFailover: {of: a, timeoutMs: 120000}
+  - expectRecovered: a
+  # Long enough after recovery for audio both ways to show, well inside the media timeout (60 s).
+  - afterMs: 30000
+    hangup: a
+  - waitFleetCurrent: {timeoutMs: 300000}

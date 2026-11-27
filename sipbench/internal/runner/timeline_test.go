@@ -47,6 +47,9 @@ type fakeFleet struct {
 	unfenced []string
 	// draining are the pods deleted gracefully, whose drain has started.
 	draining map[string]bool
+	// failovers are the pods the runner asked the operator to fail over; each comes back on spare, as one deleted
+	// at once does, having recovered its calls.
+	failovers []string
 }
 
 type fakeBlackout struct {
@@ -203,6 +206,18 @@ func (f *fakeFleet) DeletePodNow(_ context.Context, pod string) error {
 		}
 	}
 	return nil
+}
+
+func (f *fakeFleet) RequestFailover(ctx context.Context, pod string) error {
+	f.mu.Lock()
+	f.failovers = append(f.failovers, pod)
+	// The operator's graceful delete has the drain stop FreeSWITCH without hanging up, and the replacement recover.
+	if f.restarts == nil {
+		f.restarts = map[string]int32{}
+	}
+	f.restarts[pod]++
+	f.mu.Unlock()
+	return f.DeletePodNow(ctx, pod)
 }
 
 func (f *fakeFleet) Exec(_ context.Context, pod, container string, cmd ...string) (string, error) {
@@ -594,6 +609,50 @@ func TestTimelineMovesToASpareAndRecovers(t *testing.T) {
 	tl := strings.Join(res.Timeline, "\n  ")
 	for _, s := range []string{"cordoned it, deleted the pod and crashed FreeSWITCH under its drain; its replacement takes calls on n3, with the same external address \"192.0.2.10\"",
 		"the recovery on start in edge-0 took 4 call legs: call(s) a, b"} {
+		if !strings.Contains(tl, s) {
+			t.Errorf("timeline lacks %q:\n  %s", s, tl)
+		}
+	}
+	if res.Status == statusFail {
+		t.Errorf("failed: %v", res.Failures)
+	}
+}
+
+// failOverOf annotates the call's pod for the operator to fail it over; the replacement recovers the call on the
+// spare, and the operator's fence on the call's node is lifted when the scenario ends.
+func TestTimelineFailOverOf(t *testing.T) {
+	if testing.Short() {
+		t.Skip("places real calls over loopback")
+	}
+	f := newFakeFleet()
+	f.recoverOut = "Recovered 2 call(s)\n"
+	f.spare = "n3"
+	f.external = map[string]string{"edge-0": "192.0.2.10"}
+	r := withFleet(startMock(t, longRoute), f)
+	r.cfg.Caps[scenario.SpareNodeCapability] = true
+	res := runScenario(t, r, `
+name: fail-over
+requires: [mock, fleet, spare-node, call-recovery]
+calls:
+  - id: a
+    to: long
+    steps:
+      - tone: {hz: 600, ms: 20000}
+    expect: {status: 200}
+actions:
+  - {afterAnswered: a, afterMs: 300, failOverOf: a}
+  - waitFailover: {of: a, timeoutMs: 5000}
+  - {expectRecovered: a}
+  - {hangup: a}
+`)
+	if fmt.Sprint(f.failovers) != "[edge-0]" || len(f.execs) != 1 {
+		t.Errorf("failovers %q, execs %q: want edge-0 annotated, and nothing run in it but reading its recovery", f.failovers, f.execs)
+	}
+	if !slices.Contains(f.unfenced, "n0") {
+		t.Errorf("unfenced %q, want n0", f.unfenced)
+	}
+	tl := strings.Join(res.Timeline, "\n  ")
+	for _, s := range []string{"call a is on edge-0 on n0; asked the operator to fail it over", "failed over from n0 to n3"} {
 		if !strings.Contains(tl, s) {
 			t.Errorf("timeline lacks %q:\n  %s", s, tl)
 		}

@@ -260,6 +260,19 @@ call's backend sends a REFER and every caller hangs up, and each of those reques
 on now. A pod replaced onto a spare keeps its address only when the spare holds none of its own (the pool's rule);
 one that kept an idle address from an earlier pod gives the moved pod that one, and its calls' rows stay put.
 
+**A recovered call keeps its old Via, received and rport included.** For each outbound leg (the backend's, here)
+FreeSWITCH saves the Via the far end sent back, with the `received` and `rport` the far end stamped on it
+(`sip_recover_via`), and sends that Via again with the re-INVITE recovery sends. A far end that follows RFC 3581
+answers to the address the request came from, at the stamped `rport`. That is the right port when nothing moved
+FreeSWITCH's source port on the way out (a direct path, or one-to-one NAT such as an Elastic IP): FreeSWITCH
+listens there again on the new node. But a NAT that changes ports (a NAT gateway) gives the new node a new mapping,
+and the far end answers the re-INVITE at the old node's port. Nothing answers there, so the re-INVITE times out
+after 32 s and FreeSWITCH hangs the call up (`RECOVERY_ON_TIMER_EXPIRE`). FreeSWITCH (1.10 to 1.11.4) has no switch
+for this. Reach the backend without port translation if its calls are to survive a move. On kind, conntrack
+changed FreeSWITCH's port the same way whenever the backend pod had just sent a request to that node, through kind's
+masquerading. `hack/kind.sh deploy` turns off masquerading for pod traffic to the nodes, as an EKS VPC CNI pool has
+it.
+
 Not built yet:
 
 - **Rows nobody recovers stay.** When a failed member's replacement doesn't come up with its address (a spare that

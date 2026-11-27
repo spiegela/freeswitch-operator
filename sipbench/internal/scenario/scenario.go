@@ -414,6 +414,11 @@ type Action struct {
 	// in the recovery table) and deletes the pod at once. The action ends once the replacement is up on another node, and fails unless it
 	// holds the same external address. It needs the "spare-node" and "call-recovery" capabilities.
 	MoveFreeswitchOf string `yaml:"moveFreeswitchOf,omitempty"`
+	// FailOverOf asks the operator to fail over the member that carries the named call, as a person would: it
+	// annotates the pod sip.instruments.com/fail-over=true, and ends there (waitFailover waits for the replacement).
+	// The operator fences the node; the runner unfences it when the scenario ends. It needs the "spare-node"
+	// capability.
+	FailOverOf string `yaml:"failOverOf,omitempty"`
 }
 
 // SpareNodeCapability is what a run must provide for MoveFreeswitchOf: an edge node the fleet doesn't use, which
@@ -592,6 +597,7 @@ func (a *Action) Kind() string {
 	add(a.CrashFreeswitchOf != "", "crashFreeswitchOf")
 	add(a.ExpectRecovered != "", "expectRecovered")
 	add(a.MoveFreeswitchOf != "", "moveFreeswitchOf")
+	add(a.FailOverOf != "", "failOverOf")
 	if len(kinds) != 1 {
 		return ""
 	}
@@ -842,7 +848,7 @@ func (s *Scenario) validateRepeats() error {
 		}
 	}
 	for i, a := range s.Actions {
-		refs := []string{a.AfterAnswered, a.AfterEnded, a.DrainNodeOf, a.Hangup, a.CrashFreeswitchOf, a.ExpectRecovered, a.MoveFreeswitchOf}
+		refs := []string{a.AfterAnswered, a.AfterEnded, a.DrainNodeOf, a.Hangup, a.CrashFreeswitchOf, a.ExpectRecovered, a.MoveFreeswitchOf, a.FailOverOf}
 		if a.WaitMember != nil {
 			refs = append(refs, a.WaitMember.Of)
 		}
@@ -946,12 +952,13 @@ func (s *Scenario) validateActions(calls map[string]bool) error { //nolint:gocyc
 		if kind == "" {
 			return fmt.Errorf("%s: needs exactly one of drainNodeOf, uncordon, rollFleet, breakConfig, "+
 				"restoreConfig, waitMember, waitFleetCurrent, expectRollStuck, blackoutNodeOf, waitNode, hangup, "+
-				"crashFreeswitchOf, expectRecovered, moveFreeswitchOf", label)
+				"crashFreeswitchOf, expectRecovered, moveFreeswitchOf, failOverOf", label)
 		}
 		fleet = fleet || a.OnFleet()
 		for field, call := range map[string]string{
 			"afterAnswered": a.AfterAnswered, "afterEnded": a.AfterEnded, "drainNodeOf": a.DrainNodeOf, "hangup": a.Hangup,
 			"crashFreeswitchOf": a.CrashFreeswitchOf, "expectRecovered": a.ExpectRecovered, "moveFreeswitchOf": a.MoveFreeswitchOf,
+			"failOverOf": a.FailOverOf,
 		} {
 			if call != "" && !calls[call] {
 				return fmt.Errorf("%s: %s names no call %q", label, field, call)
@@ -998,6 +1005,10 @@ func (s *Scenario) validateActions(calls map[string]bool) error { //nolint:gocyc
 		case a.MoveFreeswitchOf != "":
 			if !slices.Contains(s.Requires, SpareNodeCapability) || !slices.Contains(s.Requires, CallRecoveryCapability) {
 				return fmt.Errorf("%s: moveFreeswitchOf needs requires: [%s, %s]", label, SpareNodeCapability, CallRecoveryCapability)
+			}
+		case a.FailOverOf != "":
+			if !slices.Contains(s.Requires, SpareNodeCapability) {
+				return fmt.Errorf("%s: failOverOf needs requires: [%s]", label, SpareNodeCapability)
 			}
 		case a.CrashFreeswitchOf != "" || a.ExpectRecovered != "":
 			if !slices.Contains(s.Requires, CallRecoveryCapability) {

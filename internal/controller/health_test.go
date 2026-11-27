@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -349,6 +350,18 @@ func TestDecideFailoverResume(t *testing.T) {
 	if d = decideFailover([]verdict{healthy, {pod: &pending}}, sipv1alpha1.FailoverDetect, last); d.target != nil {
 		t.Errorf("resume a pod already shutting down: %+v", d)
 	}
+
+	// Failed over by hand and shutting down gracefully, still annotated: not asked for again until it is gone.
+	pending.Annotations = map[string]string{sipv1alpha1.FailOverAnnotation: "true"}
+	if d = decideFailover([]verdict{healthy, {pod: &pending}}, sipv1alpha1.FailoverDetect, last); d.target != nil {
+		t.Errorf("asked again while its failover is carried out: %+v", d)
+	}
+	// A request on a pod whose last failover is done still counts.
+	done := metav1.NewTime(t0)
+	if d = decideFailover([]verdict{healthy, {pod: &pending}}, sipv1alpha1.FailoverDetect,
+		&sipv1alpha1.FailoverRecord{Pod: "edge-1", PodUID: string(pending.UID), StartedAt: metav1.NewTime(t0), CompletedAt: &done}); d.target == nil || d.resume {
+		t.Errorf("a request on a pod whose last failover is done: %+v", d)
+	}
 }
 
 func TestAvoidFencedNodes(t *testing.T) {
@@ -619,12 +632,12 @@ func TestResumeAlreadyCarriedOut(t *testing.T) {
 	ok := func() float64 {
 		return testutil.ToFloat64(failovers.WithLabelValues(fleet.labels(string(sipv1alpha1.FailoverTriggerManual), reloadOK)...))
 	}
-	if deleted, err := r.failOver(context.Background(), fsc, &pod, sipv1alpha1.FailoverTriggerManual, "asked", t0); err != nil || !deleted {
+	if deleted, err := r.failOver(context.Background(), fsc, &pod, sipv1alpha1.FailoverTriggerManual, "asked", false, t0); err != nil || !deleted {
 		t.Fatalf("first: deleted %v, err %v", deleted, err)
 	}
 	before := ok()
 	d := failoverDecision{target: &pod, trigger: sipv1alpha1.FailoverTriggerManual, reason: "asked", resume: true}
-	r.carryOut(context.Background(), fsc, fleet, &d, fsc.Status.DeepCopy(), t0)
+	r.carryOut(context.Background(), fsc, fleet, settings{}, nil, &d, fsc.Status.DeepCopy(), t0)
 	if d.err != nil || ok() != before {
 		t.Errorf("err %v; failovers ok %v, was %v", d.err, ok(), before)
 	}
@@ -639,11 +652,11 @@ func TestResumeAlreadyReplaced(t *testing.T) {
 	c, fsc, pod, _ := failoverTestClient(t, replaced)
 	r := &FreeswitchClusterReconciler{Client: c, Now: func() time.Time { return t0 }}
 	fleet := fleetRef{kind: kindFreeswitch, namespace: "telephony", name: "edge-replaced"}
-	if deleted, err := r.failOver(context.Background(), fsc, &pod, sipv1alpha1.FailoverTriggerManual, "asked", t0); err != nil || deleted {
+	if deleted, err := r.failOver(context.Background(), fsc, &pod, sipv1alpha1.FailoverTriggerManual, "asked", false, t0); err != nil || deleted {
 		t.Fatalf("deleted %v, err %v", deleted, err)
 	}
 	d := failoverDecision{target: &pod, trigger: sipv1alpha1.FailoverTriggerManual, reason: "asked", resume: true}
-	r.carryOut(context.Background(), fsc, fleet, &d, fsc.Status.DeepCopy(), t0)
+	r.carryOut(context.Background(), fsc, fleet, settings{}, nil, &d, fsc.Status.DeepCopy(), t0)
 	for _, result := range []string{reloadOK, reloadError} {
 		if n := testutil.ToFloat64(failovers.WithLabelValues(fleet.labels(string(sipv1alpha1.FailoverTriggerManual), result)...)); d.err != nil || n != 0 {
 			t.Errorf("err %v; failovers %s %v", d.err, result, n)
@@ -669,5 +682,96 @@ func TestFenceRecordGoesWithLabel(t *testing.T) {
 	}
 	if !nodeFenced(node) || len(node.Spec.Taints) != 1 || node.Annotations[sipv1alpha1.FencedByAnnotation] != "this failover" {
 		t.Errorf("labels %v taints %v annotations %v", node.Labels, node.Spec.Taints, node.Annotations)
+	}
+}
+
+// podDeletes records each pod delete's grace period: nil for the pod's own, graceful.
+func podDeletes(graces *[]*int64) interceptor.Funcs {
+	return interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+		if _, ok := obj.(*corev1.Pod); ok {
+			o := &client.DeleteOptions{}
+			o.ApplyOptions(opts)
+			*graces = append(*graces, o.GracePeriodSeconds)
+		}
+		return c.Delete(ctx, obj, opts...)
+	}}
+}
+
+// A member a person fails over keeps its calls only with spec.recovery, and with a node whose kubelet can run its
+// drain: its pod is deleted gracefully then, and at once otherwise.
+func TestManualFailoverKeepsCallsWithRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		recovery  bool
+		node      corev1.ConditionStatus
+		keepCalls bool
+	}{
+		{"recovery, node ready", true, corev1.ConditionTrue, true},
+		{"no recovery", false, corev1.ConditionTrue, false},
+		{"node not ready", true, corev1.ConditionUnknown, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var graces []*int64
+			c, fsc, pod, _ := failoverTestClient(t, podDeletes(&graces))
+			if tc.recovery {
+				fsc.Spec.Recovery = &sipv1alpha1.RecoverySpec{}
+			}
+			r := &FreeswitchClusterReconciler{Client: c, Now: func() time.Time { return t0 }}
+			status := fsc.Status.DeepCopy()
+			nodes := map[string]*corev1.Node{"a": hnode("a", tc.node, t0.Add(-time.Hour))}
+			fleet := fleetRef{kind: kindFreeswitch, namespace: "telephony", name: "edge"}
+			cfg := resolve(fsc) // before the record's patch reloads fsc, which the fake server holds without recovery
+			recheck, err := r.syncHealth(context.Background(), fsc, fleet, cfg, []corev1.Pod{pod}, nodes, status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.keepCalls {
+				// Recorded, then the kubelet is given time to write the annotation for the drain.
+				if len(graces) != 0 || status.LastFailover == nil || recheck != keepCallsSettle {
+					t.Fatalf("before the settle: deletes %v, record %v, recheck %v", graces, status.LastFailover, recheck)
+				}
+				r.Now = func() time.Time { return t0.Add(keepCallsSettle) }
+				if _, err := r.syncHealth(context.Background(), fsc, fleet, cfg, []corev1.Pod{pod}, nodes, status); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(graces) != 1 {
+				t.Fatalf("deletes: %v", graces)
+			}
+			if graceful := graces[0] == nil; graceful != tc.keepCalls || (!graceful && *graces[0] != 0) {
+				t.Errorf("grace period %v, want graceful %v", graces[0], tc.keepCalls)
+			}
+		})
+	}
+}
+
+// A pod deleted gracefully to keep its calls that is still there keepCallsWait after the delete is deleted at once.
+func TestForceKeptCallsFailover(t *testing.T) {
+	var graces []*int64
+	c, fsc, pod, _ := failoverTestClient(t, podDeletes(&graces))
+	r := &FreeswitchClusterReconciler{Client: c, Now: func() time.Time { return t0 }}
+	ctx := context.Background()
+	last := &sipv1alpha1.FailoverRecord{Pod: "edge-0", PodUID: string(pod.UID), StartedAt: metav1.NewTime(t0.Add(-5 * time.Second))}
+	// Deleted at t0 with a grace period of 330s: the deletion timestamp is when that ends.
+	pod.DeletionTimestamp = &metav1.Time{Time: t0.Add(330 * time.Second)}
+	pod.DeletionGracePeriodSeconds = ptr.To[int64](330)
+
+	if wait := r.forceKeptCallsFailover(ctx, fsc, []corev1.Pod{pod}, last, t0.Add(10*time.Second)); wait != 20*time.Second || len(graces) != 0 {
+		t.Fatalf("within the wait: wait %v, deletes %v", wait, graces)
+	}
+	done := *last
+	done.CompletedAt = &metav1.Time{Time: t0}
+	deletedAtOnce := pod
+	deletedAtOnce.DeletionGracePeriodSeconds = ptr.To[int64](0)
+	for name, tc := range map[string]struct {
+		pod  corev1.Pod
+		last *sipv1alpha1.FailoverRecord
+	}{"completed": {pod, &done}, "deleted at once": {deletedAtOnce, last}, "no failover": {pod, nil}} {
+		if wait := r.forceKeptCallsFailover(ctx, fsc, []corev1.Pod{tc.pod}, tc.last, t0.Add(time.Minute)); wait != 0 || len(graces) != 0 {
+			t.Fatalf("%s: wait %v, deletes %v", name, wait, graces)
+		}
+	}
+	if wait := r.forceKeptCallsFailover(ctx, fsc, []corev1.Pod{pod}, last, t0.Add(30*time.Second)); wait != 0 || len(graces) != 1 || graces[0] == nil || *graces[0] != 0 {
+		t.Fatalf("after the wait: wait %v, deletes %v", wait, graces)
 	}
 }

@@ -143,6 +143,44 @@ esac
 	}
 }
 
+// With spec.recovery (the fail-over file is there), a member a person fails over stops FreeSWITCH at once without
+// hanging up its calls; any other drain goes on as usual, after a short look for the annotation.
+func TestDrainKeepsCallsOfAMemberFailedOver(t *testing.T) {
+	for _, tc := range []struct {
+		name, failOver string
+		crash          bool
+	}{{"failed over", "true", true}, {"not failed over", "", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			script := strings.ReplaceAll(drainScript, drainMarker, filepath.Join(dir, "draining"))
+			if err := os.WriteFile(filepath.Join(dir, "drain.sh"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			fake := "#!/bin/sh\necho \"$*\" >> '" + dir + "/log'\ncase \"$*\" in\n  *\"-x status\") echo 'FreeSWITCH (Version 1.10.10) is ready'; echo '0 session(s) - peak 2, last 5min 2 ' ;;\nesac\n"
+			for file, body := range map[string]string{"fs_cli": fake, "fail-over": tc.failOver} {
+				if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("/bin/sh", filepath.Join(dir, "drain.sh"))
+			cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "FS_FAIL_OVER_FILE=" + filepath.Join(dir, "fail-over"),
+				"FS_DRAIN_LOG=" + filepath.Join(dir, "drain.log")}
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("drain: %v %s", err, out)
+			}
+			log, _ := os.ReadFile(filepath.Join(dir, "log"))
+			crashed, paused := strings.Contains(string(log), "fsctl crash"), strings.Contains(string(log), "fsctl pause inbound")
+			if crashed != tc.crash || paused == tc.crash {
+				t.Fatalf("crash %v, pause %v; fs_cli calls %q", crashed, paused, log)
+			}
+			said, _ := os.ReadFile(filepath.Join(dir, "drain.log"))
+			if tc.crash != strings.Contains(string(said), "failed over by hand") {
+				t.Fatalf("log %q", said)
+			}
+		})
+	}
+}
+
 func TestLiveScript(t *testing.T) {
 	cases := []struct {
 		name, status string

@@ -667,6 +667,16 @@ func TestBuildStatefulSetRecovery(t *testing.T) {
 	if !slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumeRun && v.EmptyDir != nil }) {
 		t.Fatalf("volumes %+v, want the run volume, an emptyDir", spec.Volumes)
 	}
+	// The drain reads the pod's fail-over annotation from the pod-info files, to keep the calls of a member a person
+	// fails over.
+	failOver := corev1.DownwardAPIVolumeFile{Path: "fail-over", FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.annotations['" + sipv1alpha1.FailOverAnnotation + "']"}}
+	hasFailOver := func(spec corev1.PodSpec) bool {
+		i := slices.IndexFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumePodInfo })
+		return i >= 0 && slices.ContainsFunc(spec.Volumes[i].DownwardAPI.Items, func(f corev1.DownwardAPIVolumeFile) bool { return reflect.DeepEqual(f, failOver) })
+	}
+	if failOverFile != podInfoDir+"/"+failOver.Path || !hasFailOver(spec) {
+		t.Fatalf("volumes %+v, want the fail-over annotation at %s", spec.Volumes, failOverFile)
+	}
 	i := slices.IndexFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == exporterContainerName })
 	if i < 0 {
 		t.Fatal("no exporter")
@@ -680,8 +690,8 @@ func TestBuildStatefulSetRecovery(t *testing.T) {
 	// Without recovery there is no run volume, and the exporter reads no file.
 	fsc.Spec.Recovery = nil
 	spec = buildStatefulSet(fsc, testLayout(t, fsc)).Spec.Template.Spec
-	if slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumeRun }) {
-		t.Fatal("a run volume without recovery")
+	if slices.ContainsFunc(spec.Volumes, func(v corev1.Volume) bool { return v.Name == volumeRun }) || hasFailOver(spec) {
+		t.Fatal("a run volume or the fail-over file without recovery")
 	}
 	e = spec.InitContainers[slices.IndexFunc(spec.InitContainers, func(c corev1.Container) bool { return c.Name == exporterContainerName })]
 	if len(e.VolumeMounts) != 0 || slices.ContainsFunc(e.Env, func(v corev1.EnvVar) bool { return v.Name == "RECOVERED_FILE" }) {

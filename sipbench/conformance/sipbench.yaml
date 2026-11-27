@@ -210,8 +210,8 @@ cases:
       With one node off the network (no packet in or out), the rest of the fleet keeps taking calls: a call placed
       as the node goes dark is set up within Kamailio's 5 s failover, one placed after the dispatcher's probes
       have taken the node out has no failover delay, neither lands on the dark node, and once it is back the fleet
-      is whole. What happens to the dark node's own call is imp-node-lost-mid-call-recovery (M4); this scenario
-      records it without checking it.
+      is whole. The dark node's own call survives: its member fails over to the spare, whose recovery on start takes
+      exactly the call's two legs, and the call has audio both ways again through to its hangup.
     status: covered
     scenarios: [node-lost-mid-call]
 
@@ -241,6 +241,19 @@ cases:
       gap.
     status: covered
     scenarios: [moved-call-in-dialog]
+
+  - id: sb-failover-by-hand-keeps-call
+    ref: failover-by-hand-keeps-call
+    title: A healthy member failed over by hand keeps its calls
+    area: resilience
+    component: operator
+    expect: >
+      With spec.recovery, a member a person fails over mid-call (the fail-over annotation) stops without hanging up
+      its call: its drain stops FreeSWITCH at once, and the pod comes back on the spare edge node with the member's
+      address, where its recovery on start takes exactly the call's two legs. The call has audio both ways again,
+      and the runner's BYE reaches the backend through the spare.
+    status: covered
+    scenarios: [failover-by-hand-keeps-call]
 
   - id: sb-barge-in-vad-mode
     ref: barge-in-vad-mode

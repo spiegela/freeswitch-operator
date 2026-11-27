@@ -265,6 +265,12 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		{Name: "FS_REQUIRE_EXTERNAL_ADDRESS", Value: strconv.FormatBool(cfg.requireAddress)},
 	}, livenessEnv(cfg.liveness), bindAddressEnv(cfg.addressSource), fsc.Spec.Env)
 
+	podInfo := podInfoItems(cfg.addressSource)
+	if cfg.recovery {
+		// The drain keeps a member's calls when a person fails it over (drainScript).
+		podInfo = append(podInfo, corev1.DownwardAPIVolumeFile{Path: "fail-over",
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: fmt.Sprintf("metadata.annotations['%s']", sipv1alpha1.FailOverAnnotation)}})
+	}
 	volumes := []corev1.Volume{
 		{
 			Name: volumeScripts,
@@ -276,7 +282,7 @@ func buildStatefulSet(fsc *sipv1alpha1.FreeswitchCluster, conf configLayout) *ap
 		{
 			// Downward-API files update in place when the annotation changes; environment variables would not.
 			Name:         volumePodInfo,
-			VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{Items: podInfoItems(cfg.addressSource)}},
+			VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{Items: podInfo}},
 		},
 	}
 	mounts := []corev1.VolumeMount{

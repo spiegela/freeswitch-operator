@@ -57,7 +57,9 @@ const (
 	StartingAddressesAnnotation = "sip.instruments.com/starting-addresses"
 	// FailOverAnnotation, set to "true" on a FreeSWITCH pod by a person, has the operator fail that member over now,
 	// whatever spec.failover.mode says and whatever its health: fence its node, delete the pod at once, and let the
-	// StatefulSet start it again on another node. Any other value ("false" included) does nothing.
+	// StatefulSet start it again on another node. With spec.recovery, and the node's kubelet up, the member keeps its
+	// calls: the pod is deleted gracefully, and its drain, seeing this annotation, stops FreeSWITCH without hanging
+	// them up, for the replacement to recover. Any other value ("false" included) does nothing.
 	FailOverAnnotation = "sip.instruments.com/fail-over"
 	// FirstReadyAnnotation is set by the operator on a FreeSWITCH pod the first time it sees the pod ready (RFC 3339).
 	// Only a pod that has been ready is failed over automatically, or counts as NotReady: one that never was (a bad

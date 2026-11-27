@@ -156,6 +156,9 @@ type Fleet interface {
 	PodLog(ctx context.Context, pod string) (string, error)
 	// DeletePod deletes a pod; one already gone is no error.
 	DeletePod(ctx context.Context, pod string) error
+	// RequestFailover asks the operator to fail a member over now, as a person would: it annotates the pod
+	// FailOverAnnotation=true.
+	RequestFailover(ctx context.Context, pod string) error
 	// DeletePodNow deletes a pod with no grace period, as for a lost node: the API server forgets it at once, so
 	// its StatefulSet replaces it without waiting for the kubelet. One already gone is no error.
 	DeletePodNow(ctx context.Context, pod string) error
@@ -352,6 +355,8 @@ const (
 	FencedTaint        = "sip.instruments.com/fenced"
 	FencedLabel        = "sip.instruments.com/fenced"
 	FencedByAnnotation = "sip.instruments.com/fenced-by"
+	// FailOverAnnotation, set to "true" on a FreeSWITCH pod, has the operator fail the member over now.
+	FailOverAnnotation = "sip.instruments.com/fail-over"
 )
 
 func (k *kube) Unfence(ctx context.Context, node string) (bool, error) {
@@ -563,6 +568,12 @@ func (k *kube) DeletePod(ctx context.Context, pod string) error {
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
+	return err
+}
+
+func (k *kube) RequestFailover(ctx context.Context, pod string) error {
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:"true"}}}`, FailOverAnnotation)
+	_, err := k.core.CoreV1().Pods(k.ns).Patch(ctx, pod, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 	return err
 }
 

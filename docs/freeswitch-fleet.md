@@ -188,7 +188,8 @@ A failover:
    `sip.instruments.com/fenced:NoSchedule`, which keeps other workloads off it, and the annotation
    `sip.instruments.com/fenced-by` saying which member's failover, when, and why.
 2. Deletes the pod at once (no grace period, no drain: its node can't end its calls anyway). Its endpoint goes, so the
-   dispatcher list drops it and Kamailio takes it out of rotation at once, as for a drain.
+   dispatcher list drops it and Kamailio takes it out of rotation at once, as for a drain. A member failed over by
+   hand with `spec.recovery`, on a node whose kubelet is up, is the exception: see step 5.
 3. The StatefulSet starts the pod again. Every fleet's pods have a node affinity rule against the label, so it
    lands on the spare whatever the fleet's `tolerations` (a toleration with no key and `operator: Exists` would
    tolerate the taint).
@@ -199,9 +200,16 @@ A failover:
    the failed member's calls back as it starts on the spare, before its pod turns ready: they are tracked under the
    address it now holds. The operator lets the spare's address past Kamailio's trusted-peer check while the pod
    starts, so the recovered calls' re-INVITEs aren't dropped before the dispatcher list names the node. That moves
-   the calls of a member whose FreeSWITCH died or was cut off. One whose FreeSWITCH still runs (a manual failover of
-   a healthy member, say) is stopped gracefully when its pod goes, which hangs its calls up: nothing is left to
-   recover.
+   the calls of a member whose FreeSWITCH died or was cut off. A member a person fails over, whose FreeSWITCH still
+   runs, keeps its calls too: its pod is deleted gracefully, and its drain (the preStop hook), which reads the pod's
+   `sip.instruments.com/fail-over` annotation from a downward-API file, stops FreeSWITCH at once without hanging them
+   up. The operator fences and deletes 5 seconds after recording the failover: the kubelet stops refreshing that
+   file once the pod is being deleted, so it needs the time to write the annotation first. A clean stop would hang them up, deleting what recovery reads; and the kubelet restarts nothing in a pod being
+   deleted, so FreeSWITCH can't come back on the old node and take them there. A pod still there 30 seconds after
+   that delete (a FreeSWITCH that doesn't answer) is deleted at once, and its calls are lost.
+   `failover-by-hand-keeps-call` checks it on kind: there the replacement was ready on the spare about 16 s after
+   the request, and the call was silent for about 13 s (measured before the 5 s wait was added). An automatic failover always deletes at once: its member's
+   calls are lost already, or its kubelet can't run a drain.
 
 `status.lastFailover` records the failover until the replacement is ready (or the fleet is scaled down past it). It
 is written before the node is fenced, and only over the copy of the fleet the decision was made from (one written

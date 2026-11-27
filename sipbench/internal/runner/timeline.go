@@ -67,9 +67,11 @@ type timeline struct {
 	aborted chan struct{}
 
 	// What to undo: nodes cordoned, each edited ConfigMap key's original value, and blackout pods to see finish.
-	cordoned  []string
-	broken    []brokenKey
-	blackouts []blackoutPod
+	cordoned []string
+	// failedOver are the nodes of members failOverOf had the operator fail over, which it fenced.
+	failedOver []string
+	broken     []brokenKey
+	blackouts  []blackoutPod
 	// pods remembers which pod carried each call, once looked up.
 	pods map[string]fleet.Member
 	// unrecovered are the pods whose FreeSWITCH this run crashed and whose recovery on start this run hasn't seen
@@ -279,6 +281,8 @@ func (t *timeline) do(ctx context.Context, a *scenario.Action) (string, error) {
 
 	case a.MoveFreeswitchOf != "":
 		return t.moveFreeswitch(ctx, a.MoveFreeswitchOf)
+	case a.FailOverOf != "":
+		return t.failOver(ctx, a.FailOverOf)
 
 	case a.WaitFailover != nil:
 		return t.waitFailover(ctx, a.WaitFailover)
@@ -392,6 +396,29 @@ func (t *timeline) moveFreeswitch(ctx context.Context, call string) (string, err
 	}
 	return fmt.Sprintf("call %s was on %s on %s; cordoned it, deleted the pod and crashed FreeSWITCH under its drain; its replacement "+
 		"takes calls on %s, with the same external address %q", call, m.Pod, m.Node, now.Node, addr), nil
+}
+
+// failOver asks the operator to fail over the member that carries a call, as a person would, with the fail-over
+// annotation. The operator fences the call's node, which cleanup unfences.
+func (t *timeline) failOver(ctx context.Context, call string) (string, error) {
+	m, err := t.memberOf(ctx, call)
+	if err != nil {
+		return "", err
+	}
+	// Find every live call's pod now: a call is traced to its pod by the node address it came from, which the
+	// failed-over pod leaves behind.
+	for _, id := range slices.Sorted(maps.Keys(t.calls)) {
+		if c := t.calls[id]; closed(c.answered) && !closed(c.ended) {
+			if _, err := t.memberOf(ctx, id); err != nil {
+				return "", err
+			}
+		}
+	}
+	if err := t.r.cfg.Fleet.RequestFailover(ctx, m.Pod); err != nil {
+		return "", fmt.Errorf("annotating %s: %w", m.Pod, err)
+	}
+	t.failedOver = append(t.failedOver, m.Node)
+	return fmt.Sprintf("call %s is on %s on %s; asked the operator to fail it over", call, m.Pod, m.Node), nil
 }
 
 // recovered reads sofia recover's answer: "Recovered 2 call(s)" or "No calls to recover.". FreeSWITCH counts call
@@ -905,14 +932,15 @@ func (t *timeline) cleanup() {
 	t.mu.Lock()
 	unrecovered := len(t.unrecovered)
 	t.mu.Unlock()
-	if len(t.cordoned) == 0 && len(t.broken) == 0 && unrecovered == 0 && len(dark) == 0 {
+	if len(t.cordoned) == 0 && len(t.broken) == 0 && unrecovered == 0 && len(dark) == 0 && len(t.failedOver) == 0 {
 		return
 	}
 	// The fleet is put back first, on a budget of its own: a flush that hangs must not leave a node cordoned.
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
-	// A node taken dark may have been fenced by a failover; once it is back, unfence it so it is the spare again.
-	for _, n := range slices.Compact(slices.Sorted(slices.Values(dark))) {
+	// A node taken dark may have been fenced by a failover, and one failOverOf asked for was; once it is back,
+	// unfence it so it is the spare again.
+	for _, n := range slices.Compact(slices.Sorted(slices.Values(append(dark, t.failedOver...)))) {
 		if was, err := t.r.cfg.Fleet.Unfence(ctx, n); err != nil {
 			t.fail("cleanup: unfencing %s: %v", n, err)
 		} else if was {
