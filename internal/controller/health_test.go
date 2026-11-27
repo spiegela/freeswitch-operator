@@ -757,7 +757,7 @@ func TestManualFailoverKeepsCallsWithRecovery(t *testing.T) {
 			var graces []*int64
 			c, fsc, pod, _ := failoverTestClient(t, podDeletes(&graces))
 			if tc.recovery {
-				fsc.Spec.Recovery = &sipv1alpha1.RecoverySpec{}
+				fsc.Spec.Recovery = &sipv1alpha1.RecoverySpec{FenceImage: "example/exporter:1"}
 			}
 			r := &FreeswitchClusterReconciler{Client: c, Now: func() time.Time { return t0 }, NodeLeases: fakeLeases{"a": t0}}
 			if tc.lapsed {

@@ -358,7 +358,23 @@ type LivenessSpec struct {
 // names and recovers nothing when one doesn't end that way: a profile under a name every node shares would take
 // other nodes' live calls. The result is in the container's log and in /run/freeswitch-operator/recovered, on a
 // volume the metrics exporter shares (the freeswitch_recovery_* series).
-type RecoverySpec struct{}
+//
+// A pod failed over for its lost node is deleted at once, and if the node comes back its kubelet stops the pod,
+// giving the drain one second. FreeSWITCH stopping cleanly would hang up the calls its replacement had recovered.
+// So the drain first asks the API server whether it still takes the pod's own service account token, which it
+// refuses once the pod is gone, and if not stops FreeSWITCH without hanging up (fsctl crash). That check is
+// freeswitch-fence, from fenceImage, which an init container copies into the pod.
+type RecoverySpec struct {
+	// fenceImage is an image with /freeswitch-fence: the operator's freeswitch-exporter image, the one
+	// spec.metrics.exporterImage names; pin it by digest. It is part of the pod template, so changing it rolls the
+	// fleet one drained node at a time.
+	// +kubebuilder:validation:MinLength=1
+	FenceImage string `json:"fenceImage"`
+
+	// fenceImagePullPolicy for the init container that copies freeswitch-fence into the pod.
+	// +optional
+	FenceImagePullPolicy corev1.PullPolicy `json:"fenceImagePullPolicy,omitempty"`
+}
 
 // FreeswitchMetricsSpec runs a Prometheus exporter in each FreeSWITCH pod. It reads FreeSWITCH over its event
 // socket on 127.0.0.1 (sessions, calls, whether inbound calls are paused, each SIP profile's state and call

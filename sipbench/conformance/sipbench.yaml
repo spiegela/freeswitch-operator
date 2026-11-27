@@ -210,10 +210,25 @@ cases:
       With one node off the network (no packet in or out), the rest of the fleet keeps taking calls: a call placed
       as the node goes dark is set up within Kamailio's 5 s failover, one placed after the dispatcher's probes
       have taken the node out has no failover delay, neither lands on the dark node, and once it is back the fleet
-      is whole. The dark node's own call survives: its member fails over to the spare, whose recovery on start takes
-      exactly the call's two legs, and the call has audio both ways again through to its hangup.
+      is whole. The dark node's own call survives: its member fails over to the spare within 45 s of the node going
+      dark (its kubelet's lease lapsing, well before the control plane marks it NotReady), the spare's recovery on
+      start takes exactly the call's two legs, and the call has audio both ways again through to its hangup.
     status: covered
     scenarios: [node-lost-mid-call]
+
+  - id: sb-node-blip-mid-call
+    ref: node-blip-mid-call
+    title: A node dark long enough to be failed over comes back without hanging up the call it lost
+    area: resilience
+    component: operator
+    expect: >
+      A node off the network for 35 s, long enough for its member to fail over to the spare and recover the call
+      there but short of FreeSWITCH's media timeout, comes back still running the old pod's FreeSWITCH, holding the
+      call. Its kubelet finds the pod deleted and stops it, and the drain stops FreeSWITCH without hanging up (the
+      API server refuses the pod's own token, so the pod was failed over): no BYE from the old node. The call has
+      audio both ways through to the runner's hangup, whose BYE reaches the backend through the spare.
+    status: covered
+    scenarios: [node-blip-mid-call]
 
   - id: sb-crash-recovers-own-calls
     ref: crash-recovers-own-calls

@@ -161,10 +161,10 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(err).To(MatchError(ContainSubstring("metrics.port must differ from sip.port")))
 	})
 
-	It("takes spec.recovery only with a required external address", func() {
+	It("takes spec.recovery only with a required external address and a fence image", func() {
 		ns := newNamespace(ctx)
 		obj := func(name string, address map[string]any) *unstructured.Unstructured {
-			spec := map[string]any{"image": "example/freeswitch:1", "recovery": map[string]any{}}
+			spec := map[string]any{"image": "example/freeswitch:1", "recovery": map[string]any{"fenceImage": "example/exporter:1"}}
 			if address != nil {
 				spec["externalAddress"] = address
 			}
@@ -179,6 +179,9 @@ var _ = Describe("FreeswitchCluster controller", func() {
 			"source": "AddressPool", "addressPoolRef": map[string]any{"name": "edge-media"},
 		}))).To(Succeed())
 		Expect(k8sClient.Create(ctx, obj("node-ip-required", map[string]any{"source": "NodeExternalIP", "required": true}))).To(Succeed())
+		noFence := obj("no-fence", nil)
+		Expect(unstructured.SetNestedMap(noFence.Object, map[string]any{}, "spec", "recovery")).To(Succeed())
+		Expect(k8sClient.Create(ctx, noFence)).To(MatchError(ContainSubstring("fenceImage")))
 		for name, address := range map[string]map[string]any{
 			"none":         {"source": "None"},
 			"not-required": {"required": false},
@@ -344,7 +347,7 @@ var _ = Describe("FreeswitchCluster controller", func() {
 	It("publishes its starting pods' addresses with the list, for the Kamailio fleets to admit, with spec.recovery", func() {
 		ns := newNamespace(ctx)
 		Expect(k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
-			f.Spec.Recovery = &sipv1alpha1.RecoverySpec{}
+			f.Spec.Recovery = &sipv1alpha1.RecoverySpec{FenceImage: "example/exporter:1"}
 			f.Spec.Dispatcher = &sipv1alpha1.DispatcherSpec{ConfigMapName: "edge-dispatcher", SetID: 1}
 		}))).To(Succeed())
 		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: ns + "-spare"}}

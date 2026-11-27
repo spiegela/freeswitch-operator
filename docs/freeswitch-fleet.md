@@ -35,7 +35,8 @@ spec:
   drain:
     maxDrainSeconds: 7200           # upper bound on waiting for live calls to finish
   # liveness: {}                    # opt-in hang detection (below)
-  # recovery: {}                    # opt-in: take back tracked calls when FreeSWITCH starts (call-tracking.md)
+  # recovery:                       # opt-in: take back tracked calls when FreeSWITCH starts (call-tracking.md)
+  #   fenceImage: ghcr.io/spiegela/freeswitch-exporter@sha256:...  # the drain's fence check
   dispatcher:
     setID: 1                        # Kamailio dispatcher set for this fleet
     configMapName: edge-dispatcher  # the operator writes dispatcher.list here
@@ -217,7 +218,10 @@ A failover:
    that delete (a FreeSWITCH that doesn't answer) is deleted at once, and its calls are lost.
    `failover-by-hand-keeps-call` checks it on kind: there the replacement was ready on the spare about 16 s after
    the request, and the call was silent for about 13 s (measured before the 5 s wait was added). An automatic failover always deletes at once: its member's
-   calls are lost already, or its kubelet can't run a drain.
+   calls are lost already, or its kubelet can't run a drain. If its node comes back, the kubelet stops the old pod,
+   giving its drain one second, and the drain, finding the API server refuses the pod's own token (the pod is
+   gone), stops FreeSWITCH without hanging up the calls the spare recovered
+   ([call tracking](call-tracking.md#configure-the-freeswitchcluster)).
 
 `status.lastFailover` records the failover until the replacement is ready (or the fleet is scaled down past it). It
 is written before the node is fenced, and only over the copy of the fleet the decision was made from (one written

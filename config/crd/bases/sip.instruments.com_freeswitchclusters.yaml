@@ -621,6 +621,20 @@ spec:
                 description: |-
                   recovery, when set, recovers the calls tracked under a pod's address each time FreeSWITCH starts there. It
                   needs call tracking in the configuration and a required external address. Unset, nothing recovers calls.
+                properties:
+                  fenceImage:
+                    description: |-
+                      fenceImage is an image with /freeswitch-fence: the operator's freeswitch-exporter image, the one
+                      spec.metrics.exporterImage names; pin it by digest. It is part of the pod template, so changing it rolls the
+                      fleet one drained node at a time.
+                    minLength: 1
+                    type: string
+                  fenceImagePullPolicy:
+                    description: fenceImagePullPolicy for the init container that
+                      copies freeswitch-fence into the pod.
+                    type: string
+                required:
+                - fenceImage
                 type: object
               replicas:
                 default: 2

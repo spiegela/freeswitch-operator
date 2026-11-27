@@ -142,11 +142,13 @@ spec:
 
 For Aurora, use the writer endpoint as `host` and add `sslmode=require`.
 
-**Turn on recovery on start** with `spec.recovery: {}`:
+**Turn on recovery on start** with `spec.recovery`, naming the image the drain's fence check comes from (the
+operator's freeswitch-exporter image, pinned by digest; see the last item below):
 
 ```yaml
 spec:
-  recovery: {}
+  recovery:
+    fenceImage: ghcr.io/spiegela/freeswitch-exporter@sha256:...
 ```
 
 Each time FreeSWITCH starts in a pod (a new pod, or the kubelet restarting a crashed one), the operator's postStart
@@ -168,6 +170,20 @@ The hook:
   `/run/freeswitch-operator/recovered`, on a volume the exporter shares: with `spec.metrics`, the
   `freeswitch_recovery_*` series report it ([metrics](metrics.md)), and `FreeswitchRecoverySkipped` fires when a
   start recovered nothing because something was wrong. sipbench reads the file too.
+- **Lets a failed-over pod go without hanging up.** A member failed over for its lost node is deleted at once. If
+  the node comes back, its kubelet finds the pod gone and stops it, giving the drain (the preStop hook) one second,
+  and FreeSWITCH stopping cleanly would hang up, with a BYE, every call its replacement had recovered on the spare.
+  So the drain first asks the API server whether it still takes the pod's own service account token, which is bound
+  to the pod: it refuses it once the pod is gone, and takes it while a graceful delete runs. Refused, the drain stops
+  FreeSWITCH at once without hanging up (`fsctl crash`). Anything else (the token taken, no answer within 600 ms)
+  drains as usual. The check is `freeswitch-fence`, from `fenceImage`, which an init container copies onto the
+  pod's run volume. It reads a token of its own from a projected volume, with the cluster's CA, so it needs no RBAC
+  and works whether or not the service account mounts its token. The API server keeps a token it accepted as good
+  for about ten seconds, but the pod uses this one for nothing else, so the drain's look is never answered from
+  that. sipbench's `node-blip-mid-call` checks it. A force delete by hand (`kubectl delete pod --force
+  --grace-period=0`) refuses the token the same way, so it too leaves the pod's calls up for its replacement to
+  recover instead of hanging them up: a call the replacement can't recover stays up at the far end until its own
+  timeout.
 
 Turning it on, or off, changes the pod template, so it rolls the fleet one drained node at a time.
 
@@ -275,6 +291,11 @@ it.
 
 Not built yet:
 
+- **A node dark past FreeSWITCH's media timeout can still hang up its calls when it comes back.** The old
+  FreeSWITCH hangs up a call whose RTP has stopped for its media timeout, and sends the BYE again and again (for
+  32 s, over UDP) until it gets an answer. A node that comes back within that window delivers the BYE, and the far
+  end ends the call recovered on the spare. The drain's fence check can't help: the BYE was sent before the node
+  came back. With a media timeout of 60 s, as on kind, that is a node dark for 60 to about 92 s.
 - **Rows nobody recovers stay.** When a failed member's replacement doesn't come up with its address (a spare that
   holds an idle address of its own, or no spare at all), its rows stay in `recovery` until a FreeSWITCH holding that
   address starts with `spec.recovery`.
@@ -288,5 +309,8 @@ elsewhere meanwhile, within Kamailio's 5 s failover at first, then with no delay
 taken the node out.
 sipbench's `node-lost-mid-call` checks it: it takes a call's node off the network for two minutes (tc drop filters
 on the node's own interface), checks the rest of the fleet keeps taking calls, waits for the operator to fail the
-member over to the spare, and checks the call is back there with audio both ways.
+member over to the spare, and checks the call is back there with audio both ways. `node-blip-mid-call` brings the
+node back after 35 s, after the failover but before FreeSWITCH's media timeout, and checks the old pod stopped
+without hanging up the call: it has audio both ways through to the runner's hangup, whose BYE reaches the backend
+through the spare.
 
