@@ -195,19 +195,8 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		decision.Replace = nil
 		decision.Waiting = "paused until the configuration is fixed"
 	}
-	if decision.Replace != nil {
-		p := decision.Replace
-		log.Info("replacing pod for rolling update", "pod", p.Name, "revision", podRevision(p), "updateRevision", sts.Status.UpdateRevision)
-		uid := p.UID
-		if err := r.Delete(ctx, p, client.Preconditions{UID: &uid}); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, err
-			}
-		} else {
-			fleetPodReplacements.WithLabelValues(fleet.labels()...).Inc()
-		}
-	} else if decision.Waiting != "" {
-		log.V(1).Info("rolling update waiting", "reason", decision.Waiting, "outdated", decision.Outdated)
+	if err := replacePod(ctx, r.Client, fleet, decision, sts.Status.UpdateRevision); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if cfg.dispatcher != nil {
@@ -222,15 +211,7 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// A failover that failed is retried, but the status is written first, so it goes on showing the fleet.
 	healthAfter, failoverErr := r.syncHealth(ctx, &fsc, fleet, cfg, pods, nodes, status)
 	requeue = minPositive(requeue, healthAfter)
-	if confErr != nil {
-		gen := fsc.Generation
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionDegraded, Status: metav1.ConditionTrue, Reason: "ConfigInvalid", Message: confErr.Error(), ObservedGeneration: gen})
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionReady, Status: metav1.ConditionFalse, Reason: "ConfigInvalid", Message: confErr.Error(), ObservedGeneration: gen})
-	} else if stsErr != nil {
-		gen, msg := fsc.Generation, truncate(stsErr.Error(), 1024)
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionDegraded, Status: metav1.ConditionTrue, Reason: "StatefulSetRejected", Message: msg, ObservedGeneration: gen})
-		meta.SetStatusCondition(&status.Conditions, metav1.Condition{Type: conditionReady, Status: metav1.ConditionFalse, Reason: "StatefulSetRejected", Message: msg, ObservedGeneration: gen})
-	}
+	setWriteProblem(&status.Conditions, fsc.Generation, confErr, stsErr)
 	retryErr := errors.Join(stsErr, failoverErr)
 	recordFleet(fleet, fleetObservation{
 		desired: cfg.replicas, pods: pods, outdated: decision.Outdated, conditions: status.Conditions,
@@ -253,6 +234,22 @@ func (r *FreeswitchClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, retryErr
 	}
 	return ctrl.Result{RequeueAfter: requeue}, nil
+}
+
+// setWriteProblem marks the fleet Degraded and not Ready when its configuration is unusable or the API server
+// refused its StatefulSet; the configuration counts first.
+func setWriteProblem(conds *[]metav1.Condition, gen int64, confErr, stsErr error) {
+	reason, msg := "ConfigInvalid", ""
+	switch {
+	case confErr != nil:
+		msg = confErr.Error()
+	case stsErr != nil:
+		reason, msg = "StatefulSetRejected", truncate(stsErr.Error(), 1024)
+	default:
+		return
+	}
+	meta.SetStatusCondition(conds, metav1.Condition{Type: conditionDegraded, Status: metav1.ConditionTrue, Reason: reason, Message: msg, ObservedGeneration: gen})
+	meta.SetStatusCondition(conds, metav1.Condition{Type: conditionReady, Status: metav1.ConditionFalse, Reason: reason, Message: msg, ObservedGeneration: gen})
 }
 
 // syncPods reads the pods' nodes, and writes on each pod its external address and whether it has been ready. It

@@ -68,3 +68,22 @@ func pruneConfigSnapshots(ctx context.Context, c client.Client, owner client.Obj
 	}
 	return nil
 }
+
+// replacePod deletes the pod a rolling update replaces next, if any; one already gone counts as replaced.
+func replacePod(ctx context.Context, c client.Client, fleet fleetRef, decision rolloutDecision, updateRevision string) error {
+	log := logf.FromContext(ctx)
+	p := decision.Replace
+	if p == nil {
+		if decision.Waiting != "" {
+			log.V(1).Info("rolling update waiting", "reason", decision.Waiting, "outdated", decision.Outdated)
+		}
+		return nil
+	}
+	log.Info("replacing pod for rolling update", "pod", p.Name, "revision", podRevision(p), "updateRevision", updateRevision)
+	uid := p.UID
+	if err := c.Delete(ctx, p, client.Preconditions{UID: &uid}); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	fleetPodReplacements.WithLabelValues(fleet.labels()...).Inc()
+	return nil
+}

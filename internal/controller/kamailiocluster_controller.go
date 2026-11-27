@@ -75,8 +75,6 @@ type KamailioClusterReconciler struct {
 // Reconcile moves a proxy fleet toward its spec: the JSON-RPC token, the rendered config and the objects around
 // the pods, one planned replacement at a time, the combined dispatcher list and its live reload, and the status.
 func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
 	fleet := fleetRef{kind: kindKamailio, namespace: req.Namespace, name: req.Name}
 	var kc sipv1alpha1.KamailioCluster
 	if err := r.Get(ctx, req.NamespacedName, &kc); err != nil {
@@ -171,18 +169,8 @@ func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	decision := nextPodToReplace(pods, sts.Status.UpdateRevision, cfg.replicas)
-	if p := decision.Replace; p != nil {
-		log.Info("replacing Kamailio pod for rolling update", "pod", p.Name, "revision", podRevision(p), "updateRevision", sts.Status.UpdateRevision)
-		uid := p.UID
-		if err := r.Delete(ctx, p, client.Preconditions{UID: &uid}); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, err
-			}
-		} else {
-			fleetPodReplacements.WithLabelValues(fleet.labels()...).Inc()
-		}
-	} else if decision.Waiting != "" {
-		log.V(1).Info("rolling update waiting", "reason", decision.Waiting, "outdated", decision.Outdated)
+	if err := replacePod(ctx, r.Client, fleet, decision, sts.Status.UpdateRevision); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	requeue, err := r.syncDispatcher(ctx, &kc, fleet, cfg, token, sets, pods, status)
