@@ -9,7 +9,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
-	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
@@ -94,8 +93,10 @@ func kamailioRouteName(kc *sipv1alpha1.KamailioCluster) string { return kc.Name 
 func kamailioScriptsName(kc *sipv1alpha1.KamailioCluster) string {
 	return kc.Name + "-kamailio-scripts"
 }
-func kamailioDispatcherName(kc *sipv1alpha1.KamailioCluster) string { return kc.Name + "-dispatcher" }
-func kamailioTokenName(kc *sipv1alpha1.KamailioCluster) string      { return kc.Name + "-jsonrpc" }
+func kamailioDispatcherName(kc *sipv1alpha1.KamailioCluster) string {
+	return kc.Name + "-kamailio-dispatcher"
+}
+func kamailioTokenName(kc *sipv1alpha1.KamailioCluster) string { return kc.Name + "-jsonrpc" }
 
 // kamailioConfigName is the snapshot of a rendered kamailio.cfg with this hash.
 func kamailioConfigName(kc *sipv1alpha1.KamailioCluster, hash string) string {
@@ -241,17 +242,6 @@ func buildKamailioRouteSlice(kc *sipv1alpha1.KamailioCluster, pods []corev1.Pod,
 		})
 	}
 	return slice
-}
-
-func buildKamailioPDB(kc *sipv1alpha1.KamailioCluster) *policyv1.PodDisruptionBudget {
-	maxUnavailable := intstr.FromInt32(1)
-	return &policyv1.PodDisruptionBudget{
-		ObjectMeta: metav1.ObjectMeta{Name: kamailioName(kc), Namespace: kc.Namespace, Labels: kamailioLabels(kc)},
-		Spec: policyv1.PodDisruptionBudgetSpec{
-			MaxUnavailable: &maxUnavailable,
-			Selector:       &metav1.LabelSelector{MatchLabels: kamailioSelectorLabels(kc)},
-		},
-	}
 }
 
 // buildKamailioStatefulSet renders the proxy fleet. configName is the snapshot holding the rendered kamailio.cfg,

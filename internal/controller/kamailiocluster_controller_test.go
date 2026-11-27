@@ -153,10 +153,50 @@ var _ = Describe("KamailioCluster controller", func() {
 		for _, kind := range []client.Object{&corev1.Service{}, &corev1.ConfigMap{}} {
 			name := "proxy-kamailio"
 			if _, ok := kind.(*corev1.ConfigMap); ok {
-				name = "proxy-dispatcher"
+				name = "proxy-kamailio-dispatcher"
 			}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, kind)).To(Succeed(), name)
 		}
+	})
+
+	It("shares a name with the FreeswitchCluster it dispatches to, as the samples do, without taking its list", func() {
+		ns := newNamespace(ctx)
+		edge := dispatchedFleet(ns, "edge", 1) // spec.dispatcher.configMapName: edge-dispatcher
+		publishFleetList(ctx, edge, destination{URI: "sip:10.0.1.10:5060", Pod: "edge-0"})
+		Expect(k8sClient.Create(ctx, newProxy(ns, func(kc *sipv1alpha1.KamailioCluster) {
+			kc.Name = "edge"
+			kc.Spec.Dispatch = []sipv1alpha1.DispatchTarget{{FreeswitchCluster: "edge"}}
+		}))).To(Succeed())
+		r := &KamailioClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "edge"}})
+		Expect(err).NotTo(HaveOccurred())
+
+		var combined, own corev1.ConfigMap
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge-kamailio-dispatcher"}, &combined)).To(Succeed())
+		Expect(combined.Data[dispatcherListKey]).To(ContainSubstring("1 sip:10.0.1.10:5060 8 0 duid=edge-0"))
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "edge-dispatcher"}, &own)).To(Succeed())
+		Expect(metav1.IsControlledBy(&own, edge)).To(BeTrue(), "the fleet's own list stays the fleet's")
+	})
+
+	It("rolls the pods onto a replaced JSON-RPC token, which they read only at start", func() {
+		ns := newNamespace(ctx)
+		Expect(k8sClient.Create(ctx, newProxy(ns, nil))).To(Succeed())
+		r := &KamailioClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		reconcileProxy(r, ns)
+		var sts appsv1.StatefulSet
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "proxy-kamailio"}, &sts)).To(Succeed())
+		template := sts.Annotations[templateHashAnnotation]
+		tokenHash := sts.Spec.Template.Annotations[kamailioTokenHashAnnotation]
+		Expect(tokenHash).NotTo(BeEmpty())
+
+		var secret corev1.Secret
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "proxy-jsonrpc"}, &secret)).To(Succeed())
+		secret.Data[kamailioTokenKey] = []byte("replaced")
+		Expect(k8sClient.Update(ctx, &secret)).To(Succeed())
+		reconcileProxy(r, ns)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "proxy-kamailio"}, &sts)).To(Succeed())
+		Expect(sts.Annotations[templateHashAnnotation]).NotTo(Equal(template))
+		Expect(sts.Spec.Template.Annotations[kamailioTokenHashAnnotation]).To(Equal(contentHash("replaced")), "the hash, never the token")
 	})
 
 	It("combines the fleets' lists in priority order and leaves out a fleet whose setID is taken", func() {
@@ -173,7 +213,7 @@ var _ = Describe("KamailioCluster controller", func() {
 		reconcileProxy(r, ns)
 
 		var list corev1.ConfigMap
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "proxy-dispatcher"}, &list)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "proxy-kamailio-dispatcher"}, &list)).To(Succeed())
 		content := list.Data[dispatcherListKey]
 		Expect(content).To(ContainSubstring("2 sip:10.0.3.10:5060 8 0 duid=overflow-0\n# set 1: FreeswitchCluster edge\n1 sip:10.0.1.10:5060 8 0 duid=edge-0\n"))
 		Expect(list.Annotations[sipv1alpha1.DispatcherUpdatedAtAnnotation]).NotTo(BeEmpty())

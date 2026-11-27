@@ -133,7 +133,7 @@ func TestKamailioPodMountsAndPorts(t *testing.T) {
 				t.Fatalf("config snapshot %s", v.ConfigMap.Name)
 			}
 		case "dispatcher":
-			if v.ConfigMap.Name != "proxy-dispatcher" || v.ConfigMap.Items != nil {
+			if v.ConfigMap.Name != "proxy-kamailio-dispatcher" || v.ConfigMap.Items != nil {
 				t.Fatal("the dispatcher list is mounted whole, as a directory, so it updates in place")
 			}
 		}

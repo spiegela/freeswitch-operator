@@ -317,7 +317,7 @@ type ConfigMapRef struct {
 // DrainSpec bounds how long a node waits for its calls to finish before it stops.
 type DrainSpec struct {
 	// maxDrainSeconds is the longest a terminating pod waits for live calls to end.
-	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=86400
 	// +kubebuilder:default=7200
 	// +optional
@@ -427,7 +427,7 @@ type EventSocketSpec struct {
 type DispatcherSpec struct {
 	// setID is the dispatcher set for this fleet. Sets 1-99 are for fleets; the operator assigns sets it creates
 	// (peers, inside profiles) from 100 up, so the two never collide.
-	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=99
 	// +kubebuilder:default=1
 	// +optional
@@ -458,7 +458,7 @@ type DispatcherSpec struct {
 	// reload, so the kubelet has synced the mounted file. After each reload the operator checks (dispatcher.list)
 	// that the Kamailio holds the list it wrote, and reloads again every 10 seconds until it does, so a kubelet
 	// slower than this delay costs time but never leaves a Kamailio on the old list.
-	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=75
 	// +optional
 	ReloadDelaySeconds int32 `json:"reloadDelaySeconds,omitempty"`

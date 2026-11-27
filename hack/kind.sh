@@ -291,7 +291,7 @@ wait_proxy() {
   local deadline=$((SECONDS + $1)) want have list pod behind state
   while :; do
     state=$("${KUBECTL[@]}" -n "$NS" get kamailiocluster "$PROXY" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status} {.status.dispatcherHash} {.status.dispatcherReloadedHash} {.status.updatedReplicas}/{.spec.replicas}')
-    want=$("${KUBECTL[@]}" -n "$NS" get configmap "$PROXY-dispatcher" -o jsonpath='{.data.dispatcher\.list}' \
+    want=$("${KUBECTL[@]}" -n "$NS" get configmap "$PROXY-kamailio-dispatcher" -o jsonpath='{.data.dispatcher\.list}' \
       | awk '!/^#/ && NF { print $2 }' | sort)
     behind=
     set -- "$1" $state
@@ -370,8 +370,8 @@ status() {
   "${KUBECTL[@]}" -n "$NS" get kamailiocluster "$PROXY"
   "${KUBECTL[@]}" -n "$NS" get kamailiocluster "$PROXY" \
     -o jsonpath='{range .status.members[*]}{.pod}{"\t"}{.node}{"\t"}{.address}{"\t"}{.state}{"\n"}{end}'
-  echo "-- combined dispatcher list (ConfigMap $PROXY-dispatcher)"
-  "${KUBECTL[@]}" -n "$NS" get configmap "$PROXY-dispatcher" -o jsonpath='{.data.dispatcher\.list}'
+  echo "-- combined dispatcher list (ConfigMap $PROXY-kamailio-dispatcher)"
+  "${KUBECTL[@]}" -n "$NS" get configmap "$PROXY-kamailio-dispatcher" -o jsonpath='{.data.dispatcher\.list}'
   echo "-- what each Kamailio has loaded (FLAGS: AP active and probing, IP inactive and probing)"
   local pod
   for pod in $("${KUBECTL[@]}" -n "$NS" get pods -l "sip.instruments.com/kamailio-cluster=$PROXY" -o name); do

@@ -376,8 +376,8 @@ func TestDecideFailover(t *testing.T) {
 	}
 }
 
-// A failover recorded but not carried out is finished first, whatever the pod's health now; once its pod is shutting
-// down, there is nothing left to finish.
+// A failover recorded but not carried out is finished first, whatever the pod's health now; once its own delete has
+// its pod shutting down, there is nothing left to finish. A pod shutting down since before the record still is.
 func TestDecideFailoverResume(t *testing.T) {
 	healthy := verdict{pod: ptrPod(hpod("edge-0", "a")), health: sipv1alpha1.MemberHealth{State: sipv1alpha1.HealthHealthy}}
 	pending := hpod("edge-1", "b")
@@ -387,9 +387,18 @@ func TestDecideFailoverResume(t *testing.T) {
 	if d.target == nil || d.target.Name != "edge-1" || !d.resume || d.trigger != sipv1alpha1.FailoverTriggerManual || d.reason != "asked" {
 		t.Errorf("resume: %+v", d)
 	}
-	pending.DeletionTimestamp = &metav1.Time{Time: t0}
+	// Deleted gracefully by its failover, after the record: a deletion timestamp is when the grace period ends.
+	pending.DeletionTimestamp = &metav1.Time{Time: t0.Add(keepCallsSettle + 30*time.Second)}
+	pending.DeletionGracePeriodSeconds = ptr.To[int64](30)
 	if d = decideFailover([]verdict{healthy, {pod: &pending}}, sipv1alpha1.FailoverDetect, last); d.target != nil {
-		t.Errorf("resume a pod already shutting down: %+v", d)
+		t.Errorf("resume a pod its failover is shutting down: %+v", d)
+	}
+	// Draining since before the record (a roll, then its node lost): the fence and the delete at once may not have
+	// happened yet.
+	draining := pending
+	draining.DeletionTimestamp = &metav1.Time{Time: t0.Add(-time.Minute + 30*time.Second)}
+	if d = decideFailover([]verdict{healthy, {pod: &draining}}, sipv1alpha1.FailoverAutomatic, last); d.target == nil || !d.resume {
+		t.Errorf("resume a pod draining since before its failover: %+v", d)
 	}
 
 	// Failed over by hand and shutting down gracefully, still annotated: not asked for again until it is gone.
@@ -788,6 +797,32 @@ func TestManualFailoverKeepsCallsWithRecovery(t *testing.T) {
 				t.Errorf("grace period %v, want graceful %v", graces[0], tc.keepCalls)
 			}
 		})
+	}
+}
+
+// A pod a person fails over while it is already draining can't keep its calls (its drain began without the
+// annotation): its node is fenced and the pod deleted at once, not left to its drain.
+func TestManualFailoverOfADrainingPod(t *testing.T) {
+	var graces []*int64
+	c, fsc, pod, _ := failoverTestClient(t, podDeletes(&graces))
+	fsc.Spec.Recovery = &sipv1alpha1.RecoverySpec{FenceImage: "example/exporter:1"}
+	r := &FreeswitchClusterReconciler{Client: c, Now: func() time.Time { return t0 }, NodeLeases: fakeLeases{"a": t0}}
+	// Deleted a minute ago with a grace period of 330s.
+	pod.DeletionTimestamp = &metav1.Time{Time: t0.Add(-time.Minute + 330*time.Second)}
+	pod.DeletionGracePeriodSeconds = ptr.To[int64](330)
+	status := fsc.Status.DeepCopy()
+	nodes := map[string]*corev1.Node{"a": hnode("a", corev1.ConditionTrue, t0.Add(-time.Hour))}
+	cfg := resolve(fsc)
+	if _, err := r.syncHealth(context.Background(), fsc, fleetRef{kind: kindFreeswitch, namespace: "telephony", name: "edge"},
+		cfg, []corev1.Pod{pod}, nodes, status); err != nil {
+		t.Fatal(err)
+	}
+	if len(graces) != 1 || graces[0] == nil || *graces[0] != 0 {
+		t.Fatalf("deletes: %v, want one at once", graces)
+	}
+	var node corev1.Node
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "a"}, &node); err != nil || !nodeFenced(&node) {
+		t.Fatalf("node not fenced: %v %v", err, node.Labels)
 	}
 }
 

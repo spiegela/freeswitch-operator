@@ -51,6 +51,8 @@ import (
 const (
 	dispatchClusterField = "spec.dispatch.freeswitchCluster"
 	conditionSetConflict = "SetConflict"
+	// kamailioTokenHashAnnotation on the pod template is a hash of the JSON-RPC token.
+	kamailioTokenHashAnnotation = "sip.instruments.com/jsonrpc-token-hash"
 )
 
 // KamailioClusterReconciler reconciles a KamailioCluster object.
@@ -101,7 +103,7 @@ func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.ensureService(ctx, &kc); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.ensurePDB(ctx, &kc); err != nil {
+	if err := ensurePDB(ctx, r.Client, r.Scheme, &kc, newPDB(kamailioName(&kc), kc.Namespace, kamailioLabels(&kc), kamailioSelectorLabels(&kc))); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -131,7 +133,7 @@ func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.ensureConfigSnapshot(ctx, &kc, configName, rendered); err != nil {
 		return ctrl.Result{}, err
 	}
-	sts, err := r.ensureStatefulSet(ctx, &kc, configName, configHash)
+	sts, err := r.ensureStatefulSet(ctx, &kc, configName, configHash, token)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -156,7 +158,15 @@ func (r *KamailioClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.ensureRouteNames(ctx, &kc, pods); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.pruneConfigSnapshots(ctx, &kc, configName, sts, pods); err != nil {
+	keep := map[string]bool{configName: true}
+	for i := range pods {
+		for _, v := range pods[i].Spec.Volumes {
+			if v.ConfigMap != nil {
+				keep[v.ConfigMap.Name] = true
+			}
+		}
+	}
+	if err := pruneConfigSnapshots(ctx, r.Client, &kc, sts, client.MatchingLabels{sipv1alpha1.KamailioClusterLabel: kc.Name}, keep); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -218,8 +228,9 @@ func (r *KamailioClusterReconciler) now() time.Time {
 }
 
 // ensureToken creates the JSON-RPC token Secret once and returns the token. An existing token is kept, so pods
-// and operator agree across operator restarts. Pods read it at start, so a replaced token reaches them as they
-// roll; until then the operator's calls are refused and the reload retried.
+// and operator agree across operator restarts. Pods read it only at start, so the pod template carries the token's
+// hash: a replaced token rolls the fleet, and until a pod is replaced the operator's calls to it are refused and
+// the reload retried.
 func (r *KamailioClusterReconciler) ensureToken(ctx context.Context, kc *sipv1alpha1.KamailioCluster) (string, error) {
 	key := types.NamespacedName{Namespace: kc.Namespace, Name: kamailioTokenName(kc)}
 	var secret corev1.Secret
@@ -322,20 +333,6 @@ func (r *KamailioClusterReconciler) ensureRouteNames(ctx context.Context, kc *si
 	return err
 }
 
-func (r *KamailioClusterReconciler) ensurePDB(ctx context.Context, kc *sipv1alpha1.KamailioCluster) error {
-	want := buildKamailioPDB(kc)
-	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Name: want.Name, Namespace: want.Namespace}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pdb, func() error {
-		pdb.Labels = want.Labels
-		pdb.Spec.MaxUnavailable = want.Spec.MaxUnavailable
-		if pdb.CreationTimestamp.IsZero() {
-			pdb.Spec.Selector = want.Spec.Selector
-		}
-		return controllerutil.SetControllerReference(kc, pdb, r.Scheme)
-	})
-	return err
-}
-
 // ensureConfigSnapshot creates the immutable ConfigMap holding a rendered kamailio.cfg. Its name is the content's
 // hash, so one that exists already holds the right file.
 func (r *KamailioClusterReconciler) ensureConfigSnapshot(ctx context.Context, kc *sipv1alpha1.KamailioCluster, name, rendered string) error {
@@ -366,42 +363,12 @@ func (r *KamailioClusterReconciler) ensureConfigSnapshot(ctx context.Context, kc
 	return nil
 }
 
-// pruneConfigSnapshots deletes the config snapshots that neither the current template nor any pod mounts, once the
-// StatefulSet controller has seen the current template.
-func (r *KamailioClusterReconciler) pruneConfigSnapshots(ctx context.Context, kc *sipv1alpha1.KamailioCluster, current string, sts *appsv1.StatefulSet, pods []corev1.Pod) error {
-	if sts.CreationTimestamp.IsZero() || sts.Status.ObservedGeneration < sts.Generation {
-		return nil
-	}
-	keep := map[string]bool{current: true}
-	for i := range pods {
-		for _, v := range pods[i].Spec.Volumes {
-			if v.ConfigMap != nil {
-				keep[v.ConfigMap.Name] = true
-			}
-		}
-	}
-	var list corev1.ConfigMapList
-	if err := r.List(ctx, &list, client.InNamespace(kc.Namespace), client.MatchingLabels{sipv1alpha1.KamailioClusterLabel: kc.Name, configSnapshotLabel: configSnapshotValue}); err != nil {
-		return err
-	}
-	for i := range list.Items {
-		cm := &list.Items[i]
-		if keep[cm.Name] || cm.DeletionTimestamp != nil || !metav1.IsControlledBy(cm, kc) {
-			continue
-		}
-		uid := cm.UID
-		if err := r.Delete(ctx, cm, client.Preconditions{UID: &uid}); err != nil && !apierrors.IsNotFound(err) {
-			return err
-		}
-		logf.FromContext(ctx).Info("deleted unused Kamailio config", "configMap", cm.Name)
-	}
-	return nil
-}
-
 // ensureStatefulSet writes the StatefulSet, replacing the pod template only when the operator's rendering of it
-// changes (as for a FreeswitchCluster).
-func (r *KamailioClusterReconciler) ensureStatefulSet(ctx context.Context, kc *sipv1alpha1.KamailioCluster, configName, configHash string) (*appsv1.StatefulSet, error) {
+// changes (as for a FreeswitchCluster). The pods read the JSON-RPC token only at start, so the template carries its
+// hash (never the token): a new token is a new template, and the fleet rolls onto it.
+func (r *KamailioClusterReconciler) ensureStatefulSet(ctx context.Context, kc *sipv1alpha1.KamailioCluster, configName, configHash, token string) (*appsv1.StatefulSet, error) {
 	want := buildKamailioStatefulSet(kc, configName, configHash)
+	want.Spec.Template.Annotations[kamailioTokenHashAnnotation] = contentHash(token)
 	hash, err := templateHash(&want.Spec.Template)
 	if err != nil {
 		return nil, err

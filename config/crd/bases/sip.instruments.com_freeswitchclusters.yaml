@@ -134,7 +134,7 @@ spec:
                       that the Kamailio holds the list it wrote, and reloads again every 10 seconds until it does, so a kubelet
                       slower than this delay costs time but never leaves a Kamailio on the old list.
                     format: int32
-                    minimum: 0
+                    minimum: 1
                     type: integer
                   setID:
                     default: 1
@@ -143,7 +143,7 @@ spec:
                       (peers, inside profiles) from 100 up, so the two never collide.
                     format: int32
                     maximum: 99
-                    minimum: 0
+                    minimum: 1
                     type: integer
                   transport:
                     default: udp
@@ -164,7 +164,7 @@ spec:
                       waits for live calls to end.
                     format: int64
                     maximum: 86400
-                    minimum: 0
+                    minimum: 1
                     type: integer
                 type: object
               env:

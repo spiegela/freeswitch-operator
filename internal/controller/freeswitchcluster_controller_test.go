@@ -33,6 +33,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -823,6 +824,40 @@ var _ = Describe("FreeswitchCluster controller", func() {
 		Expect(k8sClient.Create(ctx, root)).To(Succeed())
 		reconcileOnce(r, ns)
 		Expect(gone("edge-1")).To(BeTrue(), "the roll resumes once the configuration is back")
+	})
+
+	It("goes on watching its members while the API server refuses its StatefulSet", func() {
+		ns := newNamespace(ctx)
+		Expect(k8sClient.Create(ctx, newCluster(ns, func(f *sipv1alpha1.FreeswitchCluster) {
+			f.Spec.ExternalAddress.Source = sipv1alpha1.ExternalAddressNone
+		}))).To(Succeed())
+		r := &FreeswitchClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		key := types.NamespacedName{Namespace: ns, Name: "edge"}
+		reconcileOnce(r, ns)
+		n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: ns + "-a"}}
+		Expect(k8sClient.Create(ctx, n)).To(Succeed())
+		p := fsPod(ns, "edge-0", n.Name, "r1")
+		Expect(k8sClient.Create(ctx, p)).To(Succeed())
+		setPodReady(ctx, p)
+
+		var fsc sipv1alpha1.FreeswitchCluster
+		Expect(k8sClient.Get(ctx, key, &fsc)).To(Succeed())
+		fsc.Spec.Resources = corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")},
+		}
+		Expect(k8sClient.Update(ctx, &fsc)).To(Succeed())
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).To(HaveOccurred(), "retried with backoff")
+
+		Expect(k8sClient.Get(ctx, key, &fsc)).To(Succeed())
+		degraded := meta.FindStatusCondition(fsc.Status.Conditions, conditionDegraded)
+		Expect(degraded).NotTo(BeNil())
+		Expect(degraded.Status).To(Equal(metav1.ConditionTrue))
+		Expect(degraded.Reason).To(Equal("StatefulSetRejected"))
+		Expect(meta.IsStatusConditionFalse(fsc.Status.Conditions, conditionReady)).To(BeTrue())
+		Expect(fsc.Status.Members).To(HaveLen(1))
+		Expect(fsc.Status.Members[0].Health).NotTo(BeNil(), "member health is still decided")
 	})
 
 	It("refuses config paths that escape the mount", func() {

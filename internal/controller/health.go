@@ -357,8 +357,9 @@ func beingFailedOver(p *corev1.Pod, last *sipv1alpha1.FailoverRecord) bool {
 }
 
 // decideFailover picks at most one member to fail over:
-//   - The pod of the last failover, if it is still there and not shutting down: the failover was recorded but not
-//     carried out, and is finished whatever the pod's health is now.
+//   - The pod of the last failover, if it is still there and its failover didn't start its shutdown: the failover was
+//     recorded but not carried out, and is finished whatever the pod's health is now. A pod already shutting down
+//     when its failover was recorded (a drain, then its node lost) is finished too: fenced and deleted at once.
 //   - A pod a person annotated sip.instruments.com/fail-over=true, whatever the mode or its health (the first by
 //     name), unless it is the last failover's pod, shutting down.
 //   - Otherwise, in mode Automatic and with no failover under way, the Failed member that has been ready and failed
@@ -369,7 +370,7 @@ func decideFailover(verdicts []verdict, mode sipv1alpha1.FailoverMode, last *sip
 	d := failoverDecision{held: map[string]string{}}
 	if failoverInProgress(last) {
 		for i := range verdicts {
-			if p := verdicts[i].pod; string(p.UID) == last.PodUID && p.DeletionTimestamp == nil {
+			if p := verdicts[i].pod; string(p.UID) == last.PodUID && (p.DeletionTimestamp == nil || drainStart(p).Before(last.StartedAt.Time)) {
 				d.target, d.trigger, d.reason, d.resume = p, last.Trigger, last.Reason, true
 				return d
 			}

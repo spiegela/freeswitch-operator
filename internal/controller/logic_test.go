@@ -265,6 +265,11 @@ func TestBuildStatefulSet(t *testing.T) {
 	if c.ReadinessProbe == nil || !strings.HasSuffix(c.ReadinessProbe.Exec.Command[1], readyScriptName) {
 		t.Fatal("readiness must run the ready script")
 	}
+	// Unready on the first failed check, so a drain takes the pod out at once; with room for the script's retry
+	// (three fs_cli calls of at most 1.5 s).
+	if p := c.ReadinessProbe; p.FailureThreshold != 1 || p.TimeoutSeconds*1000 < 3*1500 {
+		t.Fatalf("readiness probe %+v", p)
+	}
 	if c.StartupProbe == nil || !strings.HasSuffix(c.StartupProbe.Exec.Command[1], startupScriptName) {
 		t.Fatal("startup must run the startup script")
 	}
